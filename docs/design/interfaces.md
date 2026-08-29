@@ -1,0 +1,116 @@
+# Internal interfaces
+
+The contracts the parts of Clearinghouse are built against. Change one only in a PR that
+updates every side of it.
+
+## Ledger (`lib/clearinghouse/ledger/`)
+
+```ruby
+Ledger::Entry = T::Struct(account: String, side: :debit | :credit, amount: Money)   # amount > 0
+
+Ledger.post!(db, flow_type:, flow_id:, description:, effective_at:, entries:) -> transaction id
+  # Runs inside the caller's DB transaction if one is open (it must be, for atomic phases),
+  # otherwise opens its own. Validates debits == credits per currency before writing, then
+  # the deferred constraint trigger checks again at commit. Creates missing accounts from
+  # the code (see below). Updates account_balances in the same transaction.
+Ledger.reverse!(db, transaction_id, reason:, effective_at:) -> transaction id
+Ledger.balance(db, account, currency) -> Money       # signed on the account's normal side
+Ledger.balance_for_update(db, account, currency) -> Money   # SELECT ... FOR UPDATE on account_balances
+Ledger::Checker.run(db) -> drift report (account_balances vs sum of entries)
+Ledger::Clearing.report(db, as_of:, slas:) -> open flows past SLA, orphan clearing balances,
+                                              explainability by flow type
+Ledger.explain(db, flow_id) -> every transaction and entry for a flow, plus clearing state
+```
+
+### Account codes
+
+Accounts are named by a code and a currency. Platform accounts:
+
+| code | kind | normal side |
+|---|---|---|
+| `platform:cash` | asset | debit |
+| `platform:processor_receivable` | clearing | debit |
+| `platform:refund_clearing` | clearing | credit |
+| `platform:dispute_clearing` | clearing | credit |
+| `platform:payout_clearing` | clearing | credit |
+| `platform:fee_revenue` | revenue | credit |
+| `platform:dispute_fee_revenue` | revenue | credit |
+| `platform:processing_expense` | expense | debit |
+| `platform:dispute_losses` | expense | debit |
+
+Merchant accounts, one set per merchant per currency:
+
+| code | kind | normal side |
+|---|---|---|
+| `merchant:<merchant_id>:pending` | liability | credit |
+| `merchant:<merchant_id>:available` | liability | credit |
+| `merchant:<merchant_id>:held` | liability | credit |
+
+A flow is **explained** when every clearing account it touched nets to zero within that
+flow's transactions. Flow ids are the API object ids: `pi_...` for a payment (capture,
+settlement, availability), `re_...` refunds, `dp_...` disputes, `po_...` payouts.
+
+## Acquirer simulator (`sim/`, its own process)
+
+Base URL `CLEARINGHOUSE_ACQUIRER_URL`, default `http://127.0.0.1:4600`. JSON in and out.
+Every request carries `Sim-Time: <ISO 8601>`, the caller's clock, so the simulator lives
+in simulated time. Mutating requests carry `Idempotency-Key`. The simulator is seeded and
+deterministic, keeps state in memory behind a mutex, and treats a repeated key as a replay.
+
+| Method and path | Body | Response |
+|---|---|---|
+| `POST /authorize` | `payment_method, amount, currency, capture (bool), reference` | `operation` |
+| `POST /capture` | `acquirer_reference, amount` | `operation` |
+| `POST /void` | `acquirer_reference` | `operation` |
+| `POST /refund` | `acquirer_reference, amount` | `operation` |
+| `POST /payouts` | `reference, merchant_id, amount, currency` | `operation` |
+| `GET /operations/:idempotency_key` | | `operation`, or 404 `{"error":"not_found"}` |
+| `GET /notifications?after=<cursor>` | | `{"data":[notification], "next_cursor":...}` |
+| `POST /settlement_files` | `date (YYYY-MM-DD), inject: [discrepancy]` | `text/csv` |
+| `POST /admin/config` | `seed, latency_ms {p50,p99}, error_rate, drop_after_commit_rate, settlement_lag_days, dispute_after_days, fee {rate_scaled, fixed}` | config |
+| `GET /admin/operations` | | every operation, for experiments to count charges |
+| `POST /admin/disputes/:id/resolve` | `outcome: won or lost` | notification |
+| `POST /admin/reset` | | |
+
+`operation` is `{id: "op_...", type, status: "approved" | "declined" | "succeeded" | "failed",
+decline_code, acquirer_reference: "acq_...", amount, currency, idempotency_key, created_at}`.
+
+Test tokens: `pm_card_visa`, `pm_card_mastercard` approve. `pm_card_chargeDeclined`
+declines `generic_decline`, `pm_card_insufficientFunds` declines `insufficient_funds`,
+`pm_card_expired` declines `expired_card`. `pm_card_disputeFraudulent` approves and opens a
+`fraudulent` dispute `dispute_after_days` after capture. `pm_card_timeout` commits the
+authorization and then closes the connection without a response. `drop_after_commit_rate`
+does the same to a random share of any card's requests.
+
+Notifications, visible once `Sim-Time` passes their due time:
+`dispute.opened {dispute_id, acquirer_reference, amount, currency, reason}`,
+`dispute.closed {dispute_id, outcome}`, `payout.paid {reference}`, `payout.failed {reference, failure_code}`.
+
+Settlement CSV columns: `line_id, type (capture | refund | dispute | dispute_reversal),
+acquirer_reference, operation_id, amount, fee, currency, settled_on`. A capture settles
+`settlement_lag_days` (default 2) after it happened. `amount` is gross and `fee` is the
+acquirer's processing fee (default 1.5% + 10 minor units, rounded half-even), so cash
+received is `amount - fee`. Discrepancy types for `inject`: `missing`, `duplicate`,
+`amount_mismatch`, `fee_mismatch`, `late`, `unknown_payment`.
+
+## Events and webhooks
+
+Envelope, agreed with RiskGate:
+`{id: "evt_...", object: "event", type, created (simulated unix seconds), api_version, data: {object}}`.
+Types include `payment_intent.succeeded`, `payment_intent.payment_failed`,
+`payment_intent.canceled`, `charge.refunded`, `charge.dispute.created`,
+`charge.dispute.closed`, `payout.paid`, `payout.failed`.
+Events are written to the `events` table in the same transaction as the state change.
+
+Signature header `Clearinghouse-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`,
+two `v1` values during a secret rotation. Verifiers reject `|now - t| > tolerance` in either
+direction. Shared vectors live in `spec/fixtures/signatures.json` in RiskGate's shape:
+`[{name, secrets, payload, header, now, tolerance, valid, error}]`, error one of
+`no_matching_signature`, `timestamp_outside_tolerance`, `malformed_header`, or null.
+
+## RiskGate
+
+`POST {RISKGATE_URL}/v1/assess` with `{payment_id, created, amount, currency, risk_fields}`,
+headers `RiskGate-Deadline-Ms` and `Idempotency-Key: <payment_id>:<attempt>`. Response
+`{assessment_id, decision: allow | block | review, risk_score, matched_rule, reasons, ruleset_version}`.
+Non-200 or timeout is `risk_unavailable` and the payment proceeds (fail open).
