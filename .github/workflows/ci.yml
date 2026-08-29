@@ -1,0 +1,33 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clearinghouse_owner
+          POSTGRES_PASSWORD: owner
+          POSTGRES_DB: clearinghouse_dev
+        ports: ["54329:5432"]
+        options: >-
+          --health-cmd "pg_isready -U clearinghouse_owner"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    env:
+      PGPASSWORD: owner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: roles and test database
+        run: psql -h localhost -p 54329 -U clearinghouse_owner -d clearinghouse_dev -f db/init/00_databases.sql
+      - run: bin/ci

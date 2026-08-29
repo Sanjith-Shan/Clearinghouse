@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Everything GitHub Actions runs, runnable locally. A branch merges only when this passes.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export CLEARINGHOUSE_ENV=test
+echo "== srb tc";   bundle exec srb tc
+echo "== rubocop";  bundle exec rubocop
+echo "== migrate";  CLEARINGHOUSE_DB=clearinghouse_test bin/migrate
+echo "== rspec";    bundle exec rspec
+if [ -d clients/go ]; then echo "== go test"; (cd clients/go && go test ./...); fi

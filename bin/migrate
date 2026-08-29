@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Migrates the dev database, or the one named by CLEARINGHOUSE_DB.
+require 'bundler/setup'
+require_relative '../lib/clearinghouse'
+require_relative '../lib/clearinghouse/db'
+
+Clearinghouse::DB.migrate!
+puts "migrated #{ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_dev')}"

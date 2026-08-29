@@ -1,0 +1,9 @@
+/vendor/bundle
+/.bundle/
+/coverage/
+/tmp/
+/log/
+*.log
+.DS_Store
+/results/raw/
+/sorbet/rbi/hidden-definitions/

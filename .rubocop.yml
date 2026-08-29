@@ -1,0 +1,75 @@
+plugins:
+  - rubocop-sorbet
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 3.3
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    - vendor/**/*
+    - tmp/**/*
+    - sorbet/rbi/**/*
+    - clients/go/**/*
+
+Metrics/MethodLength:
+  Max: 30
+Metrics/AbcSize:
+  Max: 40
+Metrics/ClassLength:
+  Max: 300
+Metrics/ModuleLength:
+  Max: 300
+Metrics/CyclomaticComplexity:
+  Max: 12
+Metrics/PerceivedComplexity:
+  Max: 12
+Metrics/ParameterLists:
+  CountKeywordArgs: false
+Metrics/BlockLength:
+  Exclude:
+    - spec/**/*
+    - db/migrations/**/*
+Layout/LineLength:
+  Max: 120
+Style/Documentation:
+  Exclude:
+    - spec/**/*
+    - db/**/*
+Naming/MethodParameterName:
+  AllowedNames: [id, to, at, db, io, ok]
+RSpec/ExampleLength:
+  Max: 25
+RSpec/MultipleExpectations:
+  Max: 8
+RSpec/NestedGroups:
+  Max: 4
+RSpec/MultipleMemoizedHelpers:
+  Max: 10
+RSpec/DescribeClass:
+  Exclude:
+    - spec/db/**/*
+    - spec/experiments/**/*
+    - spec/integration/**/*
+Sorbet/StrictSigil:
+  Include:
+    - lib/clearinghouse/ledger/**/*.rb
+    - lib/clearinghouse/idempotency/**/*.rb
+    - lib/clearinghouse/money.rb
+    - lib/clearinghouse/currency.rb
+    - lib/clearinghouse/fees.rb
+    - lib/clearinghouse/clock.rb
+Sorbet/TrueSigil:
+  Enabled: true
+  Exclude:
+    - spec/**/*
+    - db/migrations/**/*
+Sorbet/FalseSigil:
+  Include:
+    - spec/**/*
+    - db/migrations/**/*
+RSpec/SpecFilePathFormat:
+  Enabled: false
+Sorbet/BlockMethodDefinition:
+  Exclude:
+    - spec/**/*
