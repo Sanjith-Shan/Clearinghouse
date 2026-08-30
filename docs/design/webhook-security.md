@@ -121,3 +121,21 @@ SHA2-256(stdin)= b9dbde7dcccf5137b7482cb378fd2c99166d5f9270521e25c118b6dcbbe255e
 ```
 
 Each matches the `v1` in the file.
+
+### The Go verifier
+
+`clients/go/webhooksig` is the reference verifier for Go consumers: its own module
+(`github.com/Sanjith-Shan/Clearinghouse/clients/go`, Go 1.23), standard library only.
+RiskGate keeps its own verifier; both pass the same vectors.
+
+- `Verify(payload, header, secrets, now, tolerance) error` returns `nil` or one of the
+  sentinel errors `ErrNoMatchingSignature`, `ErrTimestampOutsideTolerance`,
+  `ErrMalformedHeader`, whose messages are the vector error codes. Caller mistakes (no
+  secrets, an empty secret, a negative tolerance) return `ErrInvalidArgument` instead of
+  panicking, so a misconfigured consumer can answer 500 rather than 400.
+- The comparison is `hmac.Equal` on the hex strings.
+- `go test` reads `../../../spec/fixtures/signatures.json` and runs every vector as a
+  subtest, rejecting unknown JSON fields so a shape change fails loudly. `FuzzVerify` uses
+  the vectors as its seed corpus and checks that no header panics and that `Sign`'s output
+  always verifies. A 20-second local fuzz run (about 3.5 million executions) found nothing.
+- `Example` shows the handler shape: verify the raw body before decoding it.
