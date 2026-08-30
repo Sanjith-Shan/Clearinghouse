@@ -1,0 +1,32 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Starts the acquirer simulator on Puma. One process, several threads: the state is
+# in memory, so Puma's cluster mode (several worker processes) would split it.
+#
+#   bin/sim [--port 4600] [--host 127.0.0.1] [--threads 16]
+
+require 'bundler/setup'
+require 'optparse'
+require 'puma'
+require 'puma/configuration'
+require 'puma/launcher'
+require_relative '../sim/lib/acquirer_sim'
+
+options = { port: Integer(ENV.fetch('SIM_PORT', '4600')), host: '127.0.0.1', threads: 16 }
+OptionParser.new do |opts|
+  opts.on('--port PORT', Integer) { |v| options[:port] = v }
+  opts.on('--host HOST') { |v| options[:host] = v }
+  opts.on('--threads N', Integer) { |v| options[:threads] = v }
+end.parse!
+
+app = AcquirerSim::App.new
+config = Puma::Configuration.new do |c|
+  c.bind "tcp://#{options[:host]}:#{options[:port]}"
+  c.app app
+  c.threads 1, options[:threads]
+  c.workers 0
+  c.environment 'production'
+  c.quiet
+end
+Puma::Launcher.new(config).run
