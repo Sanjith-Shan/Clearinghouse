@@ -11,5 +11,7 @@ end
 require_relative 'acquirer_sim/shared'
 require_relative 'acquirer_sim/records'
 require_relative 'acquirer_sim/params'
+require_relative 'acquirer_sim/config'
+require_relative 'acquirer_sim/traffic'
 require_relative 'acquirer_sim/simulator'
 require_relative 'acquirer_sim/app'

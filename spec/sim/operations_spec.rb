@@ -16,6 +16,7 @@ RSpec.describe AcquirerSim::App do
                               'idempotency_key' => "k-#{pm}", 'created_at' => '2026-03-01T12:00:00.000000Z')
         expect(op['id']).to match(/\Aop_\h{24}\z/)
         expect(op['acquirer_reference']).to match(/\Aacq_\h{24}\z/)
+        expect(op['id'].delete_prefix('op_')).not_to eq(op['acquirer_reference'].delete_prefix('acq_'))
       end
     end
 
@@ -248,7 +249,7 @@ RSpec.describe AcquirerSim::App do
     it 'answers 404 as JSON for an unknown route' do
       response = call(:get, '/nope')
       expect(response.status).to eq(404)
-      expect(json_body(response)['error']).to eq('not_found')
+      expect(json_body(response)['error']).to eq('no_route')
     end
   end
 end

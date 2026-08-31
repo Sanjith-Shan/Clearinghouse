@@ -1,7 +1,10 @@
 # typed: false
 # frozen_string_literal: true
 
+require 'puma'
+require 'puma/server'
 require 'rack/test'
+require 'socket'
 require_relative '../../sim/lib/acquirer_sim'
 
 # Drives AcquirerSim::App in process through Rack::Test. The network paths (dropped
@@ -41,5 +44,40 @@ module SimHelper
     raise "authorize failed: #{response.status} #{response.body}" unless response.status == 200
 
     json_body(response)
+  end
+end
+
+# A real Puma server on an ephemeral port, in this process. The network is real (a
+# TCP socket, Puma's parser, full hijack), which is what the drop and timeout tests
+# need; running in-process keeps it fast and lets a test reach the simulator's state.
+class SimServer
+  attr_reader :simulator, :port
+
+  def self.start(simulator = AcquirerSim::Simulator.new, app: nil)
+    new(simulator, app || AcquirerSim::App.new(simulator: simulator))
+  end
+
+  def initialize(simulator, app)
+    @simulator = simulator
+    @server = Puma::Server.new(app, nil, min_threads: 1, max_threads: 16, log_writer: Puma::LogWriter.null)
+    @server.add_tcp_listener('127.0.0.1', 0)
+    @port = @server.connected_ports.first
+    @server.run
+  end
+
+  def url
+    "http://127.0.0.1:#{port}"
+  end
+
+  def stop
+    @server.stop(true)
+  end
+
+  # A port with nothing listening, for connection-refused tests.
+  def self.closed_port
+    listener = TCPServer.new('127.0.0.1', 0)
+    port = listener.addr[1]
+    listener.close
+    port
   end
 end

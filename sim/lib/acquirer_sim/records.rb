@@ -15,7 +15,7 @@ module AcquirerSim
 
     sig { params(prefix: String, parts: T.untyped).returns(String) }
     def self.derive(prefix, *parts)
-      "#{prefix}_#{Digest::SHA256.hexdigest(parts.join('|'))[0, 24]}"
+      "#{prefix}_#{Digest::SHA256.hexdigest([prefix, *parts].join('|'))[0, 24]}"
     end
   end
 

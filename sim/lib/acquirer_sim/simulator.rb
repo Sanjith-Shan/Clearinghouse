@@ -13,6 +13,8 @@ module AcquirerSim
     # What a test token does at authorization. Anything not listed is a 400.
     class Token < T::Struct
       const :decline_code, T.nilable(String)
+      # Commit the authorization, then close the connection without answering.
+      const :timeout, T::Boolean, default: false
     end
 
     TOKENS = T.let(
@@ -21,7 +23,8 @@ module AcquirerSim
         'pm_card_mastercard' => Token.new,
         'pm_card_chargeDeclined' => Token.new(decline_code: 'generic_decline'),
         'pm_card_insufficientFunds' => Token.new(decline_code: 'insufficient_funds'),
-        'pm_card_expired' => Token.new(decline_code: 'expired_card')
+        'pm_card_expired' => Token.new(decline_code: 'expired_card'),
+        'pm_card_timeout' => Token.new(timeout: true)
       }.freeze,
       T::Hash[String, Token]
     )
@@ -38,15 +41,23 @@ module AcquirerSim
     end
 
     # The outcome of #submit. `replayed` is true when the key had already committed
-    # and this is the stored operation coming back.
+    # and this is the stored operation coming back. `drop_connection` asks the HTTP
+    # layer to hang up instead of answering; it is only ever set on a fresh commit,
+    # so a retry of the same key gets its answer.
     class Result < T::Struct
       const :operation, Operation
       const :replayed, T::Boolean
+      const :drop_connection, T::Boolean, default: false
     end
 
-    sig { void }
-    def initialize
+    sig { returns(Config) }
+    attr_reader :config
+
+    sig { params(config: Config).void }
+    def initialize(config: Config.new)
       @mutex = T.let(Mutex.new, Thread::Mutex)
+      @config = config
+      @traffic = T.let(Traffic.new(config), Traffic)
       @operations = T.let({}, T::Hash[String, Operation])
       @authorizations = T.let({}, T::Hash[String, Authorization])
     end
@@ -72,7 +83,24 @@ module AcquirerSim
           else do_refund(request)
           end
         @operations[key] = operation
-        Result.new(operation: operation, replayed: false)
+        Result.new(operation: operation, replayed: false, drop_connection: drop_after_commit?(request))
+      end
+    end
+
+    # How the network misbehaves for the next request. See Traffic.
+    sig { returns(Traffic::Decision) }
+    def traffic_decision
+      @mutex.synchronize { @traffic.decide }
+    end
+
+    # Replaces the config with `json` merged over it. A new seed restarts the traffic
+    # RNG, so `configure(seed: n)` followed by a fixed request sequence is repeatable.
+    sig { params(json: T::Hash[String, T.untyped]).returns(Config) }
+    def configure(json)
+      @mutex.synchronize do
+        @config = Config.merge(json, @config)
+        @traffic = Traffic.new(@config)
+        @config
       end
     end
 
@@ -107,15 +135,23 @@ module AcquirerSim
       end
     end
 
+    # Back to a freshly started process: empty books and default config.
     sig { void }
     def reset!
       @mutex.synchronize do
+        @config = Config.new
+        @traffic = Traffic.new(@config)
         @operations.clear
         @authorizations.clear
       end
     end
 
     private
+
+    sig { params(request: Submission).returns(T::Boolean) }
+    def drop_after_commit?(request)
+      request.type == 'authorize' && TOKENS[request.params['payment_method']]&.timeout == true
+    end
 
     sig { params(existing: Operation, fingerprint: String).returns(Result) }
     def replay(existing, fingerprint)

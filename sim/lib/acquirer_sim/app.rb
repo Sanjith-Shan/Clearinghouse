@@ -14,6 +14,9 @@ module AcquirerSim
     set :dump_errors, false
     set :logging, false
     set :host_authorization, { permitted_hosts: [] }
+    # Rack::Protection's path cleaning turns %2F into a slash, which would make a key
+    # containing "/" unreachable by the status query. The simulator serves no browser.
+    set :protection, false
 
     sig { returns(Simulator) }
     attr_reader :simulator
@@ -43,6 +46,8 @@ module AcquirerSim
 
     get '/operations/:key' do
       T.bind(self, App)
+      next unavailable if misbehave.unavailable
+
       operation = simulator.operation(params.fetch('key'))
       operation ? json(operation.to_h) : error_response(RequestError.new(404, 'not_found', 'no operation for that key'))
     end
@@ -58,15 +63,34 @@ module AcquirerSim
            'charges_by_reference' => Simulator.charges_by_reference(authorizations))
     end
 
+    get '/admin/config' do
+      T.bind(self, App)
+      json(simulator.config.to_h)
+    end
+
+    post '/admin/config' do
+      T.bind(self, App)
+      json(simulator.configure(raw_body).to_h)
+    rescue RequestError => e
+      error_response(e)
+    end
+
     post '/admin/reset' do
       T.bind(self, App)
       simulator.reset!
       json('reset' => true)
     end
 
-    not_found do
-      T.bind(self, App)
-      json('error' => 'not_found', 'message' => "no route for #{request.request_method} #{request.path_info}")
+    # A catch-all route rather than a `not_found` block: Sinatra runs that block for
+    # any 404, including the status query's own "no operation under this key", and
+    # the two must stay distinguishable (Clearinghouse's client treats only the
+    # latter as NotFound).
+    %w[GET POST PUT PATCH DELETE].each do |verb|
+      T.unsafe(self).send(verb.downcase, '*') do
+        T.bind(self, App)
+        status 404
+        json('error' => 'no_route', 'message' => "no route for #{request.request_method} #{request.path_info}")
+      end
     end
 
     error do
@@ -77,16 +101,62 @@ module AcquirerSim
 
     private
 
-    sig { params(type: String).returns(String) }
+    # A mutating request. The order matters and is the contract Clearinghouse's client
+    # relies on: a 503 is decided and returned before anything is committed, so it
+    # always means "not processed"; a dropped connection happens only after the
+    # commit, so it always means "maybe processed, ask me".
+    sig { params(type: String).returns(T.nilable(String)) }
     def mutate(type)
+      decision = misbehave
+      return unavailable if decision.unavailable
+
       sim_time = Params.sim_time(request.env['HTTP_SIM_TIME'])
       key = Params.idempotency_key(request.env['HTTP_IDEMPOTENCY_KEY'])
-      body = Params.parse_json(request.body.read)
+      body = raw_body
       result = simulator.submit(type, key, body, sim_time)
+      return drop_connection! if !result.replayed && (result.drop_connection || decision.drop_after_commit)
+
       headers 'Idempotent-Replayed' => result.replayed.to_s
       json(result.operation.to_h)
     rescue RequestError => e
       error_response(e)
+    end
+
+    # Draws this request's misbehaviour and serves its latency. The sleep is real
+    # time on purpose: it is what makes a client's read timeout fire.
+    sig { returns(Traffic::Decision) }
+    def misbehave
+      decision = simulator.traffic_decision
+      sleep(decision.latency_seconds) if decision.latency_seconds.positive?
+      decision
+    end
+
+    sig { returns(String) }
+    def unavailable
+      status 503
+      json('error' => 'service_unavailable', 'message' => 'simulated outage; nothing was processed')
+    end
+
+    # Takes the socket from the server (a Rack full hijack) and closes it without
+    # writing a byte, so the client sees the connection end mid-request (EOFError or
+    # a reset), exactly as it would if the acquirer crashed after committing. A 500
+    # would not do: a client can tell a 500 apart, and the point is that it cannot.
+    sig { returns(NilClass) }
+    def drop_connection!
+      hijack = request.env['rack.hijack']
+      raise 'this server does not support Rack full hijack; run the simulator on Puma' unless hijack
+
+      hijack.call.close
+      nil
+    end
+
+    # The body as sent, whatever Content-Type claims. Sinatra parses form-encoded
+    # bodies into params before the route runs, which consumes the input, so rewind.
+    sig { returns(T::Hash[String, T.untyped]) }
+    def raw_body
+      input = request.body
+      input.rewind if input.respond_to?(:rewind)
+      Params.parse_json(input.read.to_s)
     end
 
     sig { params(failure: RequestError).returns(String) }
