@@ -1,0 +1,27 @@
+{
+  "id": "pi_JYGFnjeCb5e73XmBnqLEEc6J",
+  "object": "payment_intent",
+  "amount": 4500,
+  "amount_capturable": 0,
+  "amount_received": 0,
+  "currency": "usd",
+  "status": "requires_payment_method",
+  "capture_method": "manual",
+  "payment_method": null,
+  "customer_email": null,
+  "metadata": {},
+  "latest_charge": null,
+  "failure_code": "card_declined",
+  "failure_message": "Your card has insufficient funds.",
+  "created": 1788264060,
+  "livemode": false,
+  "cancellation_reason": null,
+  "risk": {
+    "decision": "review",
+    "score": 71,
+    "reasons": [
+      "new card",
+      "three attempts on this merchant in the last hour"
+    ]
+  }
+}

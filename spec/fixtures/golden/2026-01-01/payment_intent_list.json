@@ -1,0 +1,71 @@
+{
+  "object": "list",
+  "url": "/v1/payment_intents",
+  "has_more": false,
+  "data": [
+    {
+      "id": "pi_iC9tkbGsmyR2iXo2B0r30n5D",
+      "object": "payment_intent",
+      "amount": 2000,
+      "amount_capturable": 0,
+      "amount_captured": 2000,
+      "currency": "usd",
+      "status": "succeeded",
+      "capture_method": "automatic",
+      "payment_method": {
+        "id": "pm_card_visa",
+        "object": "payment_method",
+        "type": "card",
+        "card": {
+          "brand": "visa",
+          "last4": "4242"
+        }
+      },
+      "customer_email": "jenny.rosen@example.com",
+      "metadata": {
+        "order_id": "6735"
+      },
+      "latest_charge": "ch_9tMnAboVjhgm6GQSYNcbCr4o",
+      "failure_code": null,
+      "failure_message": null,
+      "created": 1788264000,
+      "livemode": false,
+      "cancellation_reason": null,
+      "risk": {
+        "decision": "allow",
+        "score": 12,
+        "reasons": [
+          "card seen before on this merchant",
+          "amount typical for this merchant"
+        ]
+      }
+    },
+    {
+      "id": "pi_JYGFnjeCb5e73XmBnqLEEc6J",
+      "object": "payment_intent",
+      "amount": 4500,
+      "amount_capturable": 0,
+      "amount_captured": 0,
+      "currency": "usd",
+      "status": "requires_payment_method",
+      "capture_method": "manual",
+      "payment_method": null,
+      "customer_email": null,
+      "metadata": {},
+      "latest_charge": null,
+      "failure_code": "card_declined",
+      "failure_message": "Your card has insufficient funds.",
+      "created": 1788264060,
+      "livemode": false,
+      "cancellation_reason": null,
+      "risk": {
+        "decision": "review",
+        "score": 71,
+        "reasons": [
+          "new card",
+          "three attempts on this merchant in the last hour"
+        ]
+      }
+    }
+  ]
+}
