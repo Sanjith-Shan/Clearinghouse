@@ -12,6 +12,7 @@ module AcquirerSim
     prop :latency_p99_ms, Float, default: 0.0
     prop :error_rate, Float, default: 0.0
     prop :drop_after_commit_rate, Float, default: 0.0
+    prop :dispute_after_days, Integer, default: 7
 
     # Returns a copy of `base` with the fields named in `json` replaced. Validation is
     # strict because a mistyped knob silently ignored would make an experiment measure
@@ -25,6 +26,7 @@ module AcquirerSim
         when 'latency_ms' then apply_latency(config, value)
         when 'error_rate' then config.error_rate = rate(name, value)
         when 'drop_after_commit_rate' then config.drop_after_commit_rate = rate(name, value)
+        when 'dispute_after_days' then config.dispute_after_days = integer(name, value, min: 0)
         else raise Params.invalid("unknown config field #{name}", name)
         end
       end
@@ -35,7 +37,8 @@ module AcquirerSim
     def to_h
       {
         'seed' => seed, 'latency_ms' => { 'p50' => latency_p50_ms, 'p99' => latency_p99_ms },
-        'error_rate' => error_rate, 'drop_after_commit_rate' => drop_after_commit_rate
+        'error_rate' => error_rate, 'drop_after_commit_rate' => drop_after_commit_rate,
+        'dispute_after_days' => dispute_after_days
       }
     end
 

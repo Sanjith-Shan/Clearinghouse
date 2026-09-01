@@ -171,3 +171,44 @@ without resending, for example after a crash when it no longer knows what it sen
 This is the "ambiguous foreign call" from the spec, built on the acquirer-side
 idempotency described in Stripe's idempotency post and Brandur Leach's
 *Implementing Stripe-like Idempotency Keys in Postgres* (reading list 1 and 2).
+
+## Disputes, payouts and the notification feed
+
+Everything the acquirer says later, rather than in the response, goes on one feed,
+`GET /notifications?after=<cursor>&limit=<n>`. A notification has a due time and is
+visible only to a request whose `Sim-Time` has reached it. Nothing reads the wall clock.
+
+- **Disputes.** Capturing a `pm_card_disputeFraudulent` authorization (in the authorize
+  call with `capture: true`, or later with `/capture`) schedules a `fraudulent` dispute
+  for the captured amount, opening `dispute_after_days` (default 7) after the capture.
+  The amount is fixed at capture. A refund made before the dispute opens does not shrink
+  it, because cardholders do dispute refunded charges and Clearinghouse has to handle
+  that rather than have the simulator hide it. Once the dispute has opened, refunds on the
+  charge fail `charge_disputed`, since the money is already in the dispute process.
+  `POST /admin/disputes/:id/resolve {outcome: won | lost}` closes it, and `dispute.closed`
+  is due at that request's Sim-Time. Resolving before it opens, twice, or with another
+  outcome is refused.
+- **Payouts.** `POST /payouts` is accepted (`succeeded`) at once, and `payout.paid` is due
+  one simulated day later. **A payout whose amount in minor units ends in 13** (1013,
+  $10.13, 113 yen) gets `payout.failed` with `failure_code: account_closed` instead. The
+  rule is on the amount because tests choose payout amounts but not merchant ids, which
+  Clearinghouse generates. It hits about 1% of random amounts, so a randomized test that
+  does not know the rule will still meet failures now and then, which is intended. A
+  model-based test can predict them from `AcquirerSim::Simulator.payout_fails?`.
+
+### The cursor
+
+The cursor is the part that needed thought. Notifications are created in one order but
+fall due in another, and one can be created *after* a poll with a due time *before* that
+poll. That happens when a caller whose test clock lags resolves a dispute. A cursor over
+creation order skips notifications that fall due out of order. A cursor over due time
+skips the late-created, early-due one. So the cursor is assigned when a poll first sees a
+notification. Each poll stamps every newly visible notification with the next number, in
+(due time, creation) order, and returns those past the caller's cursor. Every
+notification gets exactly one cursor and cursors only grow, so a consumer that follows
+`next_cursor` sees each notification exactly once. There is a test for the lagging-clock
+case and one that follows the cursor across forty polls.
+
+A notification that has been stamped stays visible to later polls whatever their
+Sim-Time, even an earlier one. Visibility is sticky. The alternative, hiding it again from
+a lagging caller, would let two consumers disagree about what has happened.

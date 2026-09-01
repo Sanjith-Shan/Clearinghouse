@@ -67,6 +67,30 @@ module Clearinghouse
       const :idempotency_key, String
     end
 
+    # Asynchronous news from the acquirer: dispute.opened, dispute.closed, payout.paid,
+    # payout.failed. `data` is the payload documented in docs/design/interfaces.md.
+    class Notification < T::Struct
+      extend T::Sig
+
+      const :id, String
+      const :type, String
+      const :created_at, Time
+      const :cursor, String
+      const :data, T::Hash[String, T.untyped]
+
+      sig { params(json: T::Hash[String, T.untyped]).returns(Notification) }
+      def self.from_json(json)
+        new(id: json.fetch('id'), type: json.fetch('type'), created_at: Time.iso8601(json.fetch('created_at')),
+            cursor: json.fetch('cursor'), data: json.fetch('data'))
+      end
+    end
+
+    # One page of notifications. Pass next_cursor as `after` to get the next one.
+    class NotificationPage < T::Struct
+      const :data, T::Array[Notification]
+      const :next_cursor, String
+    end
+
     Outcome = T.type_alias { T.any(Approved, Declined, Unknown, Unavailable) }
     LookupOutcome = T.type_alias { T.any(Approved, Declined, NotFound, Unavailable) }
 

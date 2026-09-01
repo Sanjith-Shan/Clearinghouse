@@ -145,6 +145,32 @@ RSpec.describe Clearinghouse::Acquirer::Client do
     end
   end
 
+  describe 'payouts and notifications' do
+    it 'sends a payout and reads payout.paid once the clock reaches the next day' do
+      outcome = client.payout(reference: 'po_1', merchant_id: 'acct_1', amount: usd(2_500), idempotency_key: 'po_1:1')
+      expect(outcome).to be_a(acquirer::Approved)
+      expect(client.notifications.data).to be_empty
+
+      clock.advance(86_400)
+      page = client.notifications
+      expect(page.data.map(&:type)).to eq(['payout.paid'])
+      expect(page.data.first.data).to include('reference' => 'po_1')
+      expect(page.data.first.created_at).to eq(clock.now)
+      expect(client.notifications(after: page.next_cursor).data).to be_empty
+    end
+
+    it 'is Unavailable when the feed is down, so the caller simply polls again' do
+      server.simulator.configure('error_rate' => 1.0)
+      expect(client.notifications).to be_a(acquirer::Unavailable)
+      down = described_class.new(clock: clock, base_url: "http://127.0.0.1:#{SimServer.closed_port}")
+      expect(down.notifications).to be_a(acquirer::Unavailable)
+    end
+
+    it 'raises ProtocolError on a malformed cursor' do
+      expect { client.notifications(after: 'x') }.to raise_error(acquirer::ProtocolError)
+    end
+  end
+
   describe 'caller bugs' do
     it 'raises ProtocolError when a key is reused with a different body' do
       authorize(amount: 5_000)
