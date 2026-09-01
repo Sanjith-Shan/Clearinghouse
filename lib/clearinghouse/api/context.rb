@@ -15,6 +15,9 @@ module Clearinghouse
       const :http_method, String
       const :path, String
       const :idempotency_key, T.nilable(String)
+      # The version this request is rendered at: the Clearinghouse-Version header
+      # if sent, else the merchant's pinned version, else the latest.
+      prop :api_version, String
 
       sig { returns(Sequel::Database) }
       def db = deps.db

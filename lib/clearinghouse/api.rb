@@ -4,6 +4,7 @@
 require 'sequel'
 require_relative 'ids'
 require_relative 'db'
+require_relative 'versioning'
 require_relative 'api/errors'
 require_relative 'api/params'
 require_relative 'api/dependencies'

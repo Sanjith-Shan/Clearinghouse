@@ -47,8 +47,26 @@ module Clearinghouse
           request_id: env.fetch(RequestLogger::REQUEST_ID) { Ids.generate('req') },
           http_method: request.request_method,
           path: request.path_info,
-          idempotency_key: request.get_header('HTTP_IDEMPOTENCY_KEY')
+          idempotency_key: request.get_header('HTTP_IDEMPOTENCY_KEY'),
+          api_version: @deps.versioning.latest
         )
+        resolve_api_version(nil)
+      end
+
+      # The header wins over the merchant's pin, and an unknown header value is an
+      # error rather than a silent fallback: a client that asked for a version must
+      # not get a different shape than it expects.
+      sig { params(pinned: T.nilable(String)).void }
+      def resolve_api_version(pinned)
+        requested = request.get_header('HTTP_CLEARINGHOUSE_VERSION')
+        if requested && !@deps.versioning.known?(requested)
+          raise Errors::InvalidRequestError.new(
+            "Invalid Clearinghouse-Version: #{requested}. Known versions: #{@deps.versioning.versions.join(', ')}.",
+            code: 'api_version_invalid'
+          )
+        end
+        ctx.api_version = requested || pinned || @deps.versioning.latest
+        env[RequestLogger::API_VERSION] = ctx.api_version
       end
 
       sig { returns(Context) }
@@ -63,12 +81,31 @@ module Clearinghouse
         @api_params ||= Params.from_request(request)
       end
 
-      # Every successful response goes through here, so there is exactly one place
-      # that serialises a resource.
-      sig { params(object: T::Hash[String, T.untyped], status_code: Integer).returns(String) }
-      def respond(object, status_code: 200)
+      # Params for an endpoint after old callers' renamed parameters are rewritten
+      # into the latest shape. Endpoints whose parameters have ever changed read
+      # these; fingerprint `api_params.raw` for idempotency, which is what was sent.
+      sig { params(endpoint: String).returns(Params) }
+      def versioned_params(endpoint)
+        Params.new(@deps.versioning.transform_request(endpoint, api_params.raw, ctx.api_version))
+      end
+
+      # Every successful response goes through here, so every endpoint is rendered
+      # at the caller's version with its `expand[]` applied. `object` is always the
+      # latest shape. `versioned: false` is for bodies that are not API resources.
+      sig { params(object: T::Hash[String, T.untyped], status_code: Integer, versioned: T::Boolean).returns(String) }
+      def respond(object, status_code: 200, versioned: true)
+        body = versioned ? render_resource(object) : object
         status(status_code)
-        JSON.generate(object)
+        headers['clearinghouse-version'] = ctx.api_version if versioned
+        JSON.generate(body)
+      end
+
+      sig { params(object: T::Hash[String, T.untyped]).returns(T::Hash[String, T.untyped]) }
+      def render_resource(object)
+        @deps.versioning.render(object, ctx.api_version, expand: api_params.expand, context: ctx)
+      rescue Versioning::Engine::InvalidExpansionError => e
+        raise Errors::InvalidRequestError.new("This property cannot be expanded (#{e.message}).",
+                                              code: 'parameter_invalid', param: 'expand')
       end
 
       sig { params(error: Errors::Base).returns(String) }

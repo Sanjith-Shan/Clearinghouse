@@ -21,6 +21,9 @@ module Clearinghouse
       const :acquirer, T.nilable(Object), default: nil
       # Guards POST /v1/merchants. nil disables the endpoint.
       const :admin_token, T.nilable(String), default: nil
+      # Renders responses at the caller's version. Tests may pass an engine with
+      # their own registry or loaders.
+      const :versioning, Versioning::Engine, factory: -> { Versioning.engine }
       # Where request logs go, one JSON object per line. nil keeps tests quiet.
       const :log, T.nilable(T.any(IO, StringIO)), default: nil
 
