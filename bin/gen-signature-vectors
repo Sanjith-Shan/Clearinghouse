@@ -66,6 +66,7 @@ VECTORS = [
   vector('v1_with_extra_char', header: "t=#{NOW},v1=#{GOOD}0", error: NO_MATCH),
   vector('signature_is_checked_before_timestamp', header: signed([SECRET], at: NOW - 3600),
                                                   secrets: ['whsec_test_not_the_right_secret'], error: NO_MATCH),
+  vector('v1_containing_equals_sign', header: "t=#{NOW},v1=#{GOOD}=", error: NO_MATCH),
   vector('v0_matching_is_not_enough', header: "t=#{NOW},v0=#{GOOD},v1=#{'0' * 64}", error: NO_MATCH),
 
   # The timestamp tolerance, in both directions. The boundary is inclusive.
@@ -89,6 +90,7 @@ VECTORS = [
   vector('malformed_timestamp_plus_sign', header: "t=+#{NOW},v1=#{GOOD}", error: MALFORMED),
   vector('malformed_timestamp_fractional', header: "t=#{NOW}.5,v1=#{GOOD}", error: MALFORMED),
   vector('malformed_timestamp_too_many_digits', header: "t=#{'9' * 16},v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_containing_equals_sign', header: "t=#{NOW}=1,v1=#{GOOD}", error: MALFORMED),
   vector('malformed_duplicate_timestamp', header: "t=#{NOW},t=#{NOW},v1=#{GOOD}", error: MALFORMED),
   vector('malformed_empty_v1', header: "t=#{NOW},v1=", error: MALFORMED),
   vector('malformed_empty_v1_next_to_valid_one', header: "t=#{NOW},v1=#{GOOD},v1=", error: MALFORMED),

@@ -182,6 +182,18 @@
     "error": "no_matching_signature"
   },
   {
+    "name": "v1_containing_equals_sign",
+    "secrets": [
+      "whsec_test_clearinghouse_single_secret"
+    ],
+    "payload": "{\"id\":\"evt_1\",\"object\":\"event\",\"type\":\"payment_intent.succeeded\",\"created\":1700000000,\"api_version\":\"2026-09-01\",\"data\":{\"object\":{\"id\":\"pi_1\",\"object\":\"payment_intent\",\"amount\":1000,\"currency\":\"usd\"}}}",
+    "header": "t=1700000000,v1=73c12667ff0445ec4d478aa5851a10463a1a2b01248dc68eac5f1cc63e1c58da=",
+    "now": 1700000000,
+    "tolerance": 300,
+    "valid": false,
+    "error": "no_matching_signature"
+  },
+  {
     "name": "v0_matching_is_not_enough",
     "secrets": [
       "whsec_test_clearinghouse_single_secret"
@@ -404,6 +416,18 @@
     ],
     "payload": "{\"id\":\"evt_1\",\"object\":\"event\",\"type\":\"payment_intent.succeeded\",\"created\":1700000000,\"api_version\":\"2026-09-01\",\"data\":{\"object\":{\"id\":\"pi_1\",\"object\":\"payment_intent\",\"amount\":1000,\"currency\":\"usd\"}}}",
     "header": "t=9999999999999999,v1=73c12667ff0445ec4d478aa5851a10463a1a2b01248dc68eac5f1cc63e1c58da",
+    "now": 1700000000,
+    "tolerance": 300,
+    "valid": false,
+    "error": "malformed_header"
+  },
+  {
+    "name": "malformed_timestamp_containing_equals_sign",
+    "secrets": [
+      "whsec_test_clearinghouse_single_secret"
+    ],
+    "payload": "{\"id\":\"evt_1\",\"object\":\"event\",\"type\":\"payment_intent.succeeded\",\"created\":1700000000,\"api_version\":\"2026-09-01\",\"data\":{\"object\":{\"id\":\"pi_1\",\"object\":\"payment_intent\",\"amount\":1000,\"currency\":\"usd\"}}}",
+    "header": "t=1700000000=1,v1=73c12667ff0445ec4d478aa5851a10463a1a2b01248dc68eac5f1cc63e1c58da",
     "now": 1700000000,
     "tolerance": 300,
     "valid": false,

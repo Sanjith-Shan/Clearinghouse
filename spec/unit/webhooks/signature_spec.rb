@@ -30,15 +30,6 @@ RSpec.describe Clearinghouse::Webhooks::Signature do
       output, status = Open3.capture2e(script, '--check')
       expect(status).to be_success, output
     end
-
-    SignatureVectors.all.each do |v|
-      it "#{v['name']}: #{v['error'] || 'valid'}" do
-        result = described_class.verify(payload: v['payload'], header: v['header'], secrets: v['secrets'],
-                                        now: v['now'], tolerance: v['tolerance'])
-        expect(result.valid?).to eq(v['valid'])
-        expect(result.error&.serialize).to eq(v['error'])
-      end
-    end
   end
 
   describe '.sign' do
@@ -63,18 +54,40 @@ RSpec.describe Clearinghouse::Webhooks::Signature do
     end
 
     it 'refuses no secrets, empty secrets and negative timestamps' do
-      expect { described_class.sign(payload: payload, secrets: [], timestamp: now) }.to raise_error(ArgumentError)
-      expect { described_class.sign(payload: payload, secrets: [''], timestamp: now) }.to raise_error(ArgumentError)
-      expect { described_class.sign(payload: payload, secrets: [secret], timestamp: -1) }.to raise_error(ArgumentError)
+      expect { described_class.sign(payload: payload, secrets: [], timestamp: now) }
+        .to raise_error(ArgumentError, 'at least one secret is required')
+      expect { described_class.sign(payload: payload, secrets: [''], timestamp: now) }
+        .to raise_error(ArgumentError, 'secrets must not be empty strings')
+      expect { described_class.sign(payload: payload, secrets: [secret], timestamp: -1) }
+        .to raise_error(ArgumentError, 'timestamp must be non-negative, got -1')
     end
   end
 
   describe '.verify' do
     let(:header) { described_class.sign(payload: payload, secrets: [secret], timestamp: now) }
 
+    # Nested under .verify so mutation testing counts the vectors as tests of verify.
+    describe 'against the shared vectors' do
+      SignatureVectors.all.each do |v|
+        it "#{v['name']}: #{v['error'] || 'valid'}" do
+          result = described_class.verify(payload: v['payload'], header: v['header'], secrets: v['secrets'],
+                                          now: v['now'], tolerance: v['tolerance'])
+          expect(result.valid?).to eq(v['valid'])
+          expect(result.error&.serialize).to eq(v['error'])
+        end
+      end
+    end
+
     it 'returns the timestamp it verified' do
       result = described_class.verify(payload: payload, header: header, secrets: [secret], now: now)
       expect(result.timestamp).to eq(now)
+    end
+
+    it 'reports the timestamp on failures too, so a caller can log the skew' do
+      stale = described_class.verify(payload: payload, header: header, secrets: [secret], now: now + 301)
+      forged = described_class.verify(payload: payload, header: header, secrets: ['whsec_other'], now: now)
+      malformed = described_class.verify(payload: payload, header: 'nope', secrets: [secret], now: now)
+      expect([stale.timestamp, forged.timestamp, malformed.timestamp]).to eq([now, now, nil])
     end
 
     it 'defaults to Stripe’s five-minute tolerance' do
@@ -92,7 +105,7 @@ RSpec.describe Clearinghouse::Webhooks::Signature do
 
     it 'refuses a negative tolerance and an empty secret list' do
       expect { described_class.verify(payload: payload, header: header, secrets: [secret], now: now, tolerance: -1) }
-        .to raise_error(ArgumentError)
+        .to raise_error(ArgumentError, 'tolerance must be non-negative, got -1')
       expect { described_class.verify(payload: payload, header: header, secrets: [], now: now) }
         .to raise_error(ArgumentError)
     end
@@ -125,6 +138,13 @@ RSpec.describe Clearinghouse::Webhooks::Signature do
     it 'returns the timestamp when valid' do
       header = described_class.sign(payload: payload, secrets: [secret], timestamp: now)
       expect(described_class.verify!(payload: payload, header: header, secrets: [secret], now: now)).to eq(now)
+    end
+
+    it 'passes the tolerance through' do
+      header = described_class.sign(payload: payload, secrets: [secret], timestamp: now)
+      expect(described_class.verify!(payload: payload, header: header, secrets: [secret], now: now + 600,
+                                     tolerance: 600))
+        .to eq(now)
     end
 
     it 'raises with the error code when not' do
