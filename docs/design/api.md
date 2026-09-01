@@ -136,3 +136,130 @@ experiments), method, path, status, `duration_ms`, request id, merchant, API ver
 idempotency key when present. Duration comes from the monotonic clock, because it measures
 this process, not simulated time. The logger is a Rack middleware outside Sinatra, so
 it also logs requests the app rejects before routing. Tests pass `log: nil` and are quiet.
+
+## API versioning
+
+Built after Brandur Leach, *APIs as infrastructure: future-proofing Stripe with
+versioning* (2017), https://stripe.com/blog/api-versioning (reading list item 4). The
+ideas taken from it: versions are dates, a caller is pinned to the version current when
+it signed up and can override it per request with a header, core code only ever knows the
+latest shape, and each backwards-incompatible change is one self-contained module that
+declares the resources it touches and knows how to turn the new shape into the old one.
+The changelog is generated from those modules.
+
+### Versions
+
+`2026-01-01` (initial), `2026-03-01`, `2026-06-01`, `2026-09-01` (latest). A version
+exists because a change shipped on that date. The request's version is the
+`Clearinghouse-Version` header if sent, otherwise the merchant's pinned version,
+otherwise the latest. An unknown header value is a 400 `api_version_invalid`, not a
+silent fallback, because a client that asked for a shape must not get a different one.
+Every versioned response says which version it was rendered at in a
+`Clearinghouse-Version` response header.
+
+### The pipeline
+
+`Versioning::Engine#render(object, version, expand:, context:)`:
+
+1. Copy the latest-shape object. The caller's hash is never modified.
+2. Expand the caller's `expand[]` paths, then every field that a skipped change forces to
+   be embedded (below). Expansion works on the latest shape, through one loader per
+   `(resource, field)` registered on the `Expander`.
+3. Take the changes newer than the requested version, newest first. For each, walk the
+   whole tree and transform every object whose `object` is one of the change's resources.
+   The walk reaches objects at the top, inside a list's `data`, inside an event's
+   `data.object`, and embedded in other objects, so a change is written once per resource,
+   not once per place the resource can appear.
+
+`render_event(event, version)` stamps `api_version` on the envelope and renders it the
+same way, which is what webhook delivery will call per endpoint version.
+
+The walk skips `metadata`. It is merchant data, and a merchant who stores
+`{"object": "payment_intent", "amount_received": "5"}` there must get it back verbatim. A
+spec checks exactly that.
+
+### A change module
+
+`VersionChange` is an abstract class. A change overrides `version`, `description`,
+`resources` and `transform(hash) -> hash`, and optionally:
+
+- `forced_expansions`: `[resource, field]` pairs that were always embedded before this
+  change.
+- `request_endpoints` and `transform_request(endpoint, params)`: for a change that renamed
+  a request parameter. Old callers still send the old name, and the engine rewrites their
+  parameters into the latest shape, oldest change first, before the endpoint reads them.
+  An endpoint opts in by reading `versioned_params('payment_intents.capture')` instead of
+  `api_params`. None of the three shipped changes renames a request parameter, so this
+  hook is exercised by specs with test-only changes.
+- `side_effects?`: Stripe's `has_side_effects`, for a change whose old behaviour is logic,
+  not shape. Its transform is the identity and the code that differs asks
+  `engine.legacy?(ThatChange, ctx.api_version)`.
+
+Stripe's modules use a small DSL. These are plain method overrides, so Sorbet checks each
+one against the abstract interface.
+
+### The three changes
+
+| version | change | kind |
+|---|---|---|
+| `2026-03-01` | `amount_captured` renamed to `amount_received` | rename |
+| `2026-06-01` | flat `failure_code` + `failure_message` became a `last_payment_error` object with `code`, `decline_code`, `message` | two fields into one object (going back: one object into two fields) |
+| `2026-09-01` | `payment_method` became an expandable id; before, it was always the embedded PaymentMethod | nested object to expandable id |
+
+The rename keeps the key's position so old responses read the same as before. Going back
+across 2026-06-01 drops `decline_code`, because old clients never received it.
+
+**How the 2026-09-01 transform gets the object it needs.** At the latest version the
+renderer has only `"pm_card_visa"`. Three options:
+
+1. Give transforms a loader or database handle. Transforms stop being pure functions of
+   their input, and a list of 100 intents becomes 100 lookups inside the walk.
+2. Make the latest representation carry enough to rebuild the old object. That leaks
+   old-version data into every new response, which defeats the change.
+3. **Expand before transforming** (chosen). The change declares
+   `forced_expansions: [["payment_intent", "payment_method"]]`. For callers older than
+   2026-09-01 the engine expands that field through the same loader that serves
+   `expand[]=payment_method`, before any transform runs. The transform itself is only a
+   guard that raises if it ever sees a bare id.
+
+So expansion has one code path whether the caller asked for it or an old version requires
+it, and transforms stay pure. The cost is that an old caller always pays for the lookup,
+which is what an embedded field always cost them anyway. Payment methods here are the
+fixed test tokens (`Clearinghouse::PaymentMethods`), so this loader does no I/O; the
+payments work registers loaders for `latest_charge` and friends in
+`Versioning.default_expander`, with the request Context as the loader's `context`.
+
+Expansion paths are resolved against the latest shape. None of the shipped changes renames
+an expandable field, so there is no ambiguity yet; a change that did would need to map the
+old path.
+
+### Fields no change may touch
+
+RiskGate reads webhooks at whatever version its endpoint is pinned to, and its contract
+names `id`, `amount`, `currency`, `payment_intent`, `reason` and `status` as stable. The
+engine enforces this instead of trusting each change: after every transform it compares
+those keys (plus `object`, which the walk depends on) before and after, and raises
+`ProtectedFieldError` on any difference, including a dropped key. A spec also renders
+every fixture at every version and checks every protected value at every path.
+
+### Golden files
+
+`spec/fixtures/resources/` holds latest-version JSON for a succeeded PaymentIntent, a
+declined one, a list of both, and a `payment_intent.succeeded` event wrapping the first.
+`spec/versioning/golden_spec.rb` renders each at every version and compares the pretty
+JSON byte for byte with `spec/fixtures/golden/<version>/<name>.json`, so a change to any
+transform shows up as a readable diff in review. `UPDATE_GOLDEN=1 bundle exec rspec
+spec/versioning/golden_spec.rb` rewrites them. The spec also fails on golden files for a
+version or fixture that no longer exists, and checks that the list and event fixtures
+embed exactly the standalone PaymentIntent fixtures.
+
+The PaymentIntent fixture is the contract with the payments work: it is the latest shape
+their serializer must produce.
+
+### Adding a change
+
+1. Write a class under `lib/clearinghouse/versioning/changes/` and add it to
+   `Versioning.registry`.
+2. Update the latest fixtures to the new shape, then `UPDATE_GOLDEN=1` and read the diff:
+   every older golden file should be unchanged.
+3. Run `bin/changelog` to regenerate `docs/api-changelog.md`. A spec fails if it is stale.
