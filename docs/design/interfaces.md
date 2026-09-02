@@ -22,6 +22,33 @@ Ledger::Clearing.report(db, as_of:, slas:) -> open flows past SLA, orphan cleari
 Ledger.explain(db, flow_id) -> every transaction and entry for a flow, plus clearing state
 ```
 
+As built (M1). Everything above holds; these are the details it left open:
+
+- `Entry.debit(code, money)` and `Entry.credit(code, money)` build entries.
+- `post!` raises before writing anything: `UnbalancedError` (`#imbalances` is
+  `{currency => debits - credits}`), `InvalidPostingError` (non-positive amount, unknown
+  side, fewer than 2 entries, empty flow id or type), `UnknownAccountError`, and
+  `FlowTypeMismatchError`. **Every transaction of a flow has one `flow_type`**, one of
+  `Ledger::Flows::PAYMENT | REFUND | DISPUTE | PAYOUT`, and the database enforces it.
+- `reverse!` raises `TransactionNotFoundError`, `AlreadyReversedError` or
+  `NotReversibleError` (a reversal can't be reversed; post the original again instead).
+- `balance_for_update` must run inside a database transaction and creates the account if
+  it doesn't exist, so there is always a row to lock.
+- `Checker.run(db) -> Checker::Report(accounts_checked, drifts: [Drift(code, currency, stored, computed)])`.
+- `Clearing.report(db, as_of:, slas: {flow_type => seconds})` returns `Clearing::Report`
+  with `open_flows`, `past_sla`, `orphan_balances`, `explainability` (per flow type and
+  currency) and `flow_types_without_sla`. `healthy?` means nothing is past SLA and there are no orphans.
+- `Ledger.explain` returns `Explain::Explanation` (`steps`, `clearing`, `explained?`) and
+  raises `Explain::FlowNotFoundError`. `ExplainPrinter.render(explanation, color: false)`
+  gives the terminal table for `bin/explain`.
+- `Invariants.check(db) -> [Violation]` and `Invariants.check!(db)` are for model-based
+  tests.
+- `Ledger::Flows.<event>(...)` returns the entries for each row of the money-flow table in
+  `docs/design/ledger.md` (`capture`, `settlement`, `funds_available`, `refund`,
+  `refund_settled`, `dispute_opened`, `dispute_debited`, `dispute_won`,
+  `dispute_funds_returned`, `payout`, `payout_paid`, `payout_failed`). Domain code should post
+  these rather than hand-writing entries.
+
 ### Account codes
 
 Accounts are named by a code and a currency. Platform accounts:

@@ -224,7 +224,7 @@ RSpec.describe Clearinghouse::Ledger, :db do
       id = reverse
       txn = app_db[:ledger_transactions].where(id: id).first
       expect(txn.values_at(:flow_id, :flow_type, :reverses_transaction_id)).to eq(['pi_1', 'payment', original])
-      expect(txn[:description]).to eq("reversal of transaction #{original}: captured twice")
+      expect(txn[:description]).to eq('reversal: captured twice')
       sides = app_db[:ledger_entries].where(transaction_id: id).order(:id).select_map(%i[side amount])
       expect(sides).to eq([['C', 10_000], ['D', 9680], ['D', 320]])
       expect([receivable, pending, fees].map { |a| balance_of(a) }).to eq([0, 0, 0])
