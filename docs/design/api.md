@@ -63,6 +63,8 @@ Rules the helpers enforce:
   with `param` set, including nested ones (`shipping[address][town]`). `metadata` takes
   any keys, within Stripe's published limits (50 keys, 40-char keys, 500-char values).
   `expand` is allowed everywhere.
+- Every `/v1` route except the admin bootstrap is authenticated in the `before` filter,
+  before routing, so no route can forget it. `ctx.merchant!` is the merchant.
 - Route captures come in as block arguments. Sinatra's own `params` is left alone.
 - `respond(hash)` is the only way a success body leaves the app.
 
@@ -263,3 +265,77 @@ their serializer must produce.
 2. Update the latest fixtures to the new shape, then `UPDATE_GOLDEN=1` and read the diff:
    every older golden file should be unchanged.
 3. Run `bin/changelog` to regenerate `docs/api-changelog.md`. A spec fails if it is stale.
+
+## Merchants and authentication
+
+`merchants (id acct_..., name, secret_key_hash, secret_key_last4, api_version,
+fee_rate_scaled, fee_fixed_minor jsonb, payout_interval, payout_delay_days, created_at)`,
+with check constraints on every format and range. The app role gets `SELECT, INSERT` and
+nothing else; a spec proves `UPDATE` and `DELETE` are refused. `created_at` comes from the
+injected clock, never a database default, so simulated time is consistent.
+
+### Secret keys
+
+`sk_test_` plus 24 base62 characters from SecureRandom, about 143 bits. The plaintext is
+returned once, in the `POST /v1/merchants` response, and only its SHA-256 hex digest is
+stored.
+
+**Why SHA-256 and not bcrypt.** A slow password hash makes each guess expensive, which
+matters when the secret is a human-chosen password that can be guessed in 2^30 tries.
+Nobody guesses a 143-bit random key at any hash speed, so the slowness buys nothing. It
+would cost a deliberately slow hash (tens of milliseconds or more, by design) on every API
+request, and bcrypt's per-row salt would make lookup by digest impossible: authenticating
+would mean trying every merchant's hash.
+
+**Lookup and timing.** The key is checked against its expected shape first, so garbage
+never reaches the database. Then the lookup is by digest through the unique index. Its
+timing depends on the digest of the caller's guess, not on any stored secret, and learning
+that SHA-256(guess) shares a prefix with a stored digest does not help anyone find a
+preimage. The one comparison between a stored value and a caller-derived value is
+`Rack::Utils.secure_compare` anyway, so it never short-circuits.
+
+Keys arrive as `Authorization: Bearer sk_test_...`, or as HTTP Basic with the key as the
+username (`curl -u sk_test_...:`), both as in Stripe's API. Errors say `api_key_missing`
+or `api_key_invalid`, and show only `sk_test_****` plus the last four characters.
+
+### Version pinning
+
+A merchant's `api_version` is set at creation to the latest version (or to an older one
+passed as `api_version`, which the demos and golden tests use), and every request it makes
+renders at that version unless it sends `Clearinghouse-Version`. There is no upgrade
+endpoint yet; it would be a one-row update and the reason `UPDATE` is not granted today is
+that nothing needs it.
+
+### The admin bootstrap
+
+`POST /v1/merchants` has no Stripe equivalent: Stripe onboards merchants through its
+dashboard. Clearinghouse is a simulation with no dashboard, so demos, experiments and
+RiskGate's replay driver create merchants over the API. The endpoint is guarded by
+`CLEARINGHOUSE_ADMIN_TOKEN` as a Bearer token, compared in constant time after hashing
+both sides (so the token's length does not leak either). With no token configured the
+endpoint refuses every call. A merchant secret key is not accepted in its place.
+
+`GET /v1/account` returns the authenticated merchant, as Stripe's does.
+
+## Handoff to the payments work
+
+- **The PaymentIntent JSON** in `spec/fixtures/resources/payment_intent.json` is the latest
+  shape. Serialize to exactly that and the three version changes and the golden files
+  apply unchanged. If the shape has to change, change the fixture, rerun
+  `UPDATE_GOLDEN=1`, and check the diff touches only the latest version's files unless a
+  version change is intended.
+- **Expanders.** Register loaders for `latest_charge` and any other expandable field in
+  `Versioning.default_expander`. The loader's `context` is the request `Context`.
+- **Idempotency.** `ctx.idempotency_key` is the header; fingerprint `api_params.raw`
+  (what the client sent, before any request-side version transform). Raise
+  `IdempotencyKeyReusedError` and `IdempotencyKeyInUseError` and the status codes and
+  `Clearinghouse-Should-Retry` values follow.
+- **Collaborators** (acquirer client, RiskGate client, crash hook) are new props on
+  `Api::Dependencies`. `acquirer` is typed `T.nilable(Object)` until its client exists.
+- **Balance.** `GET /v1/balance` does not exist yet; it belongs with the ledger reads.
+- **Specs** get the app from `include_context 'with the api app'` and a merchant with
+  headers from `include_context 'with a merchant'` (`auth`), both in
+  `spec/support/api_helpers.rb`. Once the ledger's `DBHelper` is merged, merchant
+  cleanup can move into its `clean_tables` list.
+- **Events.** `Versioning.render_event(event_hash, endpoint_version)` renders a webhook
+  payload at the endpoint's version.

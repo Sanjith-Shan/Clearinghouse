@@ -18,6 +18,15 @@ module Clearinghouse
       # The version this request is rendered at: the Clearinghouse-Version header
       # if sent, else the merchant's pinned version, else the latest.
       prop :api_version, String
+      # The authenticated merchant. nil only on routes that do not take a secret
+      # key (/healthz, the admin bootstrap).
+      prop :merchant, T.nilable(Merchant)
+
+      # For authenticated routes, where a missing merchant is a bug, not a 401.
+      sig { returns(Merchant) }
+      def merchant!
+        merchant || raise(Clearinghouse::Error, 'route needs an authenticated merchant')
+      end
 
       sig { returns(Sequel::Database) }
       def db = deps.db

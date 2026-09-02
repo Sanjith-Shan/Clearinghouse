@@ -42,6 +42,7 @@ header is absent when that is not known. See `docs/design/api.md`.
 - `idempotency_key_in_use`: the key's first request is still running. Retry shortly.
 - `api_key_missing`: no `Authorization` header.
 - `api_key_invalid`: the key does not match any merchant.
+- `admin_token_invalid`: `POST /v1/merchants` needs the admin token, or merchant creation is disabled.
 - `api_version_invalid`: the `Clearinghouse-Version` header names a version that does not exist.
 - `rate_limit`: slow down and retry.
 - `payment_blocked`: RiskGate blocked the payment. Retrying the same payment will not help.
