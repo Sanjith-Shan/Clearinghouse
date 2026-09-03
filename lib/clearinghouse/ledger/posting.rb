@@ -44,7 +44,7 @@ module Clearinghouse
         T.let(@db.transaction do
           original = load_reversible!(transaction_id)
           post(flow_type: original.fetch(:flow_type), flow_id: original.fetch(:flow_id),
-               description: "reversal of transaction #{transaction_id}: #{reason}",
+               description: "reversal: #{reason}",
                effective_at: effective_at, entries: entries_of(transaction_id).map(&:flipped),
                reverses: transaction_id)
         end, Integer)

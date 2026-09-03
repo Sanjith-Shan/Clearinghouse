@@ -44,6 +44,13 @@ module Clearinghouse
     def self.balance_for_update(db, account, currency)
       Posting.new(db).balance(account, currency, lock: true)
     end
+
+    # Every transaction and entry of one flow, with the running clearing state.
+    # Render it with ExplainPrinter.render.
+    sig { params(db: Sequel::Database, flow_id: String).returns(Explain::Explanation) }
+    def self.explain(db, flow_id)
+      Explain.run(db, flow_id)
+    end
   end
 end
 
@@ -53,3 +60,7 @@ require_relative 'ledger/entry'
 require_relative 'ledger/posting'
 require_relative 'ledger/checker'
 require_relative 'ledger/invariants'
+require_relative 'ledger/clearing'
+require_relative 'ledger/explain'
+require_relative 'ledger/explain_printer'
+require_relative 'ledger/flows'
