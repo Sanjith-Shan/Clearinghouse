@@ -26,6 +26,12 @@ The design is built from public engineering writing, credited here.
 - Every component reads a `Clearinghouse::Clock`. Tests use a test clock that only moves
   when told to and never moves backwards.
 
+## Areas
+
+- [Internal interfaces](docs/design/interfaces.md): the contracts between the parts.
+- [Ledger](docs/design/ledger.md): accounts, the money-flow table, policy choices, and how the database enforces double entry and append-only.
+- [API](docs/design/api.md): request handling, errors, auth, and date-based versioning. The changelog is generated into [docs/api-changelog.md](docs/api-changelog.md).
+
 ## Bugs the harness caught
 
 See `docs/bugs/`.
