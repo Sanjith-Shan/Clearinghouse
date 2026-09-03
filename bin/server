@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Runs the API on Puma, port 4000 unless PORT says otherwise.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec bundle exec puma --port "${PORT:-4000}" --threads "${PUMA_THREADS:-5:5}" --environment "${RACK_ENV:-development}" config.ru
