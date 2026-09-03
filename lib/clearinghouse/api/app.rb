@@ -50,7 +50,29 @@ module Clearinghouse
           idempotency_key: request.get_header('HTTP_IDEMPOTENCY_KEY'),
           api_version: @deps.versioning.latest
         )
-        resolve_api_version(nil)
+        merchant = authenticate_request if requires_secret_key?
+        resolve_api_version(merchant&.api_version)
+      end
+
+      # Routes under /v1 that do not take a merchant's secret key. Everything else
+      # under /v1 does, checked here before routing so no route can forget it. (An
+      # unknown /v1 path without a key is therefore a 401, not a 404, as in Stripe.)
+      UNAUTHENTICATED = [%w[POST /v1/merchants]].freeze
+
+      sig { returns(T::Boolean) }
+      def requires_secret_key?
+        path = request.path_info.to_s
+        return false unless path.start_with?('/v1/')
+
+        UNAUTHENTICATED.none?([request.request_method, path])
+      end
+
+      sig { returns(Merchant) }
+      def authenticate_request
+        merchant = Auth.merchant!(@deps.db, request.get_header('HTTP_AUTHORIZATION'))
+        ctx.merchant = merchant
+        env[RequestLogger::MERCHANT] = merchant.id
+        merchant
       end
 
       # The header wins over the merchant's pin, and an unknown header value is an
@@ -160,6 +182,7 @@ module Clearinghouse
       end
 
       register Routes::Health
+      register Routes::Merchants
     end
   end
 end

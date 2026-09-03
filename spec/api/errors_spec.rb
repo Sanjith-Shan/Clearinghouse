@@ -131,11 +131,21 @@ RSpec.describe Clearinghouse::Api::Errors do
   end
 
   it 'renders an unknown route as a 404 in the same shape' do
-    get '/v1/nope'
+    get '/nope'
     expect(last_response.status).to eq(404)
     expect(last_response.content_type).to eq('application/json')
     expect(json_body['error']).to include('type' => 'invalid_request_error', 'code' => 'url_invalid',
-                                          'message' => 'Unrecognized request URL (GET: /v1/nope).')
+                                          'message' => 'Unrecognized request URL (GET: /nope).')
+  end
+
+  context 'with a merchant' do
+    include_context 'with a merchant'
+
+    it 'renders an unknown /v1 route as a 404 once authenticated' do
+      get '/v1/nope', {}, auth
+      expect(last_response.status).to eq(404)
+      expect(json_body['error']).to include('code' => 'url_invalid')
+    end
   end
 
   it 'omits doc_url when there is no code' do
@@ -145,7 +155,8 @@ RSpec.describe Clearinghouse::Api::Errors do
   it 'documents every code the error classes use' do
     doc = File.read(File.expand_path('../../docs/api-errors.md', __dir__))
     codes = raisers.except('boom').values.map { |r| r.call.code }
-    codes += %w[parameter_unknown parameter_invalid url_invalid body_invalid]
+    codes += %w[parameter_unknown parameter_invalid url_invalid body_invalid api_key_missing admin_token_invalid
+                api_version_invalid]
     codes.uniq.each { |code| expect(doc).to include("`#{code}`") }
   end
 end

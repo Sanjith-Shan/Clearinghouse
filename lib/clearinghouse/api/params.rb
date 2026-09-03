@@ -32,9 +32,21 @@ module Clearinghouse
       sig { returns(T::Hash[String, T.untyped]) }
       attr_reader :raw
 
-      sig { params(raw: T::Hash[String, T.untyped]).void }
-      def initialize(raw)
+      # `prefix` names a nested object, so its readers report `shipping[name]`.
+      sig { params(raw: T::Hash[String, T.untyped], prefix: T.nilable(String)).void }
+      def initialize(raw, prefix: nil)
         @raw = raw
+        @prefix = prefix
+      end
+
+      # The nested object `name` as Params of its own (empty when absent).
+      sig { params(name: String).returns(Params) }
+      def nested(name)
+        value = fetch(name, false)
+        return Params.new({}, prefix: full(name)) if value.nil?
+        raise Errors::InvalidRequestError.invalid_parameter(full(name), 'must be an object.') unless value.is_a?(Hash)
+
+        Params.new(value, prefix: full(name))
       end
 
       sig { params(request: Rack::Request).returns(Params) }
@@ -97,7 +109,7 @@ module Clearinghouse
       # Stripe's API. Call it before reading anything.
       sig { params(permitted: Permitted, free_form: T::Array[String]).returns(Params) }
       def permit!(*permitted, free_form: ['metadata'])
-        check_keys!(@raw, permitted + free_form + ['expand'], free_form, nil)
+        check_keys!(@raw, permitted + free_form + ['expand'], free_form, @prefix)
         self
       end
 
@@ -115,10 +127,10 @@ module Clearinghouse
         int = case value
               when Integer then value
               when /\A-?\d+\z/ then Integer(value, 10)
-              else raise Errors::InvalidRequestError.invalid_parameter(name, 'must be an integer.')
+              else raise Errors::InvalidRequestError.invalid_parameter(full(name), 'must be an integer.')
               end
-        raise Errors::InvalidRequestError.invalid_parameter(name, "must be at least #{min}.") if min && int < min
-        raise Errors::InvalidRequestError.invalid_parameter(name, "must be at most #{max}.") if max && int > max
+        raise Errors::InvalidRequestError.invalid_parameter(full(name), "must be at least #{min}.") if min && int < min
+        raise Errors::InvalidRequestError.invalid_parameter(full(name), "must be at most #{max}.") if max && int > max
 
         int
       end
@@ -127,9 +139,9 @@ module Clearinghouse
       def string(name, required: false, max_length: 5000)
         value = fetch(name, required)
         return nil if value.nil?
-        raise Errors::InvalidRequestError.invalid_parameter(name, 'must be a string.') unless value.is_a?(String)
+        raise Errors::InvalidRequestError.invalid_parameter(full(name), 'must be a string.') unless value.is_a?(String)
         if value.length > max_length
-          raise Errors::InvalidRequestError.invalid_parameter(name, "must be at most #{max_length} characters.")
+          raise Errors::InvalidRequestError.invalid_parameter(full(name), "must be at most #{max_length} characters.")
         end
 
         value
@@ -141,7 +153,7 @@ module Clearinghouse
         return nil if value.nil?
         return value if allowed.include?(value)
 
-        raise Errors::InvalidRequestError.invalid_parameter(name, "must be one of #{allowed.join(', ')}.")
+        raise Errors::InvalidRequestError.invalid_parameter(full(name), "must be one of #{allowed.join(', ')}.")
       end
 
       sig { params(name: String, required: T::Boolean).returns(T.nilable(T::Boolean)) }
@@ -151,7 +163,7 @@ module Clearinghouse
         when nil then nil
         when true, 'true' then true
         when false, 'false' then false
-        else raise Errors::InvalidRequestError.invalid_parameter(name, 'must be true or false.')
+        else raise Errors::InvalidRequestError.invalid_parameter(full(name), 'must be true or false.')
         end
       end
 
@@ -160,13 +172,13 @@ module Clearinghouse
       def metadata(name = 'metadata')
         value = @raw[name]
         return {} if value.nil? || value == ''
-        raise Errors::InvalidRequestError.invalid_parameter(name, 'must be an object.') unless value.is_a?(Hash)
+        raise Errors::InvalidRequestError.invalid_parameter(full(name), 'must be an object.') unless value.is_a?(Hash)
         if value.size > METADATA_MAX_KEYS
-          raise Errors::InvalidRequestError.invalid_parameter(name, "can have at most #{METADATA_MAX_KEYS} keys.")
+          raise Errors::InvalidRequestError.invalid_parameter(full(name), "can have at most #{METADATA_MAX_KEYS} keys.")
         end
 
         value.to_h do |key, val|
-          param = "#{name}[#{key}]"
+          param = "#{full(name)}[#{key}]"
           unless key.length <= METADATA_MAX_KEY_LENGTH && (val.is_a?(String) || val.is_a?(Integer))
             raise Errors::InvalidRequestError.invalid_parameter(
               param, 'keys are at most 40 characters and values are strings.'
@@ -206,10 +218,15 @@ module Clearinghouse
 
       private
 
+      sig { params(name: String).returns(String) }
+      def full(name)
+        @prefix ? "#{@prefix}[#{name}]" : name
+      end
+
       sig { params(name: String, required: T::Boolean).returns(T.untyped) }
       def fetch(name, required)
         value = @raw[name]
-        raise Errors::InvalidRequestError.missing_parameter(name) if required && (value.nil? || value == '')
+        raise Errors::InvalidRequestError.missing_parameter(full(name)) if required && (value.nil? || value == '')
 
         value == '' ? nil : value
       end
