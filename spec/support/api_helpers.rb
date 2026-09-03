@@ -4,22 +4,21 @@
 require 'json'
 require 'stringio'
 require 'rack/test'
+require_relative 'db'
+
+DBHelper.clean_tables('merchants')
 
 # Shared wiring for API specs: one app-role connection for the whole run, a test
 # clock per example, and an app built the same way config.ru builds it.
 module ApiSpecHelpers
   def self.db
-    @db ||= Clearinghouse::DB.connect(role: :app, max_connections: 4)
+    DBHelper.app
   end
 
-  def self.owner_db
-    @owner_db ||= Clearinghouse::DB.connect(role: :owner, max_connections: 1)
-  end
-
-  # Merchants are the only API table so far. CASCADE so later tables that
-  # reference merchants are emptied with them.
+  # Empties every registered table, ledger included, so API specs that post money
+  # start from the same clean state as ledger specs.
   def self.reset_merchants!
-    owner_db.run('TRUNCATE merchants CASCADE')
+    DBHelper.clean!
   end
 
   def json_body
