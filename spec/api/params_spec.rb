@@ -15,7 +15,7 @@ RSpec.describe Clearinghouse::Api::Params do
                   'description' => p.string('description', max_length: 10),
                   'shipping' => p['shipping'],
                   'metadata' => p.metadata,
-                  'expand' => p.expand })
+                  'expand' => p.expand }, versioned: false)
       end
     end
   end

@@ -15,10 +15,10 @@ module Clearinghouse
             T.bind(self, App)
             begin
               ctx.db.fetch('SELECT 1 AS ok').single_value
-              respond({ 'status' => 'ok', 'database' => 'ok' })
+              respond({ 'status' => 'ok', 'database' => 'ok' }, versioned: false)
             rescue Sequel::Error => e
               log_exception(e, ctx.request_id)
-              respond({ 'status' => 'unavailable', 'database' => 'unreachable' }, status_code: 503)
+              respond({ 'status' => 'unavailable', 'database' => 'unreachable' }, status_code: 503, versioned: false)
             end
           end
         end
