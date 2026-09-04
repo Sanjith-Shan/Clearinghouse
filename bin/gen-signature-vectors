@@ -1,0 +1,127 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Generates spec/fixtures/signatures.json, the signature test vectors every verifier
+# (the Ruby one here, clients/go/webhooksig, RiskGate's) must pass.
+#
+#   bin/gen-signature-vectors           rewrite the file
+#   bin/gen-signature-vectors --check   exit 1 if the file is not what this script generates
+#
+# Valid headers come from the Ruby signer. Malformed ones are written by hand, because
+# the signer cannot produce them. The JSON shape is agreed with RiskGate: do not add or
+# rename fields.
+
+require 'bundler/setup'
+require 'json'
+require_relative '../lib/clearinghouse'
+
+Sig = Clearinghouse::Webhooks::Signature
+
+PATH = File.expand_path('../spec/fixtures/signatures.json', __dir__)
+NOW = 1_700_000_000
+TOLERANCE = 300
+SECRET = 'whsec_test_clearinghouse_single_secret'
+OLD = 'whsec_test_rotation_old_secret_aaaaaaaa'
+NEW = 'whsec_test_rotation_new_secret_bbbbbbbb'
+PAYLOAD = '{"id":"evt_1","object":"event","type":"payment_intent.succeeded","created":1700000000,' \
+          '"api_version":"2026-09-01","data":{"object":{"id":"pi_1","object":"payment_intent",' \
+          '"amount":1000,"currency":"usd"}}}'
+
+def v1(secret, payload = PAYLOAD, at: NOW.to_s)
+  Sig.compute(secret, at, payload)
+end
+
+def signed(secrets, payload = PAYLOAD, at: NOW)
+  Sig.sign(payload: payload, secrets: secrets, timestamp: at)
+end
+
+def vector(name, header:, secrets: [SECRET], payload: PAYLOAD, error: nil)
+  { 'name' => name, 'secrets' => secrets, 'payload' => payload, 'header' => header,
+    'now' => NOW, 'tolerance' => TOLERANCE, 'valid' => error.nil?, 'error' => error }
+end
+
+NO_MATCH = 'no_matching_signature'
+STALE = 'timestamp_outside_tolerance'
+MALFORMED = 'malformed_header'
+GOOD = v1(SECRET)
+
+VECTORS = [
+  # The happy paths.
+  vector('valid_single_secret', header: signed([SECRET])),
+  vector('valid_rotation_verifier_holds_old_only', header: signed([NEW, OLD]), secrets: [OLD]),
+  vector('valid_rotation_verifier_holds_new_only', header: signed([NEW, OLD]), secrets: [NEW]),
+  vector('valid_rotation_verifier_holds_both', header: signed([NEW, OLD]), secrets: [OLD, NEW]),
+  vector('valid_verifier_holds_two_header_signed_with_one', header: signed([NEW]), secrets: [OLD, NEW]),
+  vector('valid_one_good_v1_among_bad_ones', header: "t=#{NOW},v1=#{'0' * 64},v1=#{GOOD},v1=#{'f' * 64}"),
+
+  # Signature mismatches.
+  vector('wrong_secret', header: signed([SECRET]), secrets: ['whsec_test_not_the_right_secret'], error: NO_MATCH),
+  vector('rotation_verifier_holds_neither', header: signed([NEW, OLD]), secrets: [SECRET], error: NO_MATCH),
+  vector('tampered_payload_one_byte', header: signed([SECRET]),
+                                      payload: PAYLOAD.sub('"amount":1000', '"amount":1001'), error: NO_MATCH),
+  vector('tampered_timestamp_same_v1', header: "t=#{NOW + 1},v1=#{GOOD}", error: NO_MATCH),
+  vector('uppercase_hex_does_not_match', header: "t=#{NOW},v1=#{GOOD.upcase}", error: NO_MATCH),
+  vector('v1_not_hex', header: "t=#{NOW},v1=zz#{GOOD[2..]}", error: NO_MATCH),
+  vector('v1_truncated', header: "t=#{NOW},v1=#{GOOD[0, 63]}", error: NO_MATCH),
+  vector('v1_with_extra_char', header: "t=#{NOW},v1=#{GOOD}0", error: NO_MATCH),
+  vector('signature_is_checked_before_timestamp', header: signed([SECRET], at: NOW - 3600),
+                                                  secrets: ['whsec_test_not_the_right_secret'], error: NO_MATCH),
+  vector('v1_containing_equals_sign', header: "t=#{NOW},v1=#{GOOD}=", error: NO_MATCH),
+  vector('v0_matching_is_not_enough', header: "t=#{NOW},v0=#{GOOD},v1=#{'0' * 64}", error: NO_MATCH),
+
+  # The timestamp tolerance, in both directions. The boundary is inclusive.
+  vector('timestamp_too_old', header: signed([SECRET], at: NOW - TOLERANCE - 1), error: STALE),
+  vector('timestamp_too_far_in_future', header: signed([SECRET], at: NOW + TOLERANCE + 1), error: STALE),
+  vector('timestamp_exactly_tolerance_old_accepted', header: signed([SECRET], at: NOW - TOLERANCE)),
+  vector('timestamp_exactly_tolerance_ahead_accepted', header: signed([SECRET], at: NOW + TOLERANCE)),
+  vector('timestamp_zero', header: signed([SECRET], at: 0), error: STALE),
+  vector('timestamp_with_leading_zeros_is_signed_as_sent', header: "t=0#{NOW},v1=#{v1(SECRET, at: "0#{NOW}")}"),
+
+  # Malformed headers.
+  vector('malformed_empty', header: '', error: MALFORMED),
+  vector('malformed_whitespace_only', header: '   ', error: MALFORMED),
+  vector('malformed_garbage', header: 'this is not a signature header', error: MALFORMED),
+  vector('malformed_no_timestamp', header: "v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_no_v1', header: "t=#{NOW}", error: MALFORMED),
+  vector('malformed_only_unknown_scheme', header: "t=#{NOW},v0=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_not_a_number', header: "t=abc,v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_empty', header: "t=,v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_negative', header: "t=-#{NOW},v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_plus_sign', header: "t=+#{NOW},v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_fractional', header: "t=#{NOW}.5,v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_too_many_digits', header: "t=#{'9' * 16},v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_timestamp_containing_equals_sign', header: "t=#{NOW}=1,v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_duplicate_timestamp', header: "t=#{NOW},t=#{NOW},v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_empty_v1', header: "t=#{NOW},v1=", error: MALFORMED),
+  vector('malformed_empty_v1_next_to_valid_one', header: "t=#{NOW},v1=#{GOOD},v1=", error: MALFORMED),
+  vector('malformed_trailing_comma', header: "t=#{NOW},v1=#{GOOD},", error: MALFORMED),
+  vector('malformed_empty_element', header: "t=#{NOW},,v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_element_without_equals', header: "t=#{NOW},v1=#{GOOD},garbage", error: MALFORMED),
+  vector('malformed_element_with_empty_key', header: "t=#{NOW},=#{GOOD},v1=#{GOOD}", error: MALFORMED),
+  vector('malformed_scheme_names_are_case_sensitive', header: "T=#{NOW},V1=#{GOOD}", error: MALFORMED),
+  vector('malformed_semicolon_separated', header: "t=#{NOW};v1=#{GOOD}", error: MALFORMED),
+
+  # Things a verifier must tolerate.
+  vector('unknown_scheme_v0_ignored', header: "t=#{NOW},v1=#{GOOD},v0=#{'6f' * 32}"),
+  vector('unknown_scheme_first_and_order_independent', header: "v2=abc,v1=#{GOOD},t=#{NOW}"),
+  vector('whitespace_around_elements', header: " t=#{NOW} ,\tv1=#{GOOD}\t"),
+  vector('unicode_payload', header: signed([SECRET], "{\"description\":\"café 東京 \u{1F4B3}\"}"),
+                            payload: "{\"description\":\"café 東京 \u{1F4B3}\"}"),
+  vector('payload_with_trailing_newline', header: signed([SECRET], "#{PAYLOAD}\n"), payload: "#{PAYLOAD}\n"),
+  vector('trailing_newline_stripped_by_receiver', header: signed([SECRET], "#{PAYLOAD}\n"), error: NO_MATCH),
+  vector('empty_payload', header: signed([SECRET], ''), payload: '')
+].freeze
+
+json = "#{JSON.pretty_generate(VECTORS)}\n"
+
+if ARGV.include?('--check')
+  if File.exist?(PATH) && File.read(PATH, encoding: 'UTF-8') == json
+    puts "#{PATH} is up to date (#{VECTORS.length} vectors)"
+    exit 0
+  end
+  warn "#{PATH} is stale; run bin/gen-signature-vectors"
+  exit 1
+end
+
+File.write(PATH, json)
+puts "wrote #{VECTORS.length} vectors to #{PATH}"
