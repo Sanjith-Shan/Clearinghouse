@@ -139,3 +139,123 @@ RiskGate keeps its own verifier; both pass the same vectors.
   the vectors as its seed corpus and checks that no header panics and that `Sign`'s output
   always verifies. A 20-second local fuzz run (about 3.5 million executions) found nothing.
 - `Example` shows the handler shape: verify the raw body before decoding it.
+
+## SSRF guard and egress
+
+Code: `lib/clearinghouse/webhooks/safe_http.rb` and `lib/clearinghouse/webhooks/egress/`.
+
+A merchant chooses the URL, and Clearinghouse POSTs to it from inside its own network.
+Without a guard, `https://169.254.169.254/latest/meta-data/` fetches cloud credentials and
+`https://10.0.0.5:5432/` probes the database. Stripe's answer is Smokescreen, an egress
+proxy that "resolves each domain name that is requested, and ensures that it is a
+publicly routable IP address and not an internal IP address", which "prevents a class of
+attacks where, for instance, our own webhooks infrastructure is used to scan Stripe's
+internal network". Clearinghouse is one process, so `SafeHttp` does the same job in-line
+instead of as a proxy. The README also warns that its hostname ACL "is only applied to
+hostnames as they appear in the request" and recommends blocking by resolved IP. That is
+the design here: the hostname is only ever used to look up addresses, and the decision is
+made on the addresses.
+
+### The pipeline
+
+1. **Parse strictly** (`Egress::Target`). https only. `http://` is allowed for exactly
+   `localhost` and `127.0.0.1`, and only when `test_mode: true` is passed, so the test
+   suite can deliver to a local server. Refused before any DNS lookup:
+   - userinfo (`https://hooks.example@127.0.0.1/` is a classic parser-confusion trick);
+   - any IPv4 spelling other than four canonical decimal octets. The rule is WHATWG's:
+     if the last label of the host looks like a number (`[0-9]+` or `0x...`), the host is
+     an IPv4 address, and then it must be a dotted quad with no leading zeros. That
+     catches `2130706433`, `0177.0.0.1`, `0x7f.0.0.1`, `0x7f000001`, `127.1`, and
+     `127.0.0.01`, all of which some resolver or `inet_aton` would read as 127.0.0.1;
+   - percent-encoded hosts, non-ASCII hosts (IDNs must arrive as punycode; Smokescreen's ACL
+     likewise only takes punycode hosts), empty labels, a trailing dot, IPv6 zone IDs, whitespace and control
+     characters anywhere, ports outside 1 to 65535, URLs over 2048 bytes.
+2. **Resolve once** through an injected `Egress::Resolver`. Production uses
+   `SystemResolver` (getaddrinfo with a timeout). A URL with a literal address skips DNS.
+3. **Check every address** (`Egress::IpPolicy`). If any address is internal, the delivery
+   is `Blocked`, even if another is public. Picking the public one would work today and
+   hand the attacker a coin flip tomorrow.
+4. **Connect to the checked address.** `Net::HTTP.new(hostname, port, nil)` plus
+   `http.ipaddr = checked_ip`. In net-http 0.4.1 (Ruby 3.3), `connect` opens the TCP socket
+   to `@ipaddr || address`, while SNI (`s.hostname = @address`), the certificate hostname
+   check (`post_connection_check(@address)` and `verify_hostname`) and the `Host` header all
+   use the hostname. I read that in the net/http source, and the integration spec proves
+   it against a local TLS server: the server sees SNI `hooks.merchant.test` and
+   `Host: hooks.merchant.test:<port>` on a connection made to 127.0.0.1, and a certificate
+   for a different name fails with `hostname mismatch`. I also ran one delivery by hand to
+   httpbin.org on 2026-09-23 to see it work against a public CA chain (not part of CI).
+   The third argument `nil` matters: the default `:ENV` would honour a proxy from the
+   environment, and the connection would go wherever the proxy sends it. Net::HTTP reads
+   `http_proxy` even for https URLs, which my first version of that spec got wrong (it
+   set only `https_proxy`, so it passed with or without the `nil`; mutation testing
+   found it). The spec now sets every spelling, checks that a default Net::HTTP does pick
+   the proxy up, and checks that SafeHttp still connects to the pinned address.
+5. **Send, bounded.** Connect and TLS handshake are bounded by `connect_timeout`, each
+   read and write by `read_timeout`, and the whole exchange by `total_timeout`. The body is
+   read up to `max_body_bytes` (64 KiB by default) and then abandoned. `Accept-Encoding:
+   identity` so the cap counts wire bytes and there is no decompression to bomb.
+6. **Never follow redirects.** Net::HTTP does not, and a 3xx is `Rejected(status)`. Stripe's
+   docs likewise treat a redirect response to a webhook as a failure.
+
+The outcome is one of `Delivered(status, body)`, `Rejected(status, body)`,
+`Timeout(phase)`, `ConnectionFailed(message)`, `Blocked(reason, detail)`. `post` never
+raises for anything DNS or the remote end can do. `Blocked` should not be retried; the
+others go through the delivery retry schedule. `pin(url)` runs steps 1 to 3 without
+sending, for refusing a bad URL when the merchant registers it. `post` checks again at
+send time, since DNS can change in between.
+
+### DNS rebinding
+
+The bug: resolve the name, check the address, then give the name to the HTTP client,
+which resolves it again. An attacker's DNS server answers the first query with a public
+address and the second with 127.0.0.1 (TTL 0), and the request lands on an internal
+service. `safe_http_spec.rb` has a fake resolver that does exactly this and a fake network
+in which connecting by name resolves through that same resolver, as the OS would. The
+spec contains a naive "check, then `Net::HTTP.start(hostname)`" client as the
+counterexample, and shows that it resolves twice, connects to 127.0.0.1 and receives the
+internal server's response. `SafeHttp` against the same resolver resolves once, connects
+to the public address, and the internal server receives nothing.
+
+### Address policy
+
+IPv4 is a deny list of the IANA special-purpose ranges: 0.0.0.0/8, 10/8, 100.64/10
+(CGNAT), 127/8, 169.254/16 (link-local, including the metadata service at
+169.254.169.254), 172.16/12, 192.0.0/24, the three documentation /24s, 192.88.99/24,
+192.168/16, 198.18/15, 224/4 (multicast), 255.255.255.255 and 240/4.
+
+IPv6 is an allow list with holes: only global unicast (2000::/3) and NAT64 are allowed,
+so `::`, `::1`, fc00::/7, fe80::/10, fec0::/10, ff00::/8 and 100::/64 are refused, each
+with its own reason, and so is anything a future RFC carves out below 2000::/3. Inside
+2000::/3, 2001::/23, 2001:db8::/32 and 3fff::/20 are refused.
+
+Addresses that carry an IPv4 address:
+
+| Range | Decision | Why |
+|---|---|---|
+| IPv4-mapped `::ffff:0:0/96` | always refused, the log names the embedded address | No public AAAA record holds a mapped address. On a dual-stack socket it reaches the embedded IPv4 address, so `::ffff:127.0.0.1` is loopback. Refusing the whole range is simpler than checking the embedded address and loses nothing. |
+| IPv4-compatible `::/96` | always refused | Deprecated by RFC 4291. |
+| NAT64 `64:ff9b::/96` | judged by the embedded address | On an IPv6-only network with DNS64 every IPv4 site appears under this prefix, so refusing it outright would break delivery there. `64:ff9b::a9fe:a9fe` (169.254.169.254) is refused as `nat64_link_local`. |
+| Local-use NAT64 `64:ff9b:1::/48` | refused | Site-specific by definition (RFC 8215). |
+| 6to4 `2002::/16` | judged by the embedded address (bits 16 to 47) | `2002:7f00:1::1` routes towards 127.0.0.1. |
+| Teredo `2001::/32` | refused, inside 2001::/23 | Obfuscated embedded addresses, and deprecated. |
+
+### Mutation testing
+
+`mutant` over `Signature`, `IpPolicy`, `Target` and `SafeHttp` found two real gaps in the
+specs, both fixed: no signature vector had `=` inside a header value, and the proxy
+spec above set the wrong variable. The surviving mutations I read are equivalent (a
+`T.let` removed, a split limit changed, a default restated) or change only a log message.
+
+### What this does not cover
+
+- Only the first checked address is tried. A merchant with several A records and one
+  dead host sees failures that a happy-eyeballs client would avoid. Easy to add later
+  (walk the checked list), and it must stay the checked list.
+- `total_timeout` uses `Timeout.timeout`, which interrupts the thread from outside. That is
+  the usual objection to it, and I accept it here because Net::HTTP already uses the
+  same mechanism for `open_timeout`, and nothing else bounds a server that drips one
+  header byte just inside every read timeout. The integration spec has that server.
+- Ports are not restricted. The address policy is what stops internal access; a port
+  allow list would mostly break merchants on 8443.
+- No hostname allow or deny list. Smokescreen has per-role ACLs because many services
+  share it; Clearinghouse has one egress user, webhooks, which may go anywhere public.
