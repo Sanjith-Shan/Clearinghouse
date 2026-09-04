@@ -31,6 +31,7 @@ The design is built from public engineering writing, credited here.
 - [Internal interfaces](docs/design/interfaces.md): the contracts between the parts.
 - [Ledger](docs/design/ledger.md): accounts, the money-flow table, policy choices, and how the database enforces double entry and append-only.
 - [API](docs/design/api.md): request handling, errors, auth, and date-based versioning. The changelog is generated into [docs/api-changelog.md](docs/api-changelog.md).
+- [Webhook security](docs/design/webhook-security.md): signatures, secret rotation, test vectors shared with the Go verifier, and the SSRF-safe egress path.
 
 ## Bugs the harness caught
 
