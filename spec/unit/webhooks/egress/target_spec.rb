@@ -10,6 +10,10 @@ RSpec.describe Clearinghouse::Webhooks::Egress::Target do
     ['https://93.184.215.14/hook', false, nil],
     ['https://[2606:4700:4700::1111]/hook', false, nil],
     ['https://under_score.merchant.example/', false, nil],
+    ['https://hooks.merchant.example:1/', false, nil],
+    ['https://hooks.merchant.example:65535/', false, nil],
+    ["https://#{(['a' * 63] * 3).join('.')}.#{'b' * 61}/", false, nil], # 253 characters, the maximum
+    ["https://#{(['a' * 63] * 3).join('.')}.#{'b' * 62}/", false, 'invalid_host'], # 254
 
     # Scheme.
     ['http://hooks.merchant.example/', false, 'scheme_not_allowed'],
@@ -98,6 +102,12 @@ RSpec.describe Clearinghouse::Webhooks::Egress::Target do
     v6 = described_class.parse('https://[2606:4700:4700::1111]/', test_mode: false)
     expect(v6.host).to eq('2606:4700:4700::1111')
     expect(v6.literal_ip).to eq(IPAddr.new('2606:4700:4700::1111'))
+  end
+
+  it 'refuses whitespace, control characters and non-ASCII itself, not only through URI' do
+    ["https://h\u00f6oks.example/", 'https://hooks.example/ x', "https://hooks.example/\r\nX: 1"].each do |url|
+      expect(described_class.parse(url, test_mode: false).detail).to include('non-ASCII')
+    end
   end
 
   it 'refuses an IPv6 zone ID even if a URI parser let one through' do

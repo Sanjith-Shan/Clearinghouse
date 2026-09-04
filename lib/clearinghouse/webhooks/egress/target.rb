@@ -58,7 +58,7 @@ module Clearinghouse
 
         sig { params(uri: URI::Generic, test_mode: T::Boolean).returns(T.any(Target, Refusal)) }
         def self.check_uri(uri, test_mode)
-          scheme = uri.scheme.to_s.downcase
+          scheme = uri.scheme.to_s # URI downcases it
           return refuse('scheme_not_allowed', "scheme #{scheme.inspect}") unless %w[https http].include?(scheme)
           return refuse('userinfo', 'credentials in the URL are not allowed') if uri.userinfo
 
@@ -68,7 +68,7 @@ module Clearinghouse
           port = uri.port
           return refuse('invalid_url', "port #{port.inspect}") unless port.is_a?(Integer) && port.between?(1, 65_535)
 
-          host = raw_host.start_with?('[') ? raw_host : raw_host.downcase
+          host = raw_host.downcase
           localhost = test_mode && TEST_MODE_HOSTS.include?(host)
           if scheme == 'http' && !localhost
             return refuse('scheme_not_allowed',

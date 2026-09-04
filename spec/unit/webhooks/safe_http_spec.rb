@@ -134,14 +134,29 @@ RSpec.describe Clearinghouse::Webhooks::SafeHttp do
 
     it 'ignores proxies configured in the environment' do
       refuse_all_connections
-      original = ENV.to_h.slice('https_proxy', 'HTTPS_PROXY')
+      # Net::HTTP reads http_proxy even for https URLs, so set every spelling.
+      names = %w[http_proxy HTTP_PROXY https_proxy HTTPS_PROXY]
+      original = ENV.to_h.slice(*names)
       begin
-        ENV['https_proxy'] = ENV['HTTPS_PROXY'] = 'http://10.0.0.1:3128'
+        names.each { |name| ENV[name] = 'http://10.0.0.1:3128' }
+        # The environment really does configure a proxy for a default Net::HTTP...
+        expect(Net::HTTP.new('hooks.merchant.example', 443).proxy_address).to eq('10.0.0.1')
         client.post('https://hooks.merchant.example/hook', body: '{}')
       ensure
-        %w[https_proxy HTTPS_PROXY].each { |k| original.key?(k) ? ENV[k] = original[k] : ENV.delete(k) }
+        names.each { |name| original.key?(name) ? ENV[name] = original[name] : ENV.delete(name) }
       end
+      # ...and SafeHttp still connected straight to the checked address.
       expect(connects).to eq([public_ip])
+    end
+
+    it 'configures Net::HTTP defensively rather than trusting its defaults' do
+      http = client.send(:connection, client.pin('https://hooks.merchant.example/hook'))
+      expect(http).to have_attributes(address: 'hooks.merchant.example', port: 443, use_ssl?: true,
+                                      verify_mode: OpenSSL::SSL::VERIFY_PEER, verify_hostname: true,
+                                      max_retries: 0, open_timeout: 0.5, ssl_timeout: 0.5,
+                                      read_timeout: 0.5, write_timeout: 0.5)
+      expect(http.instance_variable_get(:@ipaddr)).to eq(public_ip)
+      expect(http).not_to be_proxy
     end
 
     it 'times out a connect that hangs' do

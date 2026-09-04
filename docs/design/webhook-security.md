@@ -184,9 +184,12 @@ made on the addresses.
    `Host: hooks.merchant.test:<port>` on a connection made to 127.0.0.1, and a certificate
    for a different name fails with `hostname mismatch`. I also ran one delivery by hand to
    httpbin.org on 2026-09-23 to see it work against a public CA chain (not part of CI).
-   The third argument `nil` matters: the default `:ENV` would honour `https_proxy`, and
-   the connection would go wherever the proxy sends it. A spec sets `https_proxy` and
-   checks the connect still goes to the pinned address.
+   The third argument `nil` matters: the default `:ENV` would honour a proxy from the
+   environment, and the connection would go wherever the proxy sends it. Net::HTTP reads
+   `http_proxy` even for https URLs, which my first version of that spec got wrong (it
+   set only `https_proxy`, so it passed with or without the `nil`; mutation testing
+   found it). The spec now sets every spelling, checks that a default Net::HTTP does pick
+   the proxy up, and checks that SafeHttp still connects to the pinned address.
 5. **Send, bounded.** Connect and TLS handshake are bounded by `connect_timeout`, each
    read and write by `read_timeout`, and the whole exchange by `total_timeout`. The body is
    read up to `max_body_bytes` (64 KiB by default) and then abandoned. `Accept-Encoding:
@@ -235,6 +238,13 @@ Addresses that carry an IPv4 address:
 | Local-use NAT64 `64:ff9b:1::/48` | refused | Site-specific by definition (RFC 8215). |
 | 6to4 `2002::/16` | judged by the embedded address (bits 16 to 47) | `2002:7f00:1::1` routes towards 127.0.0.1. |
 | Teredo `2001::/32` | refused, inside 2001::/23 | Obfuscated embedded addresses, and deprecated. |
+
+### Mutation testing
+
+`mutant` over `Signature`, `IpPolicy`, `Target` and `SafeHttp` found two real gaps in the
+specs, both fixed: no signature vector had `=` inside a header value, and the proxy
+spec above set the wrong variable. The surviving mutations I read are equivalent (a
+`T.let` removed, a split limit changed, a default restated) or change only a log message.
 
 ### What this does not cover
 

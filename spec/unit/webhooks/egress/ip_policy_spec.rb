@@ -91,6 +91,10 @@ RSpec.describe Clearinghouse::Webhooks::Egress::IpPolicy do
   it 'says which range matched, and what a mapped address embeds' do
     expect(described_class.denial(IPAddr.new('169.254.169.254')).detail).to eq('169.254.169.254 is in 169.254.0.0/16')
     expect(described_class.denial(IPAddr.new('::ffff:169.254.169.254')).detail).to include('embeds 169.254.169.254')
-    expect(described_class.denial(IPAddr.new('2002:7f00:0001::1')).detail).to include('127.0.0.1 is in 127.0.0.0/8')
+    expect(described_class.denial(IPAddr.new('::127.0.0.1')).detail).to eq('::127.0.0.1 is in ::/96 (embeds 127.0.0.1)')
+    expect(described_class.denial(IPAddr.new('fe80::1')).detail).to eq('fe80::1 is in fe80::/10')
+    expect(described_class.denial(IPAddr.new('4000::1')).detail).to eq('4000::1 is outside 2000::/3')
+    expect(described_class.denial(IPAddr.new('2002:7f00:0001::1')).detail)
+      .to eq('2002:7f00:1::1 embeds 127.0.0.1 is in 127.0.0.0/8')
   end
 end
