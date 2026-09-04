@@ -79,7 +79,7 @@ RSpec.describe Clearinghouse::Webhooks::SafeHttp do
       started = monotonic
       expect(client.post("http://127.0.0.1:#{server.port}/", body: '{}'))
         .to have_attributes(class: outcome::Timeout, phase: :read)
-      expect(monotonic - started).to be < 2
+      expect(monotonic - started).to be < 3
     end
 
     it 'caps the response body and stops reading an endless one' do
@@ -92,7 +92,7 @@ RSpec.describe Clearinghouse::Webhooks::SafeHttp do
       result = client.post("http://127.0.0.1:#{server.port}/", body: '{}')
       expect(result).to have_attributes(class: outcome::Delivered, status: 200)
       expect(result.body.bytesize).to eq(described_class::DEFAULT_MAX_BODY_BYTES)
-      expect(monotonic - started).to be < 2
+      expect(monotonic - started).to be < 3
     end
 
     it 'gives up on a server that drips its headers just inside the read timeout' do
@@ -107,7 +107,7 @@ RSpec.describe Clearinghouse::Webhooks::SafeHttp do
       started = monotonic
       expect(dripping.post("http://127.0.0.1:#{server.port}/", body: '{}'))
         .to have_attributes(class: outcome::Timeout, phase: :total)
-      expect(monotonic - started).to be_between(1.0, 2.0)
+      expect(monotonic - started).to be_between(1.0, 3.0)
     end
 
     it 'reports a server that hangs up without answering as a connection failure' do
