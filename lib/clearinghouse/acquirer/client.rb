@@ -79,6 +79,35 @@ module Clearinghouse
                'acquirer_reference' => acquirer_reference, 'amount' => amount.amount, 'currency' => amount.currency)
       end
 
+      # Sends a payout. Approved means accepted for sending; whether the bank paid it
+      # arrives later as a payout.paid or payout.failed notification.
+      sig do
+        params(reference: String, merchant_id: String, amount: Money, idempotency_key: String).returns(Outcome)
+      end
+      def payout(reference:, merchant_id:, amount:, idempotency_key:)
+        mutate('/payouts', idempotency_key,
+               'reference' => reference, 'merchant_id' => merchant_id, 'amount' => amount.amount,
+               'currency' => amount.currency)
+      end
+
+      # Notifications due by the clock's now, after the cursor. Unavailable on any
+      # transport failure or 5xx: nothing is lost, the next poll gets them.
+      sig { params(after: String).returns(T.any(NotificationPage, Unavailable)) }
+      def notifications(after: '0')
+        response = exchange(Net::HTTP::Get.new(path("/notifications?after=#{URI.encode_uri_component(after)}")))
+        case response
+        when Unknown, Unavailable then return Unavailable.new(reason: response.reason)
+        end
+        return Unavailable.new(reason: "status #{response.code}") if response.code.start_with?('5')
+
+        body = parse(response.body)
+        raise ProtocolError.new(Integer(response.code), body&.fetch('error', nil)&.to_s, response.body.to_s) unless
+          response.code == '200' && body
+
+        NotificationPage.new(data: body.fetch('data').map { |n| Notification.from_json(n) },
+                             next_cursor: body.fetch('next_cursor'))
+      end
+
       # What the acquirer committed under a key, if anything. A GET has no side
       # effect, so every transport failure here is Unavailable: "no answer yet, ask
       # again". It never means "nothing happened"; only NotFound means that.

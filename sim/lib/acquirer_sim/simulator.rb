@@ -15,6 +15,8 @@ module AcquirerSim
       const :decline_code, T.nilable(String)
       # Commit the authorization, then close the connection without answering.
       const :timeout, T::Boolean, default: false
+      # Approve, and open a fraudulent dispute dispute_after_days after capture.
+      const :dispute, T::Boolean, default: false
     end
 
     TOKENS = T.let(
@@ -24,12 +26,29 @@ module AcquirerSim
         'pm_card_chargeDeclined' => Token.new(decline_code: 'generic_decline'),
         'pm_card_insufficientFunds' => Token.new(decline_code: 'insufficient_funds'),
         'pm_card_expired' => Token.new(decline_code: 'expired_card'),
-        'pm_card_timeout' => Token.new(timeout: true)
+        'pm_card_timeout' => Token.new(timeout: true),
+        'pm_card_disputeFraudulent' => Token.new(dispute: true)
       }.freeze,
       T::Hash[String, Token]
     )
 
-    MUTATIONS = %w[authorize capture void refund].freeze
+    # Route name to operation type.
+    MUTATIONS = T.let(
+      { 'authorize' => 'authorize', 'capture' => 'capture', 'void' => 'void', 'refund' => 'refund',
+        'payouts' => 'payout' }.freeze,
+      T::Hash[String, String]
+    )
+
+    # The documented, deterministic payout failure: an amount whose last two digits
+    # are 13 (in minor units, so $10.13, or 1013 yen) fails with account_closed. It
+    # is a rule on the amount because Clearinghouse chooses payout amounts in tests
+    # but not merchant ids, which it generates.
+    PAYOUT_FAILURE_CODE = 'account_closed'
+
+    sig { params(amount: Integer).returns(T::Boolean) }
+    def self.payout_fails?(amount)
+      amount % 100 == 13
+    end
 
     # One mutating request on its way through #submit.
     class Submission < T::Struct
@@ -60,6 +79,9 @@ module AcquirerSim
       @traffic = T.let(Traffic.new(config), Traffic)
       @operations = T.let({}, T::Hash[String, Operation])
       @authorizations = T.let({}, T::Hash[String, Authorization])
+      @disputes = T.let({}, T::Hash[String, Dispute])
+      @payouts = T.let({}, T::Hash[String, Payout])
+      @notifications = T.let(Notifications.new, Notifications)
     end
 
     # Commits one mutating request, or replays the stored operation for its key.
@@ -67,7 +89,7 @@ module AcquirerSim
     # malformed request never burns its idempotency key.
     sig { params(type: String, key: String, params: T::Hash[String, T.untyped], sim_time: Time).returns(Result) }
     def submit(type, key, params, sim_time)
-      raise ArgumentError, "unknown operation type #{type}" unless MUTATIONS.include?(type)
+      raise ArgumentError, "unknown operation type #{type}" unless MUTATIONS.value?(type)
 
       fingerprint = Params.fingerprint(type, params)
       @mutex.synchronize do
@@ -80,7 +102,8 @@ module AcquirerSim
           when 'authorize' then do_authorize(request)
           when 'capture' then do_capture(request)
           when 'void' then do_void(request)
-          else do_refund(request)
+          when 'refund' then do_refund(request)
+          else do_payout(request)
           end
         @operations[key] = operation
         Result.new(operation: operation, replayed: false, drop_connection: drop_after_commit?(request))
@@ -119,6 +142,45 @@ module AcquirerSim
       @mutex.synchronize { @authorizations.values.map(&:dup) }
     end
 
+    sig { returns(T::Array[Dispute]) }
+    def disputes
+      @mutex.synchronize { @disputes.values.map(&:dup) }
+    end
+
+    sig { returns(T::Array[Payout]) }
+    def payouts
+      @mutex.synchronize { @payouts.values }
+    end
+
+    # Notifications visible at `sim_time` past the cursor `after`. See Notifications.
+    sig { params(after: Integer, sim_time: Time, limit: Integer).returns(Notifications::Page) }
+    def notifications(after:, sim_time:, limit: Notifications::DEFAULT_LIMIT)
+      @mutex.synchronize { @notifications.page(after: after, sim_time: sim_time, limit: limit) }
+    end
+
+    # Closes an open dispute, as the card network would after the evidence round.
+    # The dispute.closed notification is due at the request's Sim-Time.
+    sig { params(id: String, outcome: String, sim_time: Time).returns(Notification) }
+    def resolve_dispute(id, outcome, sim_time)
+      raise Params.invalid('outcome must be won or lost', 'outcome') unless %w[won lost].include?(outcome)
+
+      @mutex.synchronize do
+        dispute = @disputes[id]
+        raise RequestError.new(404, 'dispute_not_found', "no dispute #{id}") if dispute.nil?
+        raise RequestError.new(409, 'dispute_already_closed', "#{id} closed #{dispute.outcome}") if dispute.outcome
+        if sim_time < dispute.opened_at
+          raise RequestError.new(409, 'dispute_not_open', "#{id} opens at #{dispute.opened_at.iso8601}")
+        end
+
+        dispute.outcome = outcome
+        dispute.closed_at = sim_time
+        @notifications.schedule('dispute.closed', id, sim_time,
+                                'dispute_id' => id, 'outcome' => outcome,
+                                'acquirer_reference' => dispute.acquirer_reference,
+                                'amount' => dispute.amount, 'currency' => dispute.currency)
+      end
+    end
+
     # Per client reference (a PaymentIntent id), how many authorizations exist, how
     # many were approved, and how many actually took money. `captured` above 1 is a
     # double charge, which is what experiment 1 counts.
@@ -135,6 +197,8 @@ module AcquirerSim
       end
     end
 
+    SECONDS_PER_DAY = 86_400
+
     # Back to a freshly started process: empty books and default config.
     sig { void }
     def reset!
@@ -143,6 +207,9 @@ module AcquirerSim
         @traffic = Traffic.new(@config)
         @operations.clear
         @authorizations.clear
+        @disputes.clear
+        @payouts.clear
+        @notifications = Notifications.new
       end
     end
 
@@ -220,6 +287,9 @@ module AcquirerSim
     def do_refund(request)
       amount = Params.positive_amount(request.params)
       follow_on(request, amount) do |auth|
+        # Once a chargeback has opened, the money is in the dispute process and a
+        # refund would pay the cardholder twice, so networks refuse it.
+        next 'charge_disputed' if disputed_at?(auth, request.sim_time)
         next 'amount_exceeds_captured' if amount > auth.captured - auth.refunded
 
         auth.refunded += amount
@@ -255,10 +325,56 @@ module AcquirerSim
                     idempotency_key: request.key, fingerprint: request.fingerprint, created_at: request.sim_time)
     end
 
+    sig { params(request: Submission).returns(Operation) }
+    def do_payout(request)
+      params = request.params
+      reference = Params.string(params, 'reference')
+      merchant_id = Params.string(params, 'merchant_id')
+      amount = Params.positive_amount(params)
+      currency = Params.currency(params)
+      failure = Simulator.payout_fails?(amount) ? PAYOUT_FAILURE_CODE : nil
+      payout = Payout.new(acquirer_reference: Ids.derive('acqpo', request.key), reference: reference,
+                          merchant_id: merchant_id, amount: amount, currency: currency, created_at: request.sim_time,
+                          failure_code: failure, settles_at: request.sim_time + SECONDS_PER_DAY)
+      @payouts[payout.acquirer_reference] = payout
+      data = { 'reference' => reference, 'acquirer_reference' => payout.acquirer_reference }
+      data['failure_code'] = failure if failure
+      @notifications.schedule(failure ? 'payout.failed' : 'payout.paid', payout.acquirer_reference,
+                              payout.settles_at, data)
+
+      # Accepted for sending; whether the bank paid it arrives later as a notification.
+      Operation.new(id: Ids.derive('op', request.key), type: 'payout', status: 'succeeded', decline_code: nil,
+                    acquirer_reference: payout.acquirer_reference, reference: reference, amount: amount,
+                    currency: currency, idempotency_key: request.key, fingerprint: request.fingerprint,
+                    created_at: request.sim_time)
+    end
+
+    sig { params(auth: Authorization, at: Time).returns(T::Boolean) }
+    def disputed_at?(auth, at)
+      dispute_id = auth.dispute_id
+      !dispute_id.nil? && @disputes.fetch(dispute_id).opened_at <= at
+    end
+
     sig { params(auth: Authorization, amount: Integer, sim_time: Time).void }
     def record_capture(auth, amount, sim_time)
       auth.captured = amount
       auth.captured_at = sim_time
+      schedule_dispute(auth, sim_time) if TOKENS.fetch(auth.payment_method).dispute
+    end
+
+    # The dispute is fixed at capture time for the captured amount. A refund made
+    # before it opens does not shrink it: cardholders do dispute refunded charges, and
+    # Clearinghouse has to cope with that case rather than have the simulator hide it.
+    sig { params(auth: Authorization, captured_at: Time).void }
+    def schedule_dispute(auth, captured_at)
+      dispute = Dispute.new(id: Ids.derive('dsp', auth.acquirer_reference), acquirer_reference: auth.acquirer_reference,
+                            amount: auth.captured, currency: auth.currency, reason: 'fraudulent',
+                            opened_at: captured_at + (@config.dispute_after_days * SECONDS_PER_DAY))
+      @disputes[dispute.id] = dispute
+      auth.dispute_id = dispute.id
+      @notifications.schedule('dispute.opened', dispute.id, dispute.opened_at,
+                              'dispute_id' => dispute.id, 'acquirer_reference' => dispute.acquirer_reference,
+                              'amount' => dispute.amount, 'currency' => dispute.currency, 'reason' => dispute.reason)
     end
   end
 end

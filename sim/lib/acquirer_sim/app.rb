@@ -37,8 +37,8 @@ module AcquirerSim
       json('status' => 'ok')
     end
 
-    Simulator::MUTATIONS.each do |type|
-      post "/#{type}" do
+    Simulator::MUTATIONS.each do |path, type|
+      post "/#{path}" do
         T.bind(self, App)
         mutate(type)
       end
@@ -52,6 +52,30 @@ module AcquirerSim
       operation ? json(operation.to_h) : error_response(RequestError.new(404, 'not_found', 'no operation for that key'))
     end
 
+    # The acquirer's asynchronous news: disputes opened and closed, payouts paid or
+    # failed. Only what is due at the request's Sim-Time is visible.
+    get '/notifications' do
+      T.bind(self, App)
+      next unavailable if misbehave.unavailable
+
+      sim_time = Params.sim_time(request.env['HTTP_SIM_TIME'])
+      after = cursor_param('after', default: 0)
+      limit = cursor_param('limit', default: Notifications::DEFAULT_LIMIT)
+      page = simulator.notifications(after: after, sim_time: sim_time, limit: limit.clamp(1, 1000))
+      json('data' => page.data.map(&:to_h), 'next_cursor' => page.next_cursor.to_s)
+    rescue RequestError => e
+      error_response(e)
+    end
+
+    post '/admin/disputes/:id/resolve' do
+      T.bind(self, App)
+      sim_time = Params.sim_time(request.env['HTTP_SIM_TIME'])
+      outcome = Params.string(raw_body, 'outcome')
+      json(simulator.resolve_dispute(params.fetch('id'), outcome, sim_time).to_h)
+    rescue RequestError => e
+      error_response(e)
+    end
+
     # Everything the simulator has done, for experiments that count charges from the
     # acquirer's side rather than trusting Clearinghouse's own records.
     get '/admin/operations' do
@@ -60,7 +84,8 @@ module AcquirerSim
       operations = simulator.operations.select { |op| reference.nil? || op.reference == reference }
       authorizations = simulator.authorizations.select { |a| reference.nil? || a.reference == reference }
       json('operations' => operations.map(&:to_h), 'authorizations' => authorizations.map(&:to_h),
-           'charges_by_reference' => Simulator.charges_by_reference(authorizations))
+           'charges_by_reference' => Simulator.charges_by_reference(authorizations),
+           'disputes' => simulator.disputes.map(&:to_h), 'payouts' => simulator.payouts.map(&:to_h))
     end
 
     get '/admin/config' do
@@ -129,6 +154,15 @@ module AcquirerSim
       decision = simulator.traffic_decision
       sleep(decision.latency_seconds) if decision.latency_seconds.positive?
       decision
+    end
+
+    sig { params(name: String, default: Integer).returns(Integer) }
+    def cursor_param(name, default:)
+      raw = params[name]
+      return default if raw.nil? || raw.empty?
+      raise Params.invalid("#{name} must be a non-negative integer", name) unless raw.match?(/\A\d+\z/)
+
+      Integer(raw, 10)
     end
 
     sig { returns(String) }

@@ -75,4 +75,71 @@ module AcquirerSim
       }
     end
   end
+
+  # A chargeback. It is scheduled when a pm_card_disputeFraudulent authorization is
+  # captured and opens dispute_after_days later, for the captured amount.
+  class Dispute < T::Struct
+    extend T::Sig
+
+    const :id, String
+    const :acquirer_reference, String
+    const :amount, Integer
+    const :currency, String
+    const :reason, String
+    const :opened_at, Time
+    prop :outcome, T.nilable(String)
+    prop :closed_at, T.nilable(Time)
+
+    sig { returns(T::Hash[String, T.untyped]) }
+    def to_h
+      {
+        'id' => id, 'acquirer_reference' => acquirer_reference, 'amount' => amount, 'currency' => currency,
+        'reason' => reason, 'opened_at' => opened_at.utc.iso8601(6), 'outcome' => outcome,
+        'closed_at' => closed_at&.utc&.iso8601(6)
+      }
+    end
+  end
+
+  # A payout to a merchant's bank, paid or failed one simulated day after it is sent.
+  class Payout < T::Struct
+    extend T::Sig
+
+    const :acquirer_reference, String
+    const :reference, String
+    const :merchant_id, String
+    const :amount, Integer
+    const :currency, String
+    const :created_at, Time
+    const :failure_code, T.nilable(String)
+    const :settles_at, Time
+
+    sig { returns(T::Hash[String, T.untyped]) }
+    def to_h
+      {
+        'acquirer_reference' => acquirer_reference, 'reference' => reference, 'merchant_id' => merchant_id,
+        'amount' => amount, 'currency' => currency, 'created_at' => created_at.utc.iso8601(6),
+        'outcome' => failure_code ? 'failed' : 'paid', 'failure_code' => failure_code,
+        'settles_at' => settles_at.utc.iso8601(6)
+      }
+    end
+  end
+
+  # Something the acquirer tells Clearinghouse asynchronously, visible once a
+  # request's Sim-Time reaches `due_at`. `cursor` is assigned the first time a poll
+  # sees it; see Notifications.
+  class Notification < T::Struct
+    extend T::Sig
+
+    const :id, String
+    const :type, String
+    const :due_at, Time
+    const :seq, Integer
+    const :data, T::Hash[String, T.untyped]
+    prop :cursor, T.nilable(Integer)
+
+    sig { returns(T::Hash[String, T.untyped]) }
+    def to_h
+      { 'id' => id, 'type' => type, 'created_at' => due_at.utc.iso8601(6), 'cursor' => cursor&.to_s, 'data' => data }
+    end
+  end
 end

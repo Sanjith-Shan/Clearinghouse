@@ -118,9 +118,15 @@ declines `generic_decline`, `pm_card_insufficientFunds` declines `insufficient_f
 authorization and then closes the connection without a response. `drop_after_commit_rate`
 does the same to a random share of any card's requests.
 
-Notifications, visible once `Sim-Time` passes their due time:
+Notifications, visible once `Sim-Time` reaches their due time, each
+`{id: "ntf_...", type, created_at (the due time), cursor, data}`:
 `dispute.opened {dispute_id, acquirer_reference, amount, currency, reason}`,
-`dispute.closed {dispute_id, outcome}`, `payout.paid {reference}`, `payout.failed {reference, failure_code}`.
+`dispute.closed {dispute_id, outcome, acquirer_reference, amount, currency}`,
+`payout.paid {reference, acquirer_reference}`, `payout.failed {reference, acquirer_reference, failure_code}`.
+`dispute_after_days` defaults to 7. A payout is paid one simulated day after it is sent,
+or fails `account_closed` if its amount in minor units ends in 13. Refunds on a charge
+whose dispute has opened fail `charge_disputed`. `GET /notifications` takes `after` and
+`limit` (default 100) and needs `Sim-Time`; follow `next_cursor`.
 
 Settlement CSV columns: `line_id, type (capture | refund | dispute | dispute_reversal),
 acquirer_reference, operation_id, amount, fee, currency, settled_on`. A capture settles
