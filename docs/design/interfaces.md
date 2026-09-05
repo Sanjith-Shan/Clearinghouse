@@ -87,9 +87,9 @@ deterministic, keeps state in memory behind a mutex, and treats a repeated key a
 | Method and path | Body | Response |
 |---|---|---|
 | `POST /authorize` | `payment_method, amount, currency, capture (bool), reference` | `operation` |
-| `POST /capture` | `acquirer_reference, amount` | `operation` |
+| `POST /capture` | `acquirer_reference, amount, currency (optional, checked)` | `operation` |
 | `POST /void` | `acquirer_reference` | `operation` |
-| `POST /refund` | `acquirer_reference, amount` | `operation` |
+| `POST /refund` | `acquirer_reference, amount, currency (optional, checked)` | `operation` |
 | `POST /payouts` | `reference, merchant_id, amount, currency` | `operation` |
 | `GET /operations/:idempotency_key` | | `operation`, or 404 `{"error":"not_found"}` |
 | `GET /notifications?after=<cursor>` | | `{"data":[notification], "next_cursor":...}` |
@@ -98,6 +98,15 @@ deterministic, keeps state in memory behind a mutex, and treats a repeated key a
 | `GET /admin/operations` | | every operation, for experiments to count charges |
 | `POST /admin/disputes/:id/resolve` | `outcome: won or lost` | notification |
 | `POST /admin/reset` | | |
+
+Failure semantics the client depends on: `503` is decided before anything is committed
+(definitely not processed); a dropped connection happens only after a commit (maybe
+processed). A replay carries `Idempotent-Replayed: true`. A reused key with a different
+body is `409 {"error":"idempotency_key_mismatch"}`. Malformed requests are `400` and do not
+use up the key. Business-rule refusals (capture over the authorized amount, refund past
+captured, anything after a void) are recorded operations with status `failed` and a
+`decline_code`. An unmatched route is `404 {"error":"no_route"}`, distinct from the
+status query's `not_found`. See `docs/design/sim.md`.
 
 `operation` is `{id: "op_...", type, status: "approved" | "declined" | "succeeded" | "failed",
 decline_code, acquirer_reference: "acq_...", amount, currency, idempotency_key, created_at}`.
