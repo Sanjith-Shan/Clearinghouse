@@ -82,6 +82,7 @@ module AcquirerSim
       @disputes = T.let({}, T::Hash[String, Dispute])
       @payouts = T.let({}, T::Hash[String, Payout])
       @notifications = T.let(Notifications.new, Notifications)
+      @settlement = T.let(Settlement.new, Settlement)
     end
 
     # Commits one mutating request, or replays the stored operation for its key.
@@ -174,6 +175,8 @@ module AcquirerSim
 
         dispute.outcome = outcome
         dispute.closed_at = sim_time
+        # A won dispute returns the funds, which settle like anything else.
+        record_movement('dispute_reversal', dispute.id, dispute, dispute.amount, sim_time) if outcome == 'won'
         @notifications.schedule('dispute.closed', id, sim_time,
                                 'dispute_id' => id, 'outcome' => outcome,
                                 'acquirer_reference' => dispute.acquirer_reference,
@@ -181,23 +184,31 @@ module AcquirerSim
       end
     end
 
-    # Per client reference (a PaymentIntent id), how many authorizations exist, how
-    # many were approved, and how many actually took money. `captured` above 1 is a
-    # double charge, which is what experiment 1 counts.
-    sig { params(authorizations: T::Array[Authorization]).returns(T::Hash[String, T::Hash[String, Integer]]) }
-    def self.charges_by_reference(authorizations)
-      authorizations.each_with_object({}) do |auth, out|
-        row = out[auth.reference || '(none)'] ||= %w[authorizations approved captured captured_amount
-                                                     refunded_amount].to_h { |k| [k, 0] }
-        row['authorizations'] += 1
-        row['approved'] += 1 if auth.approved
-        row['captured'] += 1 if auth.captured.positive?
-        row['captured_amount'] += auth.captured
-        row['refunded_amount'] += auth.refunded
+    SECONDS_PER_DAY = 86_400
+
+    # Generates (or returns the frozen) settlement file for `date`. See Settlement.
+    sig do
+      params(date: Date, inject: T::Array[T::Hash[String, T.untyped]], sim_time: Time)
+        .returns(Settlement::SettlementFile)
+    end
+    def settlement_file(date, inject, sim_time)
+      @mutex.synchronize do
+        config = @config
+        @settlement.generate(date, sim_time: sim_time, inject: inject, default_seed: config.seed) do |amount, currency|
+          config.fee_for(amount, currency)
+        end
       end
     end
 
-    SECONDS_PER_DAY = 86_400
+    sig { params(date: Date).returns(T.nilable(Settlement::SettlementFile)) }
+    def stored_settlement_file(date)
+      @mutex.synchronize { @settlement.file(date) }
+    end
+
+    sig { returns(T::Array[Settlement::Movement]) }
+    def movements
+      @mutex.synchronize { @settlement.movements }
+    end
 
     # Back to a freshly started process: empty books and default config.
     sig { void }
@@ -210,6 +221,7 @@ module AcquirerSim
         @disputes.clear
         @payouts.clear
         @notifications = Notifications.new
+        @settlement = Settlement.new
       end
     end
 
@@ -250,7 +262,7 @@ module AcquirerSim
                                payment_method: payment_method, amount: amount, currency: currency,
                                approved: token.decline_code.nil?, created_at: sim_time)
       @authorizations[acquirer_reference] = auth
-      record_capture(auth, amount, sim_time) if capture && auth.approved
+      record_capture(auth, amount, sim_time, Ids.derive('op', key)) if capture && auth.approved
 
       Operation.new(id: Ids.derive('op', key), type: 'authorize',
                     status: auth.approved ? 'approved' : 'declined', decline_code: token.decline_code,
@@ -268,7 +280,7 @@ module AcquirerSim
         next 'already_captured' if auth.captured.positive?
         next 'amount_exceeds_authorized' if amount > auth.amount
 
-        record_capture(auth, amount, request.sim_time)
+        record_capture(auth, amount, request.sim_time, Ids.derive('op', request.key))
         nil
       end
     end
@@ -293,6 +305,7 @@ module AcquirerSim
         next 'amount_exceeds_captured' if amount > auth.captured - auth.refunded
 
         auth.refunded += amount
+        record_movement('refund', Ids.derive('op', request.key), auth, -amount, request.sim_time)
         nil
       end
     end
@@ -349,16 +362,27 @@ module AcquirerSim
                     created_at: request.sim_time)
     end
 
+    sig do
+      params(type: String, source_id: String, subject: T.any(Authorization, Dispute), amount: Integer,
+             happened_at: Time, fee: Integer).void
+    end
+    def record_movement(type, source_id, subject, amount, happened_at, fee: 0)
+      @settlement.record(type: type, source_id: source_id, acquirer_reference: subject.acquirer_reference,
+                         amount: amount, currency: subject.currency, happened_at: happened_at, fee: fee,
+                         lag_days: @config.settlement_lag_days)
+    end
+
     sig { params(auth: Authorization, at: Time).returns(T::Boolean) }
     def disputed_at?(auth, at)
       dispute_id = auth.dispute_id
       !dispute_id.nil? && @disputes.fetch(dispute_id).opened_at <= at
     end
 
-    sig { params(auth: Authorization, amount: Integer, sim_time: Time).void }
-    def record_capture(auth, amount, sim_time)
+    sig { params(auth: Authorization, amount: Integer, sim_time: Time, operation_id: String).void }
+    def record_capture(auth, amount, sim_time, operation_id)
       auth.captured = amount
       auth.captured_at = sim_time
+      record_movement('capture', operation_id, auth, amount, sim_time, fee: @config.fee_for(amount, auth.currency))
       schedule_dispute(auth, sim_time) if TOKENS.fetch(auth.payment_method).dispute
     end
 
@@ -372,6 +396,7 @@ module AcquirerSim
                             opened_at: captured_at + (@config.dispute_after_days * SECONDS_PER_DAY))
       @disputes[dispute.id] = dispute
       auth.dispute_id = dispute.id
+      record_movement('dispute', dispute.id, dispute, -dispute.amount, dispute.opened_at)
       @notifications.schedule('dispute.opened', dispute.id, dispute.opened_at,
                               'dispute_id' => dispute.id, 'acquirer_reference' => dispute.acquirer_reference,
                               'amount' => dispute.amount, 'currency' => dispute.currency, 'reason' => dispute.reason)

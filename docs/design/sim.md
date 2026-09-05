@@ -212,3 +212,93 @@ case and one that follows the cursor across forty polls.
 A notification that has been stamped stays visible to later polls whatever their
 Sim-Time, even an earlier one. Visibility is sticky. The alternative, hiding it again from
 a lagging caller, would let two consumers disagree about what has happened.
+
+## Settlement files
+
+`POST /settlement_files {date, inject}` returns the day's CSV. The client has
+`settlement_file(date:, inject:)`. The unit underneath is a **movement**:
+
+| Movement | When it happens | `amount` | `fee` |
+|---|---|---|---|
+| `capture` | the capture (or the authorize with `capture: true`) | +captured | acquirer fee |
+| `refund` | the refund | -refunded | 0 |
+| `dispute` | the dispute opens | -disputed | 0 |
+| `dispute_reversal` | a dispute is won | +disputed | 0 |
+
+Each settles `settlement_lag_days` (default 2) after the UTC date it happened. Cash
+received is `amount - fee`. Refunds and disputes carry no acquirer fee: the capture's
+fee is kept, and whether the merchant pays a chargeback fee is Clearinghouse's policy.
+
+**The acquirer fee** defaults to 1.5% plus 10 minor units, computed in integer minor
+units with `Clearinghouse::FeeSchedule`'s half-even rounding. 1.5% of 100 cents is 1.5,
+which rounds to 2. 1.5% of 300 is 4.5, which rounds to 4. The fixed part is a count of
+**minor units of the capture's own currency**: 10 cents, 10 fils (0.010 KWD), or 10 yen.
+For a zero-decimal currency like JPY the minor unit is the whole yen, so the fee is whole
+yen by construction and nothing fractional can exist. The trade-off is that 10 yen is worth
+less than 10 cents. `fee: {fixed: {"default": 10, "jpy": 15}}` sets the fixed part per
+currency when that matters. The fee is computed when the capture happens, so changing the
+config later does not rewrite old lines.
+
+**The rule the reconciler can rely on: every movement appears in exactly one file.** It
+goes in the first file generated whose date is on or after its due date, or later if
+`late` deferred it. It goes in no file at all if `missing` dropped it. A movement that
+happens after its day's file was already generated arrives in the next one. That happens
+when a caller with a lagging clock captures "yesterday". The manifest lists such lines
+under `carried_over` with `injected_late: false`, so they are never mistaken for an
+injected discrepancy. Files are frozen once generated. The same request returns the same
+bytes, `GET /settlement_files/:date` re-reads them, and a request for the same date with
+different injections is refused `409 settlement_file_exists`. A date the caller's Sim-Time
+has not reached is refused too. A property test runs random traffic with random `missing`
+and `late` injections, and checks that every movement is emitted exactly once minus the
+dropped ones. I confirmed it fails when either half of the rule is broken.
+
+The CSV is written without a CSV library. Every field is an id, an integer, a validated
+currency code, a fixed type name or a date, so no field can hold a comma, a quote or a
+newline. That also avoids depending on the `csv` gem, which leaves Ruby's default gems in
+3.4.
+
+### Injected discrepancies
+
+`inject` is a list. Each item is either explicit, targeting a line in this file by
+`acquirer_reference` (and `line_type` if the reference has several lines), or
+`{random: N, seed, types}`.
+
+| Type | What the file shows |
+|---|---|
+| `missing` | The line is absent, and the money never arrives in any file |
+| `duplicate` | The same line (same `line_id` and `acquirer_reference`) twice |
+| `amount_mismatch` | `amount` moved away from zero by `delta` (default 1 minor unit, the hardest to spot) |
+| `fee_mismatch` | `fee` increased by `delta` |
+| `late` | The line is moved `days` (default 1) later, and appears exactly once there with that file's `settled_on` |
+| `unknown_payment` | A capture line for a reference that was never authorized, with ids in the same format as real ones, so a reconciler has to look the reference up rather than spot a prefix |
+
+A line takes at most one discrepancy. An explicit target that is not in the file is `422
+discrepancy_target_not_found`, and a line targeted twice is `422 discrepancy_conflict`.
+Every injection is validated before anything changes. Random injection draws from its
+own RNG (the item's `seed`, or the config seed plus the item's position). It never
+touches the traffic stream. When every line is taken it falls back to `unknown_payment`.
+
+**Ground truth** for scoring experiment 5 is at `GET /admin/settlement_files/:date/manifest`,
+and the CSV response's `Settlement-Manifest` header links to it. It lists each
+discrepancy with the line's identity, the expected and actual amount and fee, and
+`deferred_to` for `late`. It also lists `carried_over`: lines settling after their due
+date, flagged as injected or natural. The manifest is kept out of the CSV so a reconciler
+cannot peek at it.
+
+**Determinism.** Ids are hashes of stable inputs, lines are sorted by `line_id`, and
+random injection is seeded. A test runs a month of mixed traffic in USD, JPY and KWD
+(captures, partial captures, refunds, voids, declines, disputes won and lost) with two
+random discrepancies a day, twice. It checks that all 31 files and manifests match byte
+for byte, and that a different seed changes the discrepancies and not the money.
+
+## Running it
+
+```
+bin/sim                      # Puma on 127.0.0.1:4600, one process, up to 16 threads
+bin/sim --port 4601 --threads 32
+curl -s -XPOST localhost:4600/admin/config -d '{"seed":7,"drop_after_commit_rate":0.05}'
+```
+
+Clearinghouse finds it through `CLEARINGHOUSE_ACQUIRER_URL`. The specs boot it in process
+on an ephemeral port (`SimServer` in `spec/sim/sim_helper.rb`), and one spec boots `bin/sim`
+as a subprocess.

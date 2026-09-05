@@ -93,9 +93,11 @@ deterministic, keeps state in memory behind a mutex, and treats a repeated key a
 | `POST /payouts` | `reference, merchant_id, amount, currency` | `operation` |
 | `GET /operations/:idempotency_key` | | `operation`, or 404 `{"error":"not_found"}` |
 | `GET /notifications?after=<cursor>` | | `{"data":[notification], "next_cursor":...}` |
-| `POST /settlement_files` | `date (YYYY-MM-DD), inject: [discrepancy]` | `text/csv` |
-| `POST /admin/config` | `seed, latency_ms {p50,p99}, error_rate, drop_after_commit_rate, settlement_lag_days, dispute_after_days, fee {rate_scaled, fixed}` | config |
-| `GET /admin/operations` | | every operation, for experiments to count charges |
+| `POST /settlement_files` | `date (YYYY-MM-DD), inject: [discrepancy]` | `text/csv`, frozen once generated |
+| `GET /settlement_files/:date` | | the same `text/csv`, or 404 |
+| `GET /admin/settlement_files/:date/manifest` | | ground truth: injected discrepancies and carried-over lines |
+| `POST /admin/config` | `seed, latency_ms {p50,p99}, error_rate, drop_after_commit_rate, settlement_lag_days, dispute_after_days, fee {rate_scaled, fixed}` | config (`GET` reads it) |
+| `GET /admin/operations?reference=` | | every operation, authorization, dispute and payout, plus `charges_by_reference` (captured > 1 is a double charge) |
 | `POST /admin/disputes/:id/resolve` | `outcome: won or lost` | notification |
 | `POST /admin/reset` | | |
 
@@ -132,8 +134,13 @@ Settlement CSV columns: `line_id, type (capture | refund | dispute | dispute_rev
 acquirer_reference, operation_id, amount, fee, currency, settled_on`. A capture settles
 `settlement_lag_days` (default 2) after it happened. `amount` is gross and `fee` is the
 acquirer's processing fee (default 1.5% + 10 minor units, rounded half-even), so cash
-received is `amount - fee`. Discrepancy types for `inject`: `missing`, `duplicate`,
-`amount_mismatch`, `fee_mismatch`, `late`, `unknown_payment`.
+received is `amount - fee`. Refund and dispute lines are negative with fee 0, dispute
+reversals positive with fee 0. `settled_on` is the file's date (a late line carries the
+later date). Every movement appears in exactly one file unless `missing` dropped it.
+Discrepancy types for `inject`: `missing`, `duplicate`,
+`amount_mismatch`, `fee_mismatch`, `late`, `unknown_payment`. An item is either explicit,
+`{type, acquirer_reference, line_type?, delta?, days?}` (`unknown_payment` takes
+`amount?, currency?` instead of a target), or `{random: N, seed?, types?}`.
 
 ## Events and webhooks
 

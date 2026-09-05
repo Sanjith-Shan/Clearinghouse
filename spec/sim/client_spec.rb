@@ -103,6 +103,9 @@ RSpec.describe Clearinghouse::Acquirer::Client do
       garbage = SimServer.new(nil, ->(_env) { [200, {}, ['{"half":']] })
       expect(authorize(via: described_class.new(clock: clock, base_url: garbage.url))).to be_a(acquirer::Unknown)
       garbage.stop
+      hollow = SimServer.new(nil, ->(_env) { [200, {}, ['{"status":"approved"}']] })
+      expect(authorize(via: described_class.new(clock: clock, base_url: hollow.url))).to be_a(acquirer::Unknown)
+      hollow.stop
     end
   end
 
@@ -168,6 +171,26 @@ RSpec.describe Clearinghouse::Acquirer::Client do
 
     it 'raises ProtocolError on a malformed cursor' do
       expect { client.notifications(after: 'x') }.to raise_error(acquirer::ProtocolError)
+    end
+  end
+
+  describe 'settlement files' do
+    it 'fetches a day\'s file once the clock has reached that day' do
+      client.authorize(payment_method: 'pm_card_visa', amount: usd(10_000), capture: true, reference: 'pi_s',
+                       idempotency_key: 'pi_s:1')
+      date = (clock.now + (2 * 86_400)).utc.to_date
+      expect { client.settlement_file(date: date) }.to raise_error(acquirer::ProtocolError) { |e|
+        expect(e.code).to eq('settlement_date_in_future')
+      }
+      clock.advance(2 * 86_400)
+      csv = client.settlement_file(date: date)
+      expect(SettlementCsv.parse(csv).map { |l| l.values_at('amount', 'fee') }).to eq([%w[10000 160]])
+      expect(client.settlement_file(date: date)).to eq(csv)
+    end
+
+    it 'is Unavailable when the acquirer is down' do
+      down = described_class.new(clock: clock, base_url: "http://127.0.0.1:#{SimServer.closed_port}")
+      expect(down.settlement_file(date: Date.new(2026, 5, 4))).to be_a(acquirer::Unavailable)
     end
   end
 

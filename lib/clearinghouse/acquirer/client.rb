@@ -1,6 +1,7 @@
 # typed: true
 # frozen_string_literal: true
 
+require 'date'
 require 'json'
 require 'net/http'
 require 'openssl'
@@ -94,18 +95,28 @@ module Clearinghouse
       # transport failure or 5xx: nothing is lost, the next poll gets them.
       sig { params(after: String).returns(T.any(NotificationPage, Unavailable)) }
       def notifications(after: '0')
-        response = exchange(Net::HTTP::Get.new(path("/notifications?after=#{URI.encode_uri_component(after)}")))
-        case response
-        when Unknown, Unavailable then return Unavailable.new(reason: response.reason)
-        end
-        return Unavailable.new(reason: "status #{response.code}") if response.code.start_with?('5')
+        response = read(Net::HTTP::Get.new(path("/notifications?after=#{URI.encode_uri_component(after)}")))
+        return response if response.is_a?(Unavailable)
 
         body = parse(response.body)
-        raise ProtocolError.new(Integer(response.code), body&.fetch('error', nil)&.to_s, response.body.to_s) unless
-          response.code == '200' && body
+        raise protocol_error(response) unless response.code == '200' && body
 
         NotificationPage.new(data: body.fetch('data').map { |n| Notification.from_json(n) },
                              next_cursor: body.fetch('next_cursor'))
+      end
+
+      # The settlement CSV for `date`, generated on first request and the same bytes
+      # after. `inject` is for tests and experiments only; see docs/design/sim.md.
+      sig { params(date: Date, inject: T::Array[T::Hash[String, T.untyped]]).returns(T.any(String, Unavailable)) }
+      def settlement_file(date:, inject: [])
+        request = Net::HTTP::Post.new(path('/settlement_files'))
+        request['Content-Type'] = 'application/json'
+        request.body = JSON.generate('date' => date.iso8601, 'inject' => inject)
+        response = read(request)
+        return response if response.is_a?(Unavailable)
+        raise protocol_error(response) unless response.code == '200'
+
+        response.body.to_s
       end
 
       # What the acquirer committed under a key, if anything. A GET has no side
@@ -113,15 +124,11 @@ module Clearinghouse
       # again". It never means "nothing happened"; only NotFound means that.
       sig { params(idempotency_key: String).returns(LookupOutcome) }
       def lookup(idempotency_key)
-        request = Net::HTTP::Get.new(path("/operations/#{URI.encode_uri_component(idempotency_key)}"))
-        response = exchange(request)
-        case response
-        when Unknown, Unavailable then return Unavailable.new(reason: response.reason)
-        end
+        response = read(Net::HTTP::Get.new(path("/operations/#{URI.encode_uri_component(idempotency_key)}")))
+        return response if response.is_a?(Unavailable)
         # Only the simulator's own "no operation under this key" is NotFound. Any other
         # 404 (a wrong base URL, a proxy) says nothing about the payment and raises.
         return NotFound.new(idempotency_key: idempotency_key) if response.code == '404' && not_found_body?(response)
-        return Unavailable.new(reason: "status #{response.code}") if response.code.start_with?('5')
 
         classify(response) || Unavailable.new(reason: 'unreadable response')
       end
@@ -142,6 +149,25 @@ module Clearinghouse
         return Unknown.new(reason: "acquirer answered #{response.code}") if response.code.start_with?('5')
 
         classify(response) || Unknown.new(reason: "unreadable #{response.code} response")
+      end
+
+      # For requests whose outcome does not move money (the status query, the feed, a
+      # settlement file): any failure to get an answer is Unavailable, "ask again".
+      sig { params(request: Net::HTTPRequest).returns(T.any(Net::HTTPResponse, Unavailable)) }
+      def read(request)
+        response = exchange(request)
+        case response
+        when Unknown, Unavailable then Unavailable.new(reason: response.reason)
+        else
+          response.code.start_with?('5') ? Unavailable.new(reason: "acquirer answered #{response.code}") : response
+        end
+      end
+
+      sig { params(response: Net::HTTPResponse).returns(ProtocolError) }
+      def protocol_error(response)
+        body = parse(response.body)
+        ProtocolError.new(Integer(response.code), body&.fetch('error', nil)&.to_s,
+                          (body&.fetch('message', nil) || response.body).to_s)
       end
 
       # One request on its own connection. Returns the response, or the outcome the
@@ -175,10 +201,7 @@ module Clearinghouse
       sig { params(response: Net::HTTPResponse).returns(T.nilable(T.any(Approved, Declined))) }
       def classify(response)
         body = parse(response.body)
-        unless response.code.start_with?('2')
-          raise ProtocolError.new(Integer(response.code), body&.fetch('error', nil)&.to_s,
-                                  body&.fetch('message', nil).to_s)
-        end
+        raise protocol_error(response) unless response.code.start_with?('2')
         return nil if body.nil?
 
         operation = Operation.from_json(body)

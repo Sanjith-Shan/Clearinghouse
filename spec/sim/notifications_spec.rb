@@ -122,6 +122,15 @@ RSpec.describe AcquirerSim::App do
       expect(simulator.payouts.size).to eq(1)
     end
 
+    it 'lists disputes and payouts in /admin/operations' do
+      payout(1_013)
+      authorize!(payment_method: 'pm_card_disputeFraudulent', capture: true)
+      body = json_body(call(:get, '/admin/operations'))
+      expect(body['payouts'].first).to include('reference' => 'po_1', 'outcome' => 'failed',
+                                               'failure_code' => 'account_closed')
+      expect(body['disputes'].first).to include('reason' => 'fraudulent', 'amount' => 10_000, 'outcome' => nil)
+    end
+
     it 'validates the payout body' do
       bad = post_json('/payouts', { reference: 'po_1', amount: 5_000, currency: 'usd' })
       expect(json_body(bad)['param']).to eq('merchant_id')
