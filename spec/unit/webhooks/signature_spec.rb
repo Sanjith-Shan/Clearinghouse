@@ -78,6 +78,17 @@ RSpec.describe Clearinghouse::Webhooks::Signature do
       end
     end
 
+    describe 'against RiskGate’s vectors' do
+      SignatureVectors.riskgate.each do |v|
+        it "#{v['name']}: #{v['error'] || 'valid'}" do
+          result = described_class.verify(payload: v['payload'], header: v['header'], secrets: v['secrets'],
+                                          now: v['now'], tolerance: v['tolerance'])
+          expect(result.valid?).to eq(v['valid'])
+          expect(result.error&.serialize).to eq(v['error'])
+        end
+      end
+    end
+
     it 'returns the timestamp it verified' do
       result = described_class.verify(payload: payload, header: header, secrets: [secret], now: now)
       expect(result.timestamp).to eq(now)

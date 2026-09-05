@@ -14,6 +14,10 @@ import (
 // this package, so go test finds them from inside the repo.
 var vectorsPath = filepath.Join("..", "..", "..", "spec", "fixtures", "signatures.json")
 
+// RiskGate's own vectors, copied from its repo, so each verifier is checked against
+// cases the other project thought of.
+var riskgateVectorsPath = filepath.Join("..", "..", "..", "spec", "fixtures", "signatures_riskgate.json")
+
 type vector struct {
 	Name      string   `json:"name"`
 	Secrets   []string `json:"secrets"`
@@ -27,7 +31,12 @@ type vector struct {
 
 func loadVectors(t testing.TB) []vector {
 	t.Helper()
-	raw, err := os.ReadFile(vectorsPath)
+	return append(loadVectorsFrom(t, vectorsPath), loadVectorsFrom(t, riskgateVectorsPath)...)
+}
+
+func loadVectorsFrom(t testing.TB, path string) []vector {
+	t.Helper()
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading vectors: %v", err)
 	}
