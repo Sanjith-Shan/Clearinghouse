@@ -64,6 +64,22 @@ module AcquirerSim
     prop :voided, T::Boolean, default: false
     prop :dispute_id, T.nilable(String)
 
+    # Per client reference (a PaymentIntent id), how many authorizations exist, how
+    # many were approved, and how many actually took money. `captured` above 1 is a
+    # double charge, which is what experiment 1 counts.
+    sig { params(authorizations: T::Array[Authorization]).returns(T::Hash[String, T::Hash[String, Integer]]) }
+    def self.charges_by_reference(authorizations)
+      authorizations.each_with_object({}) do |auth, out|
+        row = out[auth.reference || '(none)'] ||= %w[authorizations approved captured captured_amount
+                                                     refunded_amount].to_h { |k| [k, 0] }
+        row['authorizations'] += 1
+        row['approved'] += 1 if auth.approved
+        row['captured'] += 1 if auth.captured.positive?
+        row['captured_amount'] += auth.captured
+        row['refunded_amount'] += auth.refunded
+      end
+    end
+
     sig { returns(T::Hash[String, T.untyped]) }
     def to_h
       {

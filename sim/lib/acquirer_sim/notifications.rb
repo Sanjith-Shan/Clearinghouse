@@ -46,10 +46,5 @@ module AcquirerSim
       data = @all.select { |n| (cursor = n.cursor) && cursor > after }.sort_by { |n| T.must(n.cursor) }.first(limit)
       Page.new(data: data, next_cursor: data.last&.cursor || after)
     end
-
-    sig { returns(T::Array[Notification]) }
-    def all
-      @all.dup
-    end
   end
 end

@@ -81,3 +81,11 @@ class SimServer
     port
   end
 end
+
+# Settlement CSV has no quoting (see Settlement), so a split is an exact parser.
+module SettlementCsv
+  def self.parse(text)
+    header, *rows = text.lines.map { |l| l.chomp.split(',', -1) }
+    rows.map { |row| header.zip(row).to_h }
+  end
+end

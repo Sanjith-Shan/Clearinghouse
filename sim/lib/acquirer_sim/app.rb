@@ -76,6 +76,45 @@ module AcquirerSim
       error_response(e)
     end
 
+    # A day's settlement file, generated on first request and frozen after. The CSV
+    # is the file; the ground truth of what was injected into it is at the manifest
+    # URL, kept out of the file so a reconciler cannot peek.
+    post '/settlement_files' do
+      T.bind(self, App)
+      sim_time = Params.sim_time(request.env['HTTP_SIM_TIME'])
+      body = raw_body
+      date = date_param(Params.string(body, 'date'))
+      inject = body.fetch('inject', [])
+      inject = [inject] if inject.is_a?(Hash)
+      unless inject.is_a?(Array) && inject.all?(Hash)
+        raise Params.invalid('inject must be a list of discrepancies', 'inject')
+      end
+
+      csv_response(simulator.settlement_file(date, inject, sim_time))
+    rescue RequestError => e
+      error_response(e)
+    end
+
+    get '/settlement_files/:date' do
+      T.bind(self, App)
+      file = simulator.stored_settlement_file(date_param(params.fetch('date')))
+      raise RequestError.new(404, 'not_found', "no settlement file for #{params['date']} yet") unless file
+
+      csv_response(file)
+    rescue RequestError => e
+      error_response(e)
+    end
+
+    get '/admin/settlement_files/:date/manifest' do
+      T.bind(self, App)
+      file = simulator.stored_settlement_file(date_param(params.fetch('date')))
+      raise RequestError.new(404, 'not_found', "no settlement file for #{params['date']} yet") unless file
+
+      json(file.manifest)
+    rescue RequestError => e
+      error_response(e)
+    end
+
     # Everything the simulator has done, for experiments that count charges from the
     # acquirer's side rather than trusting Clearinghouse's own records.
     get '/admin/operations' do
@@ -84,7 +123,7 @@ module AcquirerSim
       operations = simulator.operations.select { |op| reference.nil? || op.reference == reference }
       authorizations = simulator.authorizations.select { |a| reference.nil? || a.reference == reference }
       json('operations' => operations.map(&:to_h), 'authorizations' => authorizations.map(&:to_h),
-           'charges_by_reference' => Simulator.charges_by_reference(authorizations),
+           'charges_by_reference' => Authorization.charges_by_reference(authorizations),
            'disputes' => simulator.disputes.map(&:to_h), 'payouts' => simulator.payouts.map(&:to_h))
     end
 
@@ -154,6 +193,22 @@ module AcquirerSim
       decision = simulator.traffic_decision
       sleep(decision.latency_seconds) if decision.latency_seconds.positive?
       decision
+    end
+
+    sig { params(value: String).returns(Date) }
+    def date_param(value)
+      raise Params.invalid('date must be YYYY-MM-DD', 'date') unless value.match?(/\A\d{4}-\d{2}-\d{2}\z/)
+
+      Date.iso8601(value)
+    rescue Date::Error
+      raise Params.invalid("#{value} is not a date", 'date')
+    end
+
+    sig { params(file: Settlement::SettlementFile).returns(String) }
+    def csv_response(file)
+      content_type 'text/csv'
+      headers 'Settlement-Manifest' => "/admin/settlement_files/#{file.date.iso8601}/manifest"
+      file.csv
     end
 
     sig { params(name: String, default: Integer).returns(Integer) }

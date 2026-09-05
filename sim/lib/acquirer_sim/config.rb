@@ -13,6 +13,14 @@ module AcquirerSim
     prop :error_rate, Float, default: 0.0
     prop :drop_after_commit_rate, Float, default: 0.0
     prop :dispute_after_days, Integer, default: 7
+    prop :settlement_lag_days, Integer, default: 2
+    # The acquirer's processing fee on captures: rate_scaled / FeeSchedule::SCALE of
+    # the amount, rounded half-even, plus a fixed count of minor units. The fixed part
+    # is minor units of the capture's own currency: 10 cents, 10 yen (JPY has no
+    # smaller unit, so the fee is whole yen by construction), or 0.010 dinar.
+    prop :fee_rate_scaled, Integer, default: 150_000 # 1.5%
+    prop :fee_fixed, Integer, default: 10
+    prop :fee_fixed_by_currency, T::Hash[String, Integer], default: {}
 
     # Returns a copy of `base` with the fields named in `json` replaced. Validation is
     # strict because a mistyped knob silently ignored would make an experiment measure
@@ -27,6 +35,8 @@ module AcquirerSim
         when 'error_rate' then config.error_rate = rate(name, value)
         when 'drop_after_commit_rate' then config.drop_after_commit_rate = rate(name, value)
         when 'dispute_after_days' then config.dispute_after_days = integer(name, value, min: 0)
+        when 'settlement_lag_days' then config.settlement_lag_days = integer(name, value, min: 0)
+        when 'fee' then apply_fee(config, value)
         else raise Params.invalid("unknown config field #{name}", name)
         end
       end
@@ -38,8 +48,52 @@ module AcquirerSim
       {
         'seed' => seed, 'latency_ms' => { 'p50' => latency_p50_ms, 'p99' => latency_p99_ms },
         'error_rate' => error_rate, 'drop_after_commit_rate' => drop_after_commit_rate,
-        'dispute_after_days' => dispute_after_days
+        'dispute_after_days' => dispute_after_days, 'settlement_lag_days' => settlement_lag_days,
+        'fee' => { 'rate_scaled' => fee_rate_scaled, 'fixed' => fixed_fee_json }
       }
+    end
+
+    sig { returns(T.any(Integer, T::Hash[String, Integer])) }
+    def fixed_fee_json
+      fee_fixed_by_currency.empty? ? fee_fixed : fee_fixed_by_currency.merge('default' => fee_fixed)
+    end
+
+    sig { params(amount: Integer, currency: String).returns(Integer) }
+    def fee_for(amount, currency)
+      fixed = fee_fixed_by_currency.fetch(currency, fee_fixed)
+      Clearinghouse::FeeSchedule.new(rate_scaled: fee_rate_scaled, fixed_minor: { currency => fixed })
+                                .fee_for(Clearinghouse::Money.of(amount, currency)).amount
+    end
+
+    # `fee: {rate_scaled: 150000, fixed: 10}`, or `fixed: {"default": 10, "jpy": 15}`
+    # to set the fixed part per currency.
+    sig { params(config: Config, value: T.untyped).void }
+    def self.apply_fee(config, value)
+      raise Params.invalid('fee must be {"rate_scaled": n, "fixed": n}', 'fee') unless value.is_a?(Hash)
+
+      if value.key?('rate_scaled')
+        rate = integer('fee.rate_scaled', value['rate_scaled'], min: 0)
+        raise Params.invalid('fee.rate_scaled must be at most 100%', 'fee') if rate > Clearinghouse::FeeSchedule::SCALE
+
+        config.fee_rate_scaled = rate
+      end
+      apply_fixed_fee(config, value['fixed']) if value.key?('fixed')
+    end
+
+    sig { params(config: Config, fixed: T.untyped).void }
+    def self.apply_fixed_fee(config, fixed)
+      if fixed.is_a?(Hash)
+        by_currency = fixed.to_h do |currency, minor|
+          next ['default', integer('fee.fixed', minor, min: 0)] if currency == 'default'
+
+          [Params.currency({ 'currency' => currency }), integer('fee.fixed', minor, min: 0)]
+        end
+        config.fee_fixed = by_currency.delete('default') || config.fee_fixed
+        config.fee_fixed_by_currency = by_currency
+      else
+        config.fee_fixed = integer('fee.fixed', fixed, min: 0)
+        config.fee_fixed_by_currency = {}
+      end
     end
 
     sig { params(config: Config, value: T.untyped).void }
