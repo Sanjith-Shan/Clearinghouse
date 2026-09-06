@@ -29,6 +29,10 @@ module Clearinghouse
       # Renders responses at the caller's version. Tests may pass an engine with
       # their own registry or loaders.
       const :versioning, Versioning::Engine, factory: -> { Versioning.engine }
+      # Checks webhook endpoint URLs at registration (SafeHttp#pin). Tests pass one with a
+      # fake resolver, or with test_mode to allow http://localhost.
+      const :webhook_http, Webhooks::SafeHttp,
+            factory: -> { Webhooks::SafeHttp.new(resolver: Webhooks::Egress::SystemResolver.new) }
       # Where request logs go, one JSON object per line. nil keeps tests quiet.
       const :log, T.nilable(T.any(IO, StringIO)), default: nil
 
@@ -40,6 +44,8 @@ module Clearinghouse
           clock: clock,
           acquirer: Acquirer::Client.new(clock: clock),
           admin_token: ENV.fetch('CLEARINGHOUSE_ADMIN_TOKEN', nil),
+          webhook_http: Webhooks::SafeHttp.new(resolver: Webhooks::Egress::SystemResolver.new,
+                                               test_mode: ENV['CLEARINGHOUSE_WEBHOOK_TEST_MODE'] == '1'),
           log: $stdout
         )
       end
