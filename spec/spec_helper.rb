@@ -13,6 +13,7 @@ unless ENV['NO_COVERAGE']
     add_filter '/vendor/'
     add_group 'Ledger', 'lib/clearinghouse/ledger'
     add_group 'Idempotency', 'lib/clearinghouse/idempotency'
+    add_group 'Ruby client', 'clients/ruby'
     minimum_coverage_by_file line: 0
   end
 end
