@@ -21,7 +21,7 @@ not apply). `doc_url` is present when `code` is, and points at the entry below.
 | `authentication_error` | 401 | No API key, or a key that does not exist |
 | `rate_limit_error` | 429 | Too many requests |
 | `risk_error` | 402 | RiskGate blocked the payment |
-| `api_error` | 500 | Our bug. The message carries the request id and nothing else |
+| `api_error` | 500, 503 | 500: our bug; the message carries the request id and nothing else. 503: the card network did not answer (`acquirer_unavailable`) |
 
 ## Retrying
 
@@ -37,7 +37,13 @@ header is absent when that is not known. See `docs/design/api.md`.
 - `body_invalid`: the body is not valid JSON, not a JSON object, not a supported content type, or has conflicting form nesting.
 - `resource_missing`: no object with that id exists for this merchant.
 - `url_invalid`: no such route.
-- `card_declined`: the card was declined; see `decline_code`.
+- `card_declined`: the card was declined; see `decline_code` (`generic_decline`, `insufficient_funds`).
+- `expired_card`: the card has expired. `decline_code` is `expired_card` too.
+- `payment_intent_unexpected_state`: the PaymentIntent's status does not allow this request (capturing one that is not `requires_capture`, confirming one that already succeeded). The message lists the statuses that would have worked.
+- `payment_intent_authorization_expired`: the authorization waited longer than the capture window and can no longer be captured. The expiry sweep cancels it.
+- `amount_too_small`: the amount (or `amount_to_capture`) does not cover the processing fee.
+- `capture_failed`: the card network refused the capture. The PaymentIntent is unchanged.
+- `acquirer_unavailable` (503): the card network did not answer, so the outcome is not known yet. Nothing has failed. Retry with the same `Idempotency-Key` and the request resumes where it stopped.
 - `idempotency_key_reused`: the key was first used with different parameters. Use a new key for a different request.
 - `idempotency_key_in_use`: the key's first request is still running. Retry shortly.
 - `api_key_missing`: no `Authorization` header.

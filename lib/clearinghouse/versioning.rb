@@ -43,7 +43,9 @@ module Clearinghouse
     # latest_charge and friends here.
     sig { returns(Expander) }
     def self.default_expander
-      Expander.new.register('payment_intent', 'payment_method') { |id, _context| PaymentMethods.to_api(id) }
+      Expander.new
+              .register('payment_intent', 'payment_method') { |id, _context| PaymentMethods.to_api(id) }
+              .register('payment_intent', 'latest_charge') { |id, context| Payments.charge_for(context, id) }
     end
 
     sig { returns(Engine) }

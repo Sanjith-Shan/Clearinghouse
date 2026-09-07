@@ -14,6 +14,7 @@ require_relative 'api/request_logger'
 require_relative 'api/auth'
 require_relative 'api/routes/health'
 require_relative 'api/routes/merchants'
+require_relative 'api/routes/payment_intents'
 require_relative 'api/app'
 
 module Clearinghouse

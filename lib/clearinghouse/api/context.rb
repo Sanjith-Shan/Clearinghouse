@@ -21,11 +21,34 @@ module Clearinghouse
       # The authenticated merchant. nil only on routes that do not take a secret
       # key (/healthz, the admin bootstrap).
       prop :merchant, T.nilable(Merchant)
+      # True for work done on a merchant's behalf outside a request (the expiry
+      # sweep, the completer), so its events carry no request.
+      const :background, T::Boolean, default: false
+
+      # A context for a worker acting for one merchant, rendering at `api_version`.
+      sig { params(deps: Dependencies, merchant: Merchant, api_version: String, request_id: String).returns(Context) }
+      def self.background(deps, merchant, api_version: deps.versioning.latest, request_id: Ids.generate('req'))
+        new(deps: deps, request_id: request_id, http_method: 'POST', path: '', idempotency_key: nil,
+            api_version: api_version, merchant: merchant, background: true)
+      end
 
       # For authenticated routes, where a missing merchant is a bug, not a 401.
       sig { returns(Merchant) }
       def merchant!
         merchant || raise(Clearinghouse::Error, 'route needs an authenticated merchant')
+      end
+
+      sig { returns(Acquirer::Client) }
+      def acquirer!
+        deps.acquirer || raise(Clearinghouse::Error, 'this app was built without an acquirer')
+      end
+
+      # For events this request causes.
+      sig { returns(T.nilable(Events::Request)) }
+      def event_request
+        return nil if background
+
+        Events::Request.new(id: request_id, idempotency_key: idempotency_key)
       end
 
       sig { returns(Sequel::Database) }

@@ -98,3 +98,81 @@ the dispatcher to scan in order. It is assigned at insert, not at commit, so a s
 has to allow for a lower number committing after a higher one it has already seen.
 `emit!` refuses a type that is not in `Events::TYPES`, since an event with a misspelled type
 is one nobody subscribes to. Events are insert-only for the app role.
+
+## Operations as steps
+
+Each mutating endpoint is a short list of steps in `lib/clearinghouse/payments/`. A step
+whose name ends in `!` is local database work that runs in one transaction. The acquirer
+call sits between two of them and is never inside a transaction, so no database lock is
+held while the network is slow.
+
+| operation | steps |
+|---|---|
+| create | `Create.create!` (intent + `payment_intent.created`) |
+| confirm | `Confirm.lock!` (to processing, attempt + 1), `authorize`, `record_authorization!`, `apply_approval!` |
+| capture | `Capture.check!`, `request`, `record!` |
+| cancel | `Cancel.check!`, `void` (only with an authorization to release), `record!` |
+
+`Payments::Operations` runs the steps in order. That is the synchronous path, and a crash
+between two steps leaves the intent where the last committed step put it. The idempotency
+layer (`idempotency.md`) runs the same steps as atomic phases and records a recovery point
+with each one, which is what makes them resumable.
+
+### Confirm
+
+1. `lock!` locks the row, asks the table for `confirm`, bumps `attempt`, and moves the intent
+   to `processing`. `attempt` is the only thing that changes the acquirer's idempotency
+   key (`pi_...:authorize:<attempt>`), so it is bumped once per confirmation and never on a
+   retry of the same one.
+2. `authorize` calls the acquirer. Automatic capture sends `capture: true`, so one call
+   moves the money.
+3. `record_authorization!` stores a definite answer. A decline ends the attempt: back to
+   `requires_payment_method`, `last_payment_error` set, the payment method cleared as
+   Stripe does, and `payment_intent.payment_failed` emitted. The response is a 402
+   `card_error`.
+4. `apply_approval!` applies an approval: `requires_capture` with `amount_capturable`
+   (manual) or `succeeded` with the capture posted to the ledger (automatic).
+
+An `Unknown` or `Unavailable` answer is neither. The intent stays in `processing` and the
+caller gets a 503 `acquirer_unavailable`, which never marks the payment failed:
+`pm_card_timeout` really did charge the card. Resolving that is M3's ambiguous-call
+handling.
+
+### What reaches the ledger
+
+Only a capture moves money. It posts `Ledger::Flows.capture` under the intent's id with our
+fee from the merchant's `FeeSchedule`, $20.00 at 2.9% + 30 cents being $0.88 fee and
+$19.12 to the merchant's pending balance. In the same transaction it calls
+`Payments::Seams.schedule_availability` with the net and the date the funds become
+available (`payout_delay_days` after capture). That is an empty seam today. The payouts
+work fills it with `Balances::Availability.schedule!`, so captured money stays in pending
+until then. Authorizations, declines and cancels post nothing, and the tests assert so.
+
+A partial capture posts what was captured, not what was authorized.
+
+An amount whose fee would exceed it (under 31 cents at the default rate) is refused at
+create and at capture (`amount_too_small`), since the merchant's share cannot be negative.
+
+### Authorization expiry
+
+`capture` refuses an expired authorization (`payment_intent_authorization_expired`) without
+writing anything. `Payments::Expiry.sweep!` cancels every `requires_capture` intent whose
+`authorization_expires_at` has passed on the injected clock
+(`Dependencies#authorization_ttl_days`, default 7), one transaction each, rechecking under
+the row lock so a capture that commits first wins. It sends no void. The authorization lapses
+at the acquirer by itself, and nothing here can capture a canceled intent, so a void would
+only add a foreign call that can fail. Its event has no request, because no request caused it.
+
+### Tests against the real acquirer
+
+The payments specs talk to the real simulator over HTTP: one in-process Puma on an ephemeral
+port for the run, its books reset per example. `AcquirerSpec::ScriptedClient` is the real
+client with faults on demand. It can report `Unknown` after the acquirer really committed
+(a dropped response), or `Unavailable` without sending. So the acquirer's own records
+(`authorizations`, `captured`) are the ground truth in every assertion about charges, not
+a fake written to agree with the code under test.
+
+The illegal-transition table is also sent over HTTP: every request-triggered illegal pair
+(confirm, capture, cancel) against an intent in that status, asserting the typed error, the
+same ledger, balance and event row counts before and after, the intent row unchanged, and
+no call to the acquirer.
