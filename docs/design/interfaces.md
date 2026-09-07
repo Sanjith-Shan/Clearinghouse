@@ -168,3 +168,15 @@ direction. Shared vectors live in `spec/fixtures/signatures.json` in RiskGate's 
 headers `RiskGate-Deadline-Ms` and `Idempotency-Key: <payment_id>:<attempt>`. Response
 `{assessment_id, decision: allow | block | review, risk_score, matched_rule, reasons, ruleset_version}`.
 Non-200 or timeout is `risk_unavailable` and the payment proceeds (fail open).
+
+## Balances and payouts (`lib/clearinghouse/balances/`)
+
+See `docs/design/payouts.md`.
+
+```ruby
+Balances::Availability.available_on_for(db, merchant_id:, captured_at:) -> Time   # start of UTC day + payout_delay_days
+Balances::Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:, clock:) -> Scheduled | nil
+  # Call inside the capture's transaction. Idempotent on flow_id; ConflictError on different terms.
+  # nil (nothing scheduled) for a zero net.
+Balances::Availability.release_due!(db, clock:) -> ReleaseReport   # the sweep; safe to run concurrently
+```
