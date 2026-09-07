@@ -23,11 +23,19 @@ module Clearinghouse
 
       sig { params(explanation: Explain::Explanation, color: T::Boolean).returns(String) }
       def self.render(explanation, color: false)
+        lines = [title(explanation, color), '', render_table(explanation, color: color), '',
+                 *verdict(explanation, color)]
+        "#{lines.join("\n")}\n"
+      end
+
+      # The table alone, without the title and verdict, for callers that write their
+      # own (bin/explain adds related flows and how long the flow has been open).
+      sig { params(explanation: Explain::Explanation, color: T::Boolean).returns(String) }
+      def self.render_table(explanation, color: false)
         keys = explanation.clearing.keys
         headers = ['txn', 'effective (UTC)', 'transaction / account', 'debit', 'credit'] + clearing_headers(keys)
         rows = explanation.steps.each_with_index.flat_map { |step, i| step_rows(step, keys, i.positive?) }
-        lines = [title(explanation, color), '', table(headers, rows, color), '', *verdict(explanation, color)]
-        "#{lines.join("\n")}\n"
+        table(headers, rows, color)
       end
 
       sig { params(explanation: Explain::Explanation, color: T::Boolean).returns(String) }

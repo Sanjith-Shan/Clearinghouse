@@ -1,0 +1,144 @@
+{
+  "flow_id": "pi_1",
+  "flow_type": "payment",
+  "requested_transaction_id": null,
+  "merchants": [
+    "acct_rocket"
+  ],
+  "status": "explained",
+  "as_of": "2026-01-11T00:00:00Z",
+  "opened_at": "2026-01-01T00:00:00Z",
+  "open_seconds": null,
+  "stuck": [],
+  "transactions": [
+    {
+      "id": 1,
+      "description": "capture",
+      "effective_at": "2026-01-01T00:00:00Z",
+      "reverses_transaction_id": null,
+      "reversed_by": null,
+      "entries": [
+        {
+          "account": "platform:processor_receivable",
+          "kind": "clearing",
+          "side": "debit",
+          "amount": 10000,
+          "currency": "usd",
+          "display": "100.00 USD"
+        },
+        {
+          "account": "merchant:acct_rocket:pending",
+          "kind": "liability",
+          "side": "credit",
+          "amount": 9680,
+          "currency": "usd",
+          "display": "96.80 USD"
+        },
+        {
+          "account": "platform:fee_revenue",
+          "kind": "revenue",
+          "side": "credit",
+          "amount": 320,
+          "currency": "usd",
+          "display": "3.20 USD"
+        }
+      ],
+      "clearing_after": [
+        {
+          "account": "platform:processor_receivable",
+          "currency": "usd",
+          "amount": 10000,
+          "display": "100.00 USD"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "description": "settlement",
+      "effective_at": "2026-01-03T00:00:00Z",
+      "reverses_transaction_id": null,
+      "reversed_by": null,
+      "entries": [
+        {
+          "account": "platform:cash",
+          "kind": "asset",
+          "side": "debit",
+          "amount": 9840,
+          "currency": "usd",
+          "display": "98.40 USD"
+        },
+        {
+          "account": "platform:processing_expense",
+          "kind": "expense",
+          "side": "debit",
+          "amount": 160,
+          "currency": "usd",
+          "display": "1.60 USD"
+        },
+        {
+          "account": "platform:processor_receivable",
+          "kind": "clearing",
+          "side": "credit",
+          "amount": 10000,
+          "currency": "usd",
+          "display": "100.00 USD"
+        }
+      ],
+      "clearing_after": [
+        {
+          "account": "platform:processor_receivable",
+          "currency": "usd",
+          "amount": 0,
+          "display": "0.00 USD"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "description": "funds available",
+      "effective_at": "2026-01-03T00:00:00Z",
+      "reverses_transaction_id": null,
+      "reversed_by": null,
+      "entries": [
+        {
+          "account": "merchant:acct_rocket:pending",
+          "kind": "liability",
+          "side": "debit",
+          "amount": 9680,
+          "currency": "usd",
+          "display": "96.80 USD"
+        },
+        {
+          "account": "merchant:acct_rocket:available",
+          "kind": "liability",
+          "side": "credit",
+          "amount": 9680,
+          "currency": "usd",
+          "display": "96.80 USD"
+        }
+      ],
+      "clearing_after": [
+        {
+          "account": "platform:processor_receivable",
+          "currency": "usd",
+          "amount": 0,
+          "display": "0.00 USD"
+        }
+      ]
+    }
+  ],
+  "related": [
+    {
+      "flow_id": "re_1",
+      "flow_type": "refund",
+      "relation": "mentions",
+      "explained": true
+    },
+    {
+      "flow_id": "dp_1",
+      "flow_type": "dispute",
+      "relation": "mentions",
+      "explained": false
+    }
+  ]
+}
