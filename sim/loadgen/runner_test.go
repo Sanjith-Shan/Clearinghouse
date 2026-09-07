@@ -77,7 +77,7 @@ func TestAchievedRateMatchesTargetOnAFastServer(t *testing.T) {
 
 	const rate = 2000.0
 	cfg := Config{Rate: rate, Duration: time.Second, Arrival: Constant, MaxOutstanding: 32,
-		DrainTimeout: 5 * time.Second, LateThreshold: time.Millisecond}
+		DrainTimeout: 5 * time.Second, LateThreshold: time.Millisecond, SpinWindow: time.Millisecond}
 	res, err := Run(context.Background(), cfg, get(t, srv, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +91,22 @@ func TestAchievedRateMatchesTargetOnAFastServer(t *testing.T) {
 	}
 	if res.Response.TotalCount() != 2000 || res.Service.TotalCount() != 2000 {
 		t.Errorf("histogram counts %d/%d", res.Response.TotalCount(), res.Service.TotalCount())
+	}
+}
+
+// Timers wake up late, by around a millisecond at low rates on macOS, and that
+// lateness is added to every response time. Spinning the last millisecond removes it.
+func TestSpinWindowKeepsSendDelayBelowAMillisecond(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	cfg := Config{Rate: 50, Duration: time.Second, Arrival: Constant, MaxOutstanding: 4,
+		DrainTimeout: time.Second, LateThreshold: time.Millisecond, SpinWindow: time.Millisecond}
+	res, err := Run(context.Background(), cfg, get(t, srv, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p50 := ms(res.SendDelay.ValueAtQuantile(50)); p50 > 500*time.Microsecond {
+		t.Errorf("median send delay %v with spinning, want well under a millisecond", p50)
 	}
 }
 
