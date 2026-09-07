@@ -1,0 +1,19 @@
+pi_2 · payment · merchant acct_rocket · 2 transactions
+
+┌─────┬─────────────────────┬─────────────────────────────────┬────────────┬───────────┬──────────────────────┐
+│ txn │ effective (UTC)     │ transaction / account           │      debit │    credit │ processor_receivable │
+├─────┼─────────────────────┼─────────────────────────────────┼────────────┼───────────┼──────────────────────┤
+│ #1  │ 2026-01-01 00:00:00 │ capture                         │            │           │           100.00 USD │
+│     │                     │   platform:processor_receivable │ 100.00 USD │           │                      │
+│     │                     │   merchant:acct_rocket:pending  │            │ 96.80 USD │                      │
+│     │                     │   platform:fee_revenue          │            │  3.20 USD │                      │
+├─────┼─────────────────────┼─────────────────────────────────┼────────────┼───────────┼──────────────────────┤
+│ #2  │ 2026-01-03 00:00:00 │ settlement                      │            │           │             1.00 USD │
+│     │                     │   platform:cash                 │  97.40 USD │           │                      │
+│     │                     │   platform:processing_expense   │   1.60 USD │           │                      │
+│     │                     │   platform:processor_receivable │            │ 99.00 USD │                      │
+└─────┴─────────────────────┴─────────────────────────────────┴────────────┴───────────┴──────────────────────┘
+
+Related flows: none found (matched by flow id in descriptions)
+
+OPEN  1.00 USD in platform:processor_receivable · open 5d 4h (since 2026-01-01 00:00 UTC, as of 2026-01-06 04:30 UTC)

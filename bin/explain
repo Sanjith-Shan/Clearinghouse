@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Prints the money trail of one flow: every ledger transaction, its entries, the running
+# net of each clearing account, related flows, and whether the flow is EXPLAINED or OPEN.
+#
+#   bin/explain pi_... | re_... | dp_... | po_... | <transaction id> [--json] [--db NAME] [--as-of TIME] [--[no-]color]
+#
+# See docs/design/explain.md.
+
+require 'bundler/setup'
+require_relative '../lib/clearinghouse'
+
+exit Clearinghouse::ExplainCli.run(ARGV, stdout: $stdout, stderr: $stderr, clock: Clearinghouse::Clock::Real.new)

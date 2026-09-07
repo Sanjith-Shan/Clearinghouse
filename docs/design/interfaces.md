@@ -77,6 +77,11 @@ A flow is **explained** when every clearing account it touched nets to zero with
 flow's transactions. Flow ids are the API object ids: `pi_...` for a payment (capture,
 settlement, availability), `re_...` refunds, `dp_...` disputes, `po_...` payouts.
 
+**Description convention for related flows.** The ledger has no column linking flows, so a
+refund or dispute transaction's `description` names the payment it belongs to by id, e.g.
+`refund re_... of pi_...`, `dispute dp_... opened on pi_...`. `bin/explain` finds related
+flows by this convention (docs/design/explain.md).
+
 ## Acquirer simulator (`sim/`, its own process)
 
 Base URL `CLEARINGHOUSE_ACQUIRER_URL`, default `http://127.0.0.1:4600`. JSON in and out.
