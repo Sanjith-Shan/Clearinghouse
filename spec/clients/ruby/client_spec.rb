@@ -174,10 +174,11 @@ RSpec.describe ClearinghouseClient::Client do
   end
 
   describe 'reads' do
-    it 'sends no Idempotency-Key and puts params in a bracketed query string' do
+    it 'sends no Idempotency-Key and puts params in a bracketed query string, leaving out nils' do
       server = serve(ok)
       client_for(server).request(:get, '/v1/payment_intents',
-                                 params: { limit: 3, expand: ['data.payment_method'], created: { gte: 5 } })
+                                 params: { limit: 3, expand: ['data.payment_method'], created: { gte: 5 },
+                                           starting_after: nil })
       request = server.requests.fetch(0)
       expect(request.headers).not_to have_key('idempotency-key')
       expect(URI.decode_www_form_component(request.request_line))

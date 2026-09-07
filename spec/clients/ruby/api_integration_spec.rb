@@ -53,6 +53,11 @@ RSpec.describe ClearinghouseClient::Client, :db do
       .to eq('2026-09-01')
   end
 
+  it 'serves account.retrieve through the resource helper' do
+    merchant = create_merchant.data
+    expect(client(merchant.fetch('secret_key')).account.retrieve).to include('id' => merchant.fetch('id'))
+  end
+
   it 'maps a wrong key to AuthenticationError without retrying' do
     expect { client('sk_test_000000000000000000000000').request(:get, '/v1/account') }
       .to raise_error(ClearinghouseClient::AuthenticationError) { |e|

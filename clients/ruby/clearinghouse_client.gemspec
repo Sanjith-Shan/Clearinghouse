@@ -7,8 +7,8 @@ Gem::Specification.new do |spec|
   spec.version = ClearinghouseClient::VERSION
   spec.authors = ['Sanjith Shanmugavel']
   spec.summary = 'Ruby client for the Clearinghouse payments API, with safe automatic retries'
-  spec.description = 'Idempotency keys reused across retries, backoff with full jitter and typed errors. ' \
-                     'Standard library only.'
+  spec.description = 'Idempotency keys reused across retries, backoff with full jitter, typed errors, ' \
+                     'pagination and webhook signature verification. Standard library only.'
   spec.homepage = 'https://github.com/Sanjith-Shan/Clearinghouse'
   spec.license = 'MIT'
   spec.required_ruby_version = '>= 3.3'

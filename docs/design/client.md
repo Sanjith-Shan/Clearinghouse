@@ -98,6 +98,67 @@ them apart, the same approach as the acquirer client (`docs/design/sim.md`). The
 decision doesn't depend on it, since both are safe with a reused key, but a person reading
 an error after all retries failed needs to know whether to go and check.
 
+## Resource helpers
+
+Thin methods over `request` that return the parsed body as a plain Hash:
+
+```ruby
+intent = client.payment_intents.create(amount: 2000, currency: 'usd', payment_method: 'pm_card_visa')
+client.payment_intents.confirm(intent['id'])
+client.payment_intents.capture(intent['id'], { amount_to_capture: 1500 }, idempotency_key: "capture-#{order.id}")
+client.refunds.create(payment_intent: intent['id'], amount: 500)
+client.balance.retrieve
+client.webhook_endpoints.delete('we_...')
+```
+
+Covered: `payment_intents.create/retrieve/confirm/capture/cancel/list`, `refunds.create/retrieve`,
+`payouts.create/retrieve`, `webhook_endpoints.create/list/delete`, `balance.retrieve`,
+`account.retrieve` and `events.list`. Plain hashes rather than resource objects because
+the objects would be a second copy of the API's shape to keep in step, and the server
+already renders the caller's API version; a Hash is exactly what the caller asked for.
+
+Parameters are a Hash, keywords, or both (keys are normalised to strings and the keyword
+wins a clash, so the same parameter is never sent twice). `idempotency_key:` and
+`api_version:` are options, not parameters. Ids are checked (an empty id would turn
+`retrieve('')` into a request for the collection) and percent-encoded, so `pi_1/../x`
+stays one path segment.
+
+POST bodies are JSON. The server accepts JSON and form bodies alike (`Api::Params`), and
+JSON keeps integers as integers and needs no encoder for nesting. Query strings for GET
+use the bracket style the server's form parser reads (`expand[]=...`, `created[gte]=...`).
+
+### Auto-pagination
+
+`client.payment_intents.each(limit: 100) { |intent| ... }` (also on `webhook_endpoints`
+and `events`) walks every page, sending the last id of each page as `starting_after`
+until `has_more` is false. Without a block it returns a lazy Enumerator, so
+`.each.first(2)` makes one request. Starting with `ending_before` pages backwards using
+each page's first id. A page with no data ends the walk even if it claims `has_more`,
+so a server bug cannot loop the client forever. Each page is an ordinary GET, so it gets
+the retry policy too.
+
+## Webhook verification
+
+```ruby
+event = ClearinghouseClient::Webhook.construct_event(raw_body, signature_header, secret, tolerance: 300)
+```
+
+The library carries its own copy of the verifier, because a client library cannot depend
+on server code. Its rules are the server's (`lib/clearinghouse/webhooks/signature.rb`,
+explained in `docs/design/webhook-security.md`): exactly one `t` of 1 to 15 digits, at least
+one non-empty `v1`, unknown schemes ignored, empty elements malformed, signature checked
+before timestamp, inclusive tolerance, constant-time compare. `secret` can be an Array
+during a rotation. Failures raise `SignatureVerificationError` whose `code` is spelled as
+in the vectors. A body that verifies but is not a JSON object raises
+`InvalidPayloadError`.
+
+Two copies of a parser can drift, so two specs hold them together:
+
+- every vector in `spec/fixtures/signatures.json` runs against the client copy, and
+- a differential spec builds 3000 headers from the grammar's own pieces (`t=`, `v1=`,
+  commas, tabs, a good signature, an uppercased one, a stale timestamp) and checks that the
+  client and server verifiers return the same outcome for each one.
+
 ## Errors
 
 A non-2xx response becomes an exception chosen by the body's `error.type`:
@@ -142,6 +203,10 @@ on the load path and checks that it loads and builds a client.
   merchant with a JSON body, authenticates as it, checks `Clearinghouse-Version` from the pin,
   the client and the call, and maps real 401 and 400 responses. Payment endpoints are not
   merged yet, so their helpers are tested against the scripted server until they are.
+- `resources_spec.rb`: every helper's method, path, body and key header; pagination
+  following `starting_after`, laziness, backwards paging and the empty-page stop.
+- `webhook_spec.rb`: the shared vectors, the differential check against the server
+  verifier, and `construct_event`.
 
 ## Not done
 
