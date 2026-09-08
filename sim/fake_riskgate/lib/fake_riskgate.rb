@@ -248,7 +248,7 @@ module FakeRiskgate
       when %w[GET /admin/config] then respond(socket, 200, JSON.generate(@mutex.synchronize { @config.values }))
       when %w[GET /admin/stats] then respond(socket, 200, JSON.generate(stats))
       when %w[POST /admin/config] then admin_config(socket, request)
-      else respond(socket, 404, '{"error":"no_route"}')
+      else respond(socket, 404, error_body('no_route'))
       end
     end
 
@@ -257,7 +257,7 @@ module FakeRiskgate
       configure(Config.new(JSON.parse(request.body)))
       respond(socket, 200, JSON.generate(@mutex.synchronize { @config.values }))
     rescue JSON::ParserError, ArgumentError, TypeError => e
-      respond(socket, 400, JSON.generate('error' => e.message))
+      respond(socket, 400, error_body('invalid_config', e.message))
     end
 
     sig { params(socket: TCPSocket, request: Request).returns(T::Boolean) }
@@ -270,13 +270,13 @@ module FakeRiskgate
       return hang(socket) if config['hang'] || config.draw < Float(config['hang_rate'])
 
       sleep(config.latency_seconds)
-      return respond(socket, Integer(config['error_status']), '{"error":"injected"}') if
+      return respond(socket, Integer(config['error_status']), error_body('injected')) if
         config.draw < Float(config['error_rate'])
       return respond(socket, 200, '{"decision": "allow", "risk_sc') if config.draw < Float(config['malformed_rate'])
 
       respond(socket, 200, fresh_assessment(config, request, key))
-    rescue JSON::ParserError, ArgumentError, TypeError, KeyError
-      respond(socket, 400, '{"error":"invalid_request"}')
+    rescue JSON::ParserError, ArgumentError, TypeError, KeyError => e
+      respond(socket, 400, error_body('invalid_request', e.message))
     end
 
     sig { params(config: Config, request: Request, key: String).returns(String) }
@@ -338,6 +338,12 @@ module FakeRiskgate
         Thread.new { stop }
       end
       CLOSE
+    end
+
+    # RiskGate's error shape: {"error": {"code", "message"}}.
+    sig { params(code: String, message: String).returns(String) }
+    def error_body(code, message = code)
+      JSON.generate('error' => { 'code' => code, 'message' => message })
     end
 
     sig do
