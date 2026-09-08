@@ -156,17 +156,27 @@ module Clearinghouse
           changes[:status] = disabled ? 'disabled' : 'enabled'
           changes[:disabled_reason] = disabled ? DISABLED_BY_MERCHANT : nil
         end
-        row = live(db).where(id: endpoint.id, merchant_id: endpoint.merchant_id).returning.update(changes).first
-        raise Error, "webhook endpoint #{endpoint.id} vanished" unless row
+        db.transaction do
+          row = live(db).where(id: endpoint.id, merchant_id: endpoint.merchant_id).returning.update(changes).first
+          raise Error, "webhook endpoint #{endpoint.id} vanished" unless row
 
-        from_row(row)
+          if disabled
+            Deliveries.fail_pending!(db, endpoint_id: endpoint.id, now: changes.fetch(:updated_at),
+                                         reason: 'endpoint_disabled')
+          end
+          from_row(row)
+        end
       end
 
-      # Soft delete. The row stays so delivery history can still name it.
+      # Soft delete. The row stays so delivery history can still name it, and whatever
+      # was still waiting to be delivered is failed.
       sig { params(db: Sequel::Database, clock: Clock, endpoint: Endpoint).void }
       def self.delete(db, clock:, endpoint:)
-        live(db).where(id: endpoint.id, merchant_id: endpoint.merchant_id)
-                .update(deleted_at: clock.now, updated_at: clock.now)
+        now = clock.now
+        db.transaction do
+          live(db).where(id: endpoint.id, merchant_id: endpoint.merchant_id).update(deleted_at: now, updated_at: now)
+          Deliveries.fail_pending!(db, endpoint_id: endpoint.id, now: now, reason: 'endpoint_deleted')
+        end
       end
 
       # Generates a new current secret. The old one keeps signing for `overlap` seconds
