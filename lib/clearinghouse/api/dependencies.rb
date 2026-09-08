@@ -37,6 +37,10 @@ module Clearinghouse
       const :idempotency_lock_timeout, Numeric, default: Idempotency::Runner::DEFAULT_LOCK_TIMEOUT
       # Called at every recovery point. DISARMED except in crash experiments.
       const :crash_hook, Idempotency::CrashHook, factory: -> { Idempotency::CrashHook::DISARMED }
+      # A Disputes::Service, for POST /v1/disputes/:id/close. Typed Object because api/
+      # loads before disputes/. nil until the events outbox and the payment lookup it
+      # needs are wired; the endpoint then answers 500 api_error and logs why.
+      const :disputes, T.nilable(Object), default: nil
       # Guards POST /v1/merchants. nil disables the endpoint.
       const :admin_token, T.nilable(String), default: nil
       # Renders responses at the caller's version. Tests may pass an engine with

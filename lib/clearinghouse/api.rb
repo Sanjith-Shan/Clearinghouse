@@ -23,6 +23,7 @@ require_relative 'api/routes/webhook_endpoints'
 require_relative 'api/routes/events'
 require_relative 'api/routes/payouts'
 require_relative 'api/routes/reviews'
+require_relative 'api/routes/disputes'
 require_relative 'api/app'
 
 module Clearinghouse

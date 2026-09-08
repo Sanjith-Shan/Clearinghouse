@@ -236,6 +236,7 @@ module Clearinghouse
       register Routes::Events
       register Routes::Payouts
       register Routes::Reviews
+      register Routes::Disputes
     end
   end
 end
