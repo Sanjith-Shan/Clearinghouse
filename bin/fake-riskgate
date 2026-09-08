@@ -1,0 +1,41 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# A fake RiskGate for experiments when the real Go service is not running. Speaks
+# POST /v1/assess and misbehaves on command; see sim/fake_riskgate/lib/fake_riskgate.rb.
+#
+#   bin/fake-riskgate [--port 4700] [--config file.json] [--latency 2,15] [--error-rate 0.1] [--hang]
+#
+# The config can be replaced at runtime with POST /admin/config (the same JSON).
+# {"crash": true} makes the next assess request kill the process with exit!, sockets
+# open, the way a crashed service looks from outside.
+
+require 'bundler/setup'
+require 'json'
+require 'optparse'
+require_relative '../sim/fake_riskgate/lib/fake_riskgate'
+
+options = { port: Integer(ENV.fetch('FAKE_RISKGATE_PORT', '4700')), host: '127.0.0.1' }
+overrides = {}
+OptionParser.new do |opts|
+  opts.on('--port PORT', Integer) { |v| options[:port] = v }
+  opts.on('--host HOST') { |v| options[:host] = v }
+  opts.on('--config FILE', 'JSON config, same shape as POST /admin/config') do |v|
+    overrides.merge!(JSON.parse(File.read(v)))
+  end
+  opts.on('--latency P50,P99', 'latency in ms') do |v|
+    p50, p99 = v.split(',').map { |x| Float(x) }
+    overrides['latency_ms'] = { 'p50' => p50, 'p99' => p99 || p50 }
+  end
+  opts.on('--error-rate RATE', Float) { |v| overrides['error_rate'] = v }
+  opts.on('--malformed-rate RATE', Float) { |v| overrides['malformed_rate'] = v }
+  opts.on('--hang') { overrides['hang'] = true }
+  opts.on('--seed N', Integer) { |v| overrides['seed'] = v }
+end.parse!
+
+server = FakeRiskgate::Server.new(port: options[:port], host: options[:host],
+                                  config: FakeRiskgate::Config.new(overrides),
+                                  on_crash: -> { exit!(1) })
+%w[INT TERM].each { |signal| trap(signal) { Thread.new { server.stop } } }
+warn "fake-riskgate listening on http://#{options[:host]}:#{server.port}"
+server.start.join
