@@ -13,6 +13,8 @@ require_relative 'payments/confirm'
 require_relative 'payments/capture'
 require_relative 'payments/cancel'
 require_relative 'payments/expiry'
+require_relative 'payments/refund'
+require_relative 'payments/balance'
 require_relative 'payments/operations'
 
 module Clearinghouse

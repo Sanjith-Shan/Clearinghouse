@@ -176,3 +176,35 @@ The illegal-transition table is also sent over HTTP: every request-triggered ill
 (confirm, capture, cancel) against an intent in that status, asserting the typed error, the
 same ledger, balance and event row counts before and after, the intent row unchanged, and
 no call to the acquirer.
+
+## Refunds
+
+`POST /v1/refunds` takes `payment_intent`, an optional `amount` (everything not yet refunded
+by default), `reason` and `metadata`. Its steps:
+
+1. `Refunds.reserve!` locks the intent, asks the table for `refund` (only `succeeded` has
+   it), checks the amount against `amount_received - amount_refunded`, inserts the refund
+   `pending`, and adds its amount to the intent's `amount_refunded`. This is the reservation.
+2. `Refunds.request` sends the acquirer refund with the refund's own id as the idempotency key.
+3. `Refunds.record!`: approved means `succeeded`, the refund flow posted under the `re_` id
+   (merchant available to `refund_clearing`, with a description naming the payment for
+   `bin/explain`), and `charge.refunded` with the charge. Refused means `failed` with the
+   acquirer's code as `failure_reason`, the reservation released, and `charge.refund.updated`.
+
+The reservation is the concurrency design. The intent is locked only for the reservation, not
+across the acquirer call, so a payment can have several refunds in flight. Because each one
+reserves under the row lock before the acquirer hears about it, in-flight refunds can never add
+up to more than was captured. `payment_intents_refunds_within_received` backs that up in the
+database. A spec fires ten concurrent 300-cent refunds at a 2000-cent payment. Six succeed,
+four are refused, and the acquirer's own books show exactly 1800 refunded.
+
+A refund whose acquirer call is unanswered stays `pending` with its reservation held. That is
+the safe direction: the acquirer may have refunded, so the money must not be offered to
+another refund.
+
+## Balance
+
+`GET /v1/balance` reads `merchant:<id>:available` and `:pending` from the ledger for every
+currency the merchant has accounts in (zero USD when there are none), in Stripe's shape. It
+is a read of `account_balances` with no lock. The payout work takes `balance_for_update`
+when it needs one.
