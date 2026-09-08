@@ -185,6 +185,7 @@ module Clearinghouse
       register Routes::Merchants
       register Routes::PaymentIntents
       register Routes::Refunds
+      register Routes::Payouts
     end
   end
 end

@@ -180,3 +180,18 @@ Balances::Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:
   # nil (nothing scheduled) for a zero net.
 Balances::Availability.release_due!(db, clock:) -> ReleaseReport   # the sweep; safe to run concurrently
 ```
+
+Payouts (`lib/clearinghouse/payouts.rb`):
+
+```ruby
+Payouts.create!(db, merchant_id:, currency:, bank:, clock:, amount: nil) -> Payout   # reserve! then drive!
+Payouts.reserve! / request_bank! / call_bank / record_bank!    # the atomic phases, in RECOVERY_POINTS order
+Payouts.drive!(db, payout_id, bank:, clock:) -> Payout         # runs the phases left, from payouts.recovery_point
+Payouts.resume_incomplete!(db, bank:, clock:)                  # completer stand-in
+Payouts.handle_notification(db, notification, clock:) -> :applied | :duplicate | :unknown_payout | :ignored
+  # for payout.paid / payout.failed; the notification poller calls it; idempotent
+Payouts.run_scheduled!(db, bank:, clock:) -> [Payout]          # daily sweep, after Availability.release_due!
+```
+
+Events go through `Balances::EventSink` (`emit!(db, merchant_id:, type:, object:, clock:)`), inside the
+state change's transaction; `Balances::EVENT_TYPES` lists them.
