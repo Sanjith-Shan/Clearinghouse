@@ -9,3 +9,7 @@ echo "== rubocop";  bundle exec rubocop
 echo "== migrate";  bin/migrate
 echo "== rspec";    bundle exec rspec
 if [ -d clients/go ]; then echo "== go test"; (cd clients/go && go test ./...); fi
+if [ -d sim/loadgen ]; then
+  echo "== loadgen vet"; (cd sim/loadgen && go vet ./...)
+  echo "== loadgen test"; (cd sim/loadgen && go test ./...)
+fi
