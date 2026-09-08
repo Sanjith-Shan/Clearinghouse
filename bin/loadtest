@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Builds and runs the open-loop load generator in sim/loadgen. No Ruby involved, so the
+# generator never competes with the server for a Ruby VM.
+#
+#   bin/loadtest run   -scenario healthz -rate 500 -duration 30s
+#   bin/loadtest sweep -scenario confirm -rates 25,50,100,200 -slo-p99 250ms -warmup 5s
+#   bin/loadtest scenarios
+#
+# With no -out, run and sweep write to results/raw/loadgen/<UTC timestamp>-<scenario>/.
+# Scenarios that need a merchant use $CLEARINGHOUSE_KEY, or create one with
+# $CLEARINGHOUSE_ADMIN_TOKEN. See docs/design/loadgen.md.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+bin="$root/tmp/loadgen"
+mkdir -p "$root/tmp"
+(cd "$root/sim/loadgen" && go build -o "$bin" ./cmd/loadgen)
+
+cmd="${1:-}"
+if [[ "$cmd" == "run" || "$cmd" == "sweep" ]] && [[ " $* " != *" -out "* && " $* " != *" -out="* ]]; then
+  scenario=healthz
+  args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[$i]}" in
+      -scenario) scenario="${args[$((i + 1))]:-healthz}" ;;
+      -scenario=*) scenario="${args[$i]#-scenario=}" ;;
+    esac
+  done
+  out="$root/results/raw/loadgen/$(date -u +%Y%m%dT%H%M%SZ)-$cmd-$scenario"
+  exec "$bin" "$@" -out "$out"
+fi
+exec "$bin" "$@"

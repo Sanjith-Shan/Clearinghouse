@@ -128,6 +128,7 @@ type Summary struct {
 	WarmupS         float64   `json:"warmup_s"`
 	MaxOutstanding  int       `json:"max_outstanding"`
 	LateThresholdMs float64   `json:"late_threshold_ms"`
+	SpinWindowMs    float64   `json:"spin_window_ms"`
 	Rate            Rates     `json:"rate"`
 
 	Planned     int64 `json:"planned"`
@@ -171,6 +172,7 @@ func Summarize(r *Result, meta Meta) Summary {
 		Seed: r.Config.Seed, DurationS: secs, WarmupS: meta.Warmup.Seconds(),
 		MaxOutstanding:  r.Config.MaxOutstanding,
 		LateThresholdMs: float64(r.Config.LateThreshold) / float64(time.Millisecond),
+		SpinWindowMs:    float64(r.Config.SpinWindow) / float64(time.Millisecond),
 		Rate: Rates{
 			Target:    r.Config.Rate,
 			Scheduled: round3(float64(r.Planned) / secs),

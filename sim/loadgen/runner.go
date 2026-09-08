@@ -3,6 +3,7 @@ package loadgen
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"time"
 
@@ -47,6 +48,10 @@ type Config struct {
 	// LateThreshold: a request sent more than this long after its intended time
 	// counts as late.
 	LateThreshold time.Duration
+	// SpinWindow is how long before each intended time the dispatcher stops sleeping
+	// and busy-waits. It costs up to a core at high rates and buys sub-millisecond
+	// send accuracy. Zero means sleep only.
+	SpinWindow time.Duration
 }
 
 func (c *Config) validate() error {
@@ -57,8 +62,8 @@ func (c *Config) validate() error {
 		return errors.New("duration must be positive")
 	case c.MaxOutstanding < 1:
 		return errors.New("max outstanding must be at least 1")
-	case c.DrainTimeout < 0 || c.LateThreshold < 0:
-		return errors.New("drain timeout and late threshold must not be negative")
+	case c.DrainTimeout < 0 || c.LateThreshold < 0 || c.SpinWindow < 0:
+		return errors.New("drain timeout, late threshold and spin window must not be negative")
 	}
 	return nil
 }
@@ -227,7 +232,7 @@ func Run(ctx context.Context, cfg Config, target Target) (*Result, error) {
 		}()
 	}
 
-	res.Planned, res.Interrupted = dispatch(ctx, sched, start, cfg.Duration, jobs)
+	res.Planned, res.Interrupted = dispatch(ctx, sched, start, cfg.Duration, cfg.SpinWindow, jobs)
 	close(jobs)
 	wg.Wait()
 	res.Elapsed = rec.lastEnd.Sub(start)
@@ -236,7 +241,7 @@ func Run(ctx context.Context, cfg Config, target Target) (*Result, error) {
 
 // dispatch puts each request on the queue at its intended time. It never waits for a
 // response: that is what makes the load open loop.
-func dispatch(ctx context.Context, sched Schedule, start time.Time, window time.Duration, jobs chan<- job) (int64, bool) {
+func dispatch(ctx context.Context, sched Schedule, start time.Time, window, spin time.Duration, jobs chan<- job) (int64, bool) {
 	timer := time.NewTimer(time.Hour)
 	timer.Stop()
 	defer timer.Stop()
@@ -247,13 +252,19 @@ func dispatch(ctx context.Context, sched Schedule, start time.Time, window time.
 			return n, false
 		}
 		intended := start.Add(off)
-		if wait := time.Until(intended); wait > 0 {
+		// Sleep until just before the intended time, then spin the rest. A timer
+		// alone wakes up late by up to a millisecond or more when the process has been
+		// idle, and that lateness lands in every response time.
+		if wait := time.Until(intended) - spin; wait > 0 {
 			timer.Reset(wait)
 			select {
 			case <-timer.C:
 			case <-ctx.Done():
 				return n, true
 			}
+		}
+		for time.Now().Before(intended) {
+			runtime.Gosched()
 		}
 		select {
 		case jobs <- job{i: n, intended: intended}:
