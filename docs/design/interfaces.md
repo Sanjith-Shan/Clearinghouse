@@ -168,3 +168,28 @@ direction. Shared vectors live in `spec/fixtures/signatures.json` in RiskGate's 
 headers `RiskGate-Deadline-Ms` and `Idempotency-Key: <payment_id>:<attempt>`. Response
 `{assessment_id, decision: allow | block | review, risk_score, matched_rule, reasons, ruleset_version}`.
 Non-200 or timeout is `risk_unavailable` and the payment proceeds (fail open).
+
+As built (M6, `lib/clearinghouse/risk/`):
+
+```ruby
+Risk::Client#assess(AssessRequest, attempt:) -> Assessment | Unavailable(reason:, detail:, status:)
+  # reason: timeout | breaker_open | http_status | malformed | connection. Never raises for
+  # anything RiskGate or the network does. RISKGATE_URL (default http://127.0.0.1:8080),
+  # RISKGATE_DEADLINE_MS (default 50). One per process: Risk.client.
+Risk::Decision.apply(result) -> Verdict(action: Proceed | Block, risk: Hash, hold:, error:)
+Risk::Step.call(intent_attrs, attempt:, clock:) -> Outcome(verdict, result, elapsed_ms, assessed_at)
+  # intent_attrs: {id:, amount:, currency:, created_at:, risk_fields:}. Runs outside any
+  # DB transaction, between intent_locked and authorization_requested.
+Risk::Step.hold_on_capture!(db, risk:, merchant_id:, payment_intent_id:, amount_captured:, clock:)
+  # Inside the capture transaction. Opens a hold through Risk.holds when risk is review.
+Risk::Holds#open_hold!(db, merchant_id:, payment_intent_id:, amount:, reason: "risk_review", clock:)
+```
+
+- `created` is the intent's `created_at` in unix seconds, so a retry under the same key sends
+  the same body (RiskGate answers 422 to a reused key with a different body).
+- `risk_fields` is passed through verbatim. RiskGate rejects unknown keys with 400.
+- `ruleset_version` arrives as a number from RiskGate and is stored as a string.
+- The intent's `risk` column is `{decision, score, reasons, assessment_id, ruleset_version}`
+  or `{decision: "risk_unavailable", reason}`.
+- The integration steps for confirm are in `risk-integration.md`, "Where the step sits in confirm".
+
