@@ -26,6 +26,7 @@ module Clearinghouse
       'payout' => 'po',
       'reconciliation_exception' => 'rex',
       'refund' => 're',
+      'review' => 'prv',
       'request' => 'req',
       'secret_key' => 'sk_test',
       'webhook_delivery' => 'whd',

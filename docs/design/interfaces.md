@@ -195,3 +195,12 @@ Payouts.run_scheduled!(db, bank:, clock:) -> [Payout]          # daily sweep, af
 
 Events go through `Balances::EventSink` (`emit!(db, merchant_id:, type:, object:, clock:)`), inside the
 state change's transaction; `Balances::EVENT_TYPES` lists them.
+
+Risk-review holds (`lib/clearinghouse/balances/holds.rb`):
+
+```ruby
+Balances::Holds.open_hold!(db, flow_id:, merchant_id:, amount:, reason:, clock:) -> Hold   # RiskGate said review
+Balances::Holds.close_hold!(db, id, merchant_id:, decision: :approve | :reject, clock:) -> Hold
+Balances::Holds.release_after_refund!(db, flow_id:, clock:)   # refunds call this where they post Flows.refund
+Balances::RefundRequester#request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id   # payments implements
+```

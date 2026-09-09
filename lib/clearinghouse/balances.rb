@@ -12,5 +12,7 @@ module Clearinghouse
 end
 
 require_relative 'balances/event_sink'
+require_relative 'balances/refund_requester'
 require_relative 'balances/availability'
+require_relative 'balances/holds'
 require_relative 'payouts'
