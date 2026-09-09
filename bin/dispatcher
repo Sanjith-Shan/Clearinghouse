@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Fans new events out to webhook deliveries, in a loop. See
+# lib/clearinghouse/webhooks/dispatcher.rb for how the cursor stays correct when
+# events commit out of order. Several can run; they take turns on the cursor row.
+#
+#   bin/dispatcher --interval 0.1
+require 'bundler/setup'
+require 'optparse'
+require_relative '../lib/clearinghouse'
+
+options = { interval: 0.1, batch: 500 }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/dispatcher [options]'
+  opts.on('--interval SECONDS', Float, 'sleep between idle passes (default 0.1)') { |v| options[:interval] = v }
+  opts.on('--batch N', Integer, 'events per pass (default 500)') { |v| options[:batch] = v }
+end.parse!
+
+$stdout.sync = true
+db = Clearinghouse::DB.connect(role: :app, max_connections: 2)
+dispatcher = Clearinghouse::Webhooks::Dispatcher.new(db: db, clock: Clearinghouse::Clock::Real.new,
+                                                     batch_size: options[:batch])
+stopping = false
+%w[TERM INT].each { |signal| trap(signal) { stopping = true } }
+warn "dispatcher #{Process.pid}"
+until stopping
+  begin
+    pass = dispatcher.run_once
+    sleep(options[:interval]) if pass.scanned < options[:batch]
+  rescue Sequel::DatabaseError, Sequel::DatabaseConnectionError => e
+    warn "dispatcher: #{e.class}: #{e.message}"
+    sleep(options[:interval] * 10)
+  end
+end
