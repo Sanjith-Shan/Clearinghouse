@@ -39,6 +39,13 @@ module Clearinghouse
         ctx.db.transaction { Cancel.record!(ctx.db, ctx, input) }
       end
 
+      sig { params(ctx: Api::Context, input: Refunds::Input).returns(Refund) }
+      def self.refund(ctx, input)
+        refund = ctx.db.transaction { Refunds.reserve!(ctx.db, ctx, input) }
+        outcome = definite!(Refunds.request(ctx, refund))
+        ctx.db.transaction { Refunds.record!(ctx.db, ctx, refund.id, outcome) }
+      end
+
       # The outcome if the acquirer gave a definite answer; otherwise a retryable
       # 503 and the intent stays where it is.
       sig do

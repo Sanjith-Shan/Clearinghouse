@@ -15,6 +15,7 @@ require_relative 'api/auth'
 require_relative 'api/routes/health'
 require_relative 'api/routes/merchants'
 require_relative 'api/routes/payment_intents'
+require_relative 'api/routes/refunds'
 require_relative 'api/app'
 
 module Clearinghouse
