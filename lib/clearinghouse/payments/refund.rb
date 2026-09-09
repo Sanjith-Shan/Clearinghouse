@@ -148,16 +148,21 @@ module Clearinghouse
         raise Clearinghouse::Error, "refund #{refund.id} is already #{refund.status}" unless refund.status == 'pending'
 
         if outcome.is_a?(Acquirer::Approved)
-          mark_succeeded(db, ctx, refund,
-                         intent)
+          mark_succeeded(db, ctx, refund, intent, outcome.operation.id)
         else
           mark_failed(db, ctx, refund, intent, outcome)
         end
       end
 
-      sig { params(db: Sequel::Database, ctx: Api::Context, refund: Refund, intent: PaymentIntent).returns(Refund) }
-      def self.mark_succeeded(db, ctx, refund, intent)
+      # Keeps the acquirer's operation id: it is the refund's settlement line's
+      # operation_id, which is how the reconciler finds this refund.
+      sig do
+        params(db: Sequel::Database, ctx: Api::Context, refund: Refund, intent: PaymentIntent,
+               operation_id: String).returns(Refund)
+      end
+      def self.mark_succeeded(db, ctx, refund, intent, operation_id)
         done = update(db, ctx, refund, status: 'succeeded')
+        db[:refunds].where(id: refund.id).update(acquirer_operation_id: operation_id)
         # The description names the payment: bin/explain links related flows by it
         # (docs/design/interfaces.md).
         Ledger.post!(db, flow_type: Ledger::Flows::REFUND, flow_id: refund.id,

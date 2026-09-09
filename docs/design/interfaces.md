@@ -245,3 +245,17 @@ not commit; its effects commit with the notification's `processed_notifications`
 cursor. Dispute object: `{id: "dp_...", object: "dispute", payment_intent, amount, currency,
 reason, status: needs_response | won | lost, fee, created, livemode}`. See
 `docs/design/disputes.md`.
+
+## Reconciliation (`lib/clearinghouse/reconciliation/`)
+
+```ruby
+PaymentLookup.refund_by_acquirer_operation(db, operation_id) -> Refund(id, payment_intent, merchant_id, currency) | nil
+Reconciliation::Ingestor#ingest(date) -> Result(status, outcomes, exceptions, pending_matched)
+Reconciliation::Ingestor#match_pending -> Integer
+Reconciliation::Exceptions.resolve!(db, id, action: none | write_off | reverse, note:, clock:, ledger_transaction: nil)
+```
+
+`refunds.acquirer_operation_id` (set when the acquirer approves the refund) is how a refund's
+settlement line finds it. Exception
+reasons: `missing`, `duplicate`, `amount_mismatch`, `fee_mismatch`, `late`, `unknown_payment`.
+See `docs/design/reconciliation.md`.
