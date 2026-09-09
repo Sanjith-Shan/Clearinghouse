@@ -99,8 +99,9 @@ available balance even if that takes it below zero. We don't refuse the dispute,
 card network has already decided it. The negative balance is carried: the merchant owes us.
 The next captures pay it down on their own, because `funds_available` credits the same
 account. **Payouts are blocked while the available balance is zero or negative.** The payout
-code (M4) has to read the balance with `Ledger.balance_for_update`, which locks the row, so a
-concurrent dispute cannot slip in between the check and the payout. The spec also mentions debiting a
+code (M4) reads the balance with `Ledger.balance_for_update`, which locks the row, so a
+concurrent dispute cannot slip in between the check and the payout. `docs/design/payouts.md`
+has the worked example and the specs. The spec also mentions debiting a
 reserve before going negative. There is no reserve in M1. `merchant:<id>:held` exists for M6's
 review holds, and a rolling reserve would be the same account with a release date.
 

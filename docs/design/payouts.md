@@ -355,3 +355,69 @@ without a refund. Wiring it:
 3. Point `DEFAULT_REFUNDS` at the implementation.
 
 `spec/support/balances.rb` (`StandInRefunds`) does exactly this, which is what the specs run.
+
+## Negative balances
+
+The policy was set in `docs/design/ledger.md`. This is how it plays out with payouts. Specs
+are in `spec/payouts/negative_balance_spec.rb`, which posts disputes and refunds at the ledger
+level through `Ledger::Flows`, the way the disputes and payments areas will.
+
+**A dispute or refund may take available below zero.** The card network has already
+decided a dispute, and a refund the merchant asked for is owed to the cardholder. Refusing
+either because the merchant's balance is low would only move the loss to us. The debit is
+posted in full, and the negative balance is a debt the merchant owes the platform.
+
+**Payouts are blocked while available is zero or negative.** `reserve!` checks
+`available.positive?` under the balance row lock, and otherwise raises
+`BalanceInsufficientError` (API: `balance_insufficient`). The automatic sweep only looks at
+positive balances, and re-checks under the lock.
+
+**Later captures pay the debt down on their own.** Availability credits the same
+`merchant available` account, so each release reduces the debt before anything becomes
+payable. Nothing tracks the debt separately, because the balance *is* the debt.
+
+**Held money does not pay it down.** Money under review stays in `held` until the review is
+approved, like any other money. Approval moves it to available, and at that point it
+covers the debt first.
+
+Worked example, from the first spec (fee 2.9% + 30c, dispute fee $15.00):
+
+| Step | Entries | Available after | Payout? |
+|---|---|---|---|
+| $100 captured and released | Dr pending 96.80 / Cr available 96.80 | 96.80 | yes |
+| Payout of everything | Dr available 96.80 / Cr payout_clearing 96.80 | 0.00 | blocked at zero |
+| Dispute $100 opened | Dr available 100.00, Dr available 15.00 / Cr dispute_clearing 100.00, Cr dispute_fee_revenue 15.00 | -115.00 | blocked |
+| $100 captured and released | Dr pending 96.80 / Cr available 96.80 | -18.20 | blocked |
+| $50 captured and released | Dr pending 48.25 / Cr available 48.25 | 30.05 | yes, 30.05 and no more |
+
+A refund past the balance works the same way (Dr available / Cr refund_clearing), and so
+does a review opened after its money was paid out (Dr available / Cr held).
+
+**Racing a dispute.** The dispute's posting updates the same `account_balances` row that
+`reserve!` locks, so a payout and a dispute on one merchant serialize. Either the payout
+goes first and the dispute then takes the balance negative, or the dispute goes first and
+the payout sees only what is left. A spec runs the two at once and checks that the result
+is one of those two outcomes. It can't tell "decided on a stale balance" apart from "went
+first", so the proof that the lock matters is the 12-thread payout spec above.
+
+**What is not built.** The spec mentions debiting a reserve before going negative. There is
+no rolling reserve. It would be a fourth merchant account that a share of each capture is
+released into, with its own `available_on`, and the availability sweep already has the
+shape for it. Nothing writes off a debt that is never repaid either (`platform:dispute_losses`
+exists for that). Both are policy decisions for a real platform, and nothing in M4 or M6
+depends on them.
+
+## Running it
+
+Everything here is driven by the clock, and the order matters:
+
+1. `Availability.release_due!`: due money to available, or to held under review.
+2. `Payouts.run_scheduled!`: today's automatic payouts, which see what step 1 released.
+3. `Payouts.resume_incomplete!`: payouts whose request stopped mid-way.
+4. The notification poller (disputes area) calls `Payouts.handle_notification` for each
+   `payout.paid` and `payout.failed`.
+
+Each step is idempotent, so re-running it after a crash is safe. Steps 1 and 2 also have
+specs that run several copies at once. Steps 3 and 4 rely on the payout row lock and the
+recovery point checks for that. Something has to call them on a schedule. That is the worker the
+coordinator wires up (or `bin/demo`), not this area.
