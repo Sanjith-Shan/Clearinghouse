@@ -221,6 +221,29 @@ module Clearinghouse
         def retry_hint = RetryHint::Unknown
       end
 
+      # The acquirer did not answer, so we do not know yet whether the card was
+      # charged (or it answered that it could not take the request). Nothing has
+      # failed: the payment stays where it was and resumes on retry. A 503, not a
+      # 500, because it is not our bug. Retrying is safe exactly when a 500 would
+      # be (see Errors.retry_header): with an Idempotency-Key the retry resumes the
+      # same attempt instead of starting another.
+      class AcquirerUnavailableError < Base
+        sig { params(detail: String).void }
+        def initialize(detail = 'The card network did not answer in time.')
+          super("#{detail} The payment has not failed; retry the request with the same Idempotency-Key.",
+                code: 'acquirer_unavailable')
+        end
+
+        sig { override.returns(String) }
+        def type = 'api_error'
+
+        sig { override.returns(Integer) }
+        def http_status = 503
+
+        sig { override.returns(RetryHint) }
+        def retry_hint = RetryHint::Unknown
+      end
+
       SAFE_METHODS = %w[GET HEAD OPTIONS].freeze
 
       # The Clearinghouse-Should-Retry value for an error, or nil to omit the header.

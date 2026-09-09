@@ -183,6 +183,7 @@ module Clearinghouse
 
       register Routes::Health
       register Routes::Merchants
+      register Routes::PaymentIntents
     end
   end
 end

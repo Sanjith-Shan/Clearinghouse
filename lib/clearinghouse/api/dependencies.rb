@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require 'stringio'
+require_relative '../acquirer'
 
 module Clearinghouse
   module Api
@@ -17,8 +18,12 @@ module Clearinghouse
 
       const :db, Sequel::Database
       const :clock, Clock
-      # The acquirer simulator client. Narrow this to the client's class once it exists.
-      const :acquirer, T.nilable(Object), default: nil
+      # The acquirer. Specs pass a client for an in-process simulator, or a subclass
+      # of the client that injects faults. nil only in apps that never move money.
+      const :acquirer, T.nilable(Acquirer::Client), default: nil
+      # How long an authorization can wait for capture before the expiry sweep
+      # cancels it, in simulated days. Card networks allow about a week.
+      const :authorization_ttl_days, Integer, default: 7
       # Guards POST /v1/merchants. nil disables the endpoint.
       const :admin_token, T.nilable(String), default: nil
       # Renders responses at the caller's version. Tests may pass an engine with
@@ -29,9 +34,11 @@ module Clearinghouse
 
       sig { returns(Dependencies) }
       def self.from_env
+        clock = Clock::Real.new
         new(
           db: DB.connect(role: :app, max_connections: Integer(ENV.fetch('CLEARINGHOUSE_DB_POOL', '10'), 10)),
-          clock: Clock::Real.new,
+          clock: clock,
+          acquirer: Acquirer::Client.new(clock: clock),
           admin_token: ENV.fetch('CLEARINGHOUSE_ADMIN_TOKEN', nil),
           log: $stdout
         )
