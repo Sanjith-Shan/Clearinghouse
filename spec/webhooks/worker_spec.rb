@@ -179,6 +179,39 @@ RSpec.describe Clearinghouse::Webhooks::Worker, :db do
     end
   end
 
+  describe 'the circuit breaker' do
+    it 'opens after consecutive failures, logs it, and closes on the next success' do
+      hook = endpoint
+      3.times { emit_and_dispatch }
+      statuses.push(500, 500, 500)
+      log = StringIO.new
+      breaker = Clearinghouse::Webhooks::CircuitBreaker.new(failure_threshold: 3, cooldown: 30.0)
+      queue = Clearinghouse::Webhooks::IsolatedQueue.new(max_in_flight: 1, breaker: breaker)
+      isolated = WebhookSpecHelpers.worker(app_db, clock: clock, queue: queue, log: log, name: 'w')
+      3.times do
+        expect(isolated.work_once.state).to eq(:retrying)
+        clock.advance(61)
+      end
+      row = app_db[:webhook_endpoints].where(id: hook.id).first
+      expect(row).to include(breaker_state: 'open', consecutive_failures: 3)
+      expect(log.string).to include(%("breaker":"#{hook.id}","from":"closed","to":"open"))
+
+      clock.advance_to([row[:breaker_retry_at], clock.now].max)
+      expect(isolated.work_once.state).to eq(:succeeded)
+      expect(app_db[:webhook_endpoints].where(id: hook.id).get(:breaker_state)).to eq('closed')
+      expect(log.string).to include('"from":"half_open","to":"closed"')
+    end
+
+    it 'leaves the breaker alone under the FIFO baseline' do
+      hook = endpoint
+      emit_and_dispatch
+      statuses.push(500)
+      WebhookSpecHelpers.worker(app_db, clock: clock, queue: Clearinghouse::Webhooks::FifoQueue.new).work_once
+      expect(app_db[:webhook_endpoints].where(id: hook.id).first).to include(breaker_state: 'closed',
+                                                                             consecutive_failures: 0)
+    end
+  end
+
   describe 'claims and leases' do
     it 'never hands a leased delivery to a second worker until the lease expires' do
       endpoint

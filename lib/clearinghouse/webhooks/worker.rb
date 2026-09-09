@@ -45,7 +45,7 @@ module Clearinghouse
                rng: Random, lease_seconds: Numeric, versioning: Versioning::Engine, name: String,
                log: T.nilable(T.any(IO, StringIO))).void
       end
-      def initialize(db:, clock:, http:, queue: FifoQueue.new, retry_policy: RetryPolicy.new, rng: Random.new,
+      def initialize(db:, clock:, http:, queue: IsolatedQueue.new, retry_policy: RetryPolicy.new, rng: Random.new,
                      lease_seconds: 60, versioning: Versioning.engine, name: "worker-#{SecureRandom.hex(4)}",
                      log: nil)
         @db = db
@@ -153,6 +153,7 @@ module Clearinghouse
           last_status: outcome.status, last_error: nil, last_duration_ms: duration_ms
         )
         EndpointHealth.success(@db, claim.endpoint_id)
+        note_breaker(breaker_success(claim.endpoint_id))
         :succeeded
       end
 
@@ -177,7 +178,11 @@ module Clearinghouse
         changes.merge!(next_at ? { next_attempt_at: next_at } : { status: 'failed', failed_at: now })
         owned = @db[:webhook_deliveries].where(id: claim.delivery_id, status: 'pending',
                                                lease_token: claim.lease_token).update(changes)
-        health = failed.endpoint_at_fault ? EndpointHealth.failure(@db, claim.endpoint_id, clock: @clock) : nil
+        health = nil
+        if failed.endpoint_at_fault
+          note_breaker(breaker_failure(claim.endpoint_id, now))
+          health = EndpointHealth.failure(@db, claim.endpoint_id, clock: @clock)
+        end
         disabled = health == :disabled
         return :lease_lost if owned.zero?
 
@@ -224,6 +229,25 @@ module Clearinghouse
         when Egress::Outcome::Blocked then "blocked: #{outcome.reason}: #{outcome.detail}"[0, 500]
         else T.absurd(outcome)
         end
+      end
+
+      sig { params(endpoint_id: String).returns(T.nilable(Breakers::Transition)) }
+      def breaker_success(endpoint_id)
+        @queue.breaker ? Breakers.success(@db, endpoint_id) : nil
+      end
+
+      sig { params(endpoint_id: String, now: Time).returns(T.nilable(Breakers::Transition)) }
+      def breaker_failure(endpoint_id, now)
+        breaker = @queue.breaker
+        breaker ? Breakers.failure(@db, endpoint_id, breaker, now: now) : nil
+      end
+
+      sig { params(transition: T.nilable(Breakers::Transition)).void }
+      def note_breaker(transition)
+        return unless transition && @log
+
+        @log.puts(JSON.generate({ 'worker' => @name, 'breaker' => transition.endpoint_id, 'from' => transition.from,
+                                  'to' => transition.to, 'at' => @clock.now.utc.iso8601(3) }))
       end
 
       sig { params(result: Result, claim: Claim).void }
