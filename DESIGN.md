@@ -36,6 +36,7 @@ The design is built from public engineering writing, credited here.
 - [Client library](docs/design/client.md): the Ruby client, and why it reuses one idempotency key across every retry of a call.
 - [bin/explain](docs/design/explain.md): a readable trace of every ledger entry behind a payment, refund, dispute or payout.
 - [Load generator](docs/design/loadgen.md): open-loop load at fixed rates, latency from the intended send time (coordinated omission), scenarios and rate sweeps.
+- [RiskGate integration](docs/design/risk-integration.md): the deadline, keep-alive pool and circuit breaker, fail-open and what it costs, review holds on payouts, and where the risk step sits in confirm.
 
 ## Bugs the harness caught
 
