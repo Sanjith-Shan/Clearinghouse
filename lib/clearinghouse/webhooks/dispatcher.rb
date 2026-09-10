@@ -15,17 +15,22 @@ module Clearinghouse
     # 1. Each pass fans out every event visible above the cursor. Fan-out is idempotent
     #    (UNIQUE (event_id, endpoint_id), ON CONFLICT DO NOTHING), so scanning an event
     #    twice is harmless and nothing waits on the cursor to be delivered.
-    # 2. In the same statement it records a barrier: the highest seq it saw, and the
-    #    snapshot's xmax, the first transaction id not yet started.
-    # 3. A later pass moves the cursor to the barrier once pg_snapshot_xmin of a fresh
-    #    snapshot is at or past that xmax: every transaction that was running when the
-    #    barrier was taken has committed or rolled back, so every seq at or below the
-    #    barrier is final, and the scan in that same pass has seen all of them.
+    # 2. After the scan it records a barrier: the highest seq it saw, and the virtual
+    #    transaction ids of every transaction then holding a write lock on `events`.
+    #    An INSERT takes that lock when it opens the table, before its seq default is
+    #    evaluated, and keeps it until commit or rollback. So any transaction that drew
+    #    a seq at or below the barrier and had not committed by the scan is on the list.
+    # 3. A later pass moves the cursor to the barrier once none of those transactions
+    #    is running (pg_locks has no virtualxid lock for any of them). By then every seq
+    #    at or below the barrier is committed or rolled back, and that pass's own scan,
+    #    which runs after the check, has seen all of them.
     #
-    # This needs each event's transaction to hold a transaction id before it draws its
-    # seq, which Events.emit! ensures with pg_current_xact_id(). A rolled-back seq
-    # leaves a gap that is simply passed over. A transaction left open for an hour holds
-    # the cursor back for an hour, which costs rescanning, not correctness.
+    # A rolled-back seq leaves a gap that is simply passed over. A writer left open for
+    # an hour holds the cursor back for an hour, which costs rescanning, not
+    # correctness. It relies on the events seq having CACHE 1 (the bigserial default),
+    # so that seqs are drawn in order across sessions. docs/design/webhooks.md has the
+    # first version, which used the snapshot's xmin and stalled on transactions in
+    # other databases.
     #
     # Only one dispatcher does a pass at a time (the cursor row is locked), and a pass
     # is one short transaction. Several dispatcher processes are safe, just not faster.
@@ -48,9 +53,7 @@ module Clearinghouse
       end
 
       # The next batch of events above the cursor, each joined to the endpoints that
-      # should receive it (or to NULL if none should, so the seq still counts as seen),
-      # and the snapshot's xmax, read in the same statement so it describes exactly
-      # the snapshot the batch was read with.
+      # should receive it (or to NULL if none should, so the seq still counts as seen).
       SCAN_SQL = <<~SQL
         WITH batch AS (
           SELECT id, merchant_id, type, created_at, seq
@@ -59,8 +62,7 @@ module Clearinghouse
           ORDER BY seq
           LIMIT :limit
         )
-        SELECT b.seq, b.id AS event_id, b.created_at AS event_created_at, e.id AS endpoint_id,
-               pg_snapshot_xmax(pg_current_snapshot())::text AS xmax
+        SELECT b.seq, b.id AS event_id, b.created_at AS event_created_at, e.id AS endpoint_id
         FROM batch b
         LEFT JOIN webhook_endpoints e
           ON e.merchant_id = b.merchant_id
@@ -71,17 +73,35 @@ module Clearinghouse
         ORDER BY b.seq
       SQL
 
-      # Where the cursor may move once every transaction older than xmax has ended.
+      # Every transaction in this database holding a write lock on events right now.
+      # pg_locks is cluster-wide, so the database is part of the filter.
+      WRITERS_SQL = <<~SQL
+        SELECT coalesce(array_agg(DISTINCT virtualtransaction), '{}')::text AS writers
+        FROM pg_locks
+        WHERE locktype = 'relation' AND mode = 'RowExclusiveLock' AND granted
+          AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+          AND relation = 'events'::regclass
+      SQL
+
+      # True when none of the barrier's writers is still running. Every transaction
+      # holds an ExclusiveLock on its own virtual transaction id until it ends.
+      STILL_WRITING_SQL = <<~SQL
+        SELECT EXISTS (
+          SELECT 1 FROM pg_locks WHERE locktype = 'virtualxid' AND virtualxid = ANY(CAST(:writers AS text[]))
+        ) AS running
+      SQL
+
+      # Where the cursor may move once every transaction in `writers` has ended.
+      # `writers` is a Postgres text[] literal of virtual transaction ids.
       class Barrier < T::Struct
         const :seq, Integer
-        const :xmax, String
+        const :writers, String
       end
 
-      # What a scan found: how many events, the highest seq, and the snapshot xmax.
+      # What a scan found: how many events, and the highest seq.
       class Scan < T::Struct
         const :scanned, Integer
         const :high, T.nilable(Integer)
-        const :xmax, T.nilable(String)
       end
 
       sig do
@@ -104,8 +124,7 @@ module Clearinghouse
           passed = barrier_passed?(state)
           rows = @db.fetch(SCAN_SQL, cursor: state[:cursor_seq], limit: @batch_size).all
           created = fan_out(rows, now)
-          scan = Scan.new(scanned: rows.map { |row| row[:seq] }.uniq.length, high: rows.last&.fetch(:seq),
-                          xmax: rows.first&.fetch(:xmax))
+          scan = Scan.new(scanned: rows.map { |row| row[:seq] }.uniq.length, high: rows.last&.fetch(:seq))
           cursor = advance(state, scan, passed)
           Pass.new(scanned: scan.scanned, created: created, cursor: cursor, expired: expire_overdue(now))
         end
@@ -131,14 +150,11 @@ module Clearinghouse
         @db[:webhook_dispatch_cursors].where(name: @name).for_update.first.to_h
       end
 
-      # True when every transaction that was running when the barrier was set has
-      # ended. Our own transaction started after the barrier was stored, so its id is
-      # at or past barrier_xmax and cannot hold the comparison back.
       sig { params(state: T::Hash[Symbol, T.untyped]).returns(T::Boolean) }
       def barrier_passed?(state)
         return false if state[:barrier_seq].nil?
 
-        @db.get(Sequel.lit('pg_snapshot_xmin(pg_current_snapshot()) >= ?::xid8', state[:barrier_xmax].to_s)) == true
+        !@db.fetch(STILL_WRITING_SQL, writers: state[:barrier_writers].to_s).first&.fetch(:running)
       end
 
       # Inserts a delivery for every (event, endpoint) pair that does not have one yet.
@@ -162,8 +178,7 @@ module Clearinghouse
       def advance(state, scan, passed)
         cursor = state[:cursor_seq].to_i
         barrier = if state[:barrier_seq]
-                    Barrier.new(seq: state[:barrier_seq].to_i,
-                                xmax: state[:barrier_xmax].to_s)
+                    Barrier.new(seq: state[:barrier_seq].to_i, writers: state[:barrier_writers].to_s)
                   end
         if passed && barrier
           cursor = reachable(barrier.seq, scan)
@@ -172,10 +187,12 @@ module Clearinghouse
         # Keep an existing barrier until it passes rather than moving it forward, or a
         # steady stream of new transactions could keep pushing it out of reach.
         high = scan.high
-        barrier = Barrier.new(seq: high, xmax: T.must(scan.xmax)) if barrier.nil? && high && high > cursor
+        if barrier.nil? && high && high > cursor
+          barrier = Barrier.new(seq: high, writers: @db.fetch(WRITERS_SQL).first&.fetch(:writers).to_s)
+        end
         @db[:webhook_dispatch_cursors].where(name: @name).update(
           cursor_seq: cursor, barrier_seq: barrier&.seq, updated_at: @clock.now,
-          barrier_xmax: barrier && Sequel.cast(barrier.xmax, :xid8)
+          barrier_writers: barrier && Sequel.cast(barrier.writers, 'text[]')
         )
         cursor
       end

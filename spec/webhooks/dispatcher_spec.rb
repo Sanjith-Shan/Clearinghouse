@@ -77,7 +77,7 @@ RSpec.describe Clearinghouse::Webhooks::Dispatcher, :db do
     3.times { emit }
     dispatcher.run_until_idle
     count = app_db[:webhook_deliveries].count
-    app_db[:webhook_dispatch_cursors].update(cursor_seq: 0, barrier_seq: nil, barrier_xmax: nil)
+    app_db[:webhook_dispatch_cursors].update(cursor_seq: 0, barrier_seq: nil, barrier_writers: nil)
     dispatcher.run_until_idle
     described_class.new(db: app_db, clock: clock, name: 'second').run_until_idle
     expect(app_db[:webhook_deliveries].count).to eq(count).and eq(3)
@@ -135,6 +135,32 @@ RSpec.describe Clearinghouse::Webhooks::Dispatcher, :db do
       expect(seq_of(slow_id)).to be < seq_of(fast_id)
       run_until_cursor(seq_of(fast_id))
       expect(pairs.map(&:first)).to contain_exactly(fast_id, slow_id)
+    end
+
+    it 'is not held back by a long transaction in another database' do
+      # The first version waited for pg_snapshot_xmin, which is cluster-wide, and a
+      # DROP DATABASE stuck in another test database stalled the cursor for minutes.
+      elsewhere = Clearinghouse::DB.connect(role: :owner, database: 'postgres', max_connections: 1)
+      holding = Thread::Queue.new
+      release = Thread::Queue.new
+      holder = Thread.new do
+        elsewhere.transaction do
+          elsewhere.get(Sequel.function(:pg_current_xact_id))
+          holding << true
+          release.pop
+        end
+      end
+      holding.pop
+      begin
+        endpoint
+        kept = emit
+        run_until_cursor(seq_of(kept), timeout: 3)
+        expect(cursor).to eq(seq_of(kept))
+      ensure
+        release << true
+        holder.join
+        elsewhere.disconnect
+      end
     end
 
     it 'passes over the gap a rolled-back event leaves' do

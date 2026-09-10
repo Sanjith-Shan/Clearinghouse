@@ -49,15 +49,16 @@ Sequel.migration do
       CREATE INDEX webhook_deliveries_endpoint ON webhook_deliveries (endpoint_id, created_at);
 
       -- One row per dispatcher. cursor_seq: every event at or below it has been fanned
-      -- out. barrier_seq/barrier_xmax: the next place the cursor may move to, once every
-      -- transaction that was running when it was set has finished.
+      -- out. barrier_seq: the next place the cursor may move to, once every transaction
+      -- in barrier_writers (the virtual transaction ids that were writing to events
+      -- when it was set) has finished.
       CREATE TABLE webhook_dispatch_cursors (
-        name         text PRIMARY KEY,
-        cursor_seq   bigint NOT NULL DEFAULT 0,
-        barrier_seq  bigint,
-        barrier_xmax xid8,
-        updated_at   timestamptz,
-        CHECK ((barrier_seq IS NULL) = (barrier_xmax IS NULL)),
+        name            text PRIMARY KEY,
+        cursor_seq      bigint NOT NULL DEFAULT 0,
+        barrier_seq     bigint,
+        barrier_writers text[],
+        updated_at      timestamptz,
+        CHECK ((barrier_seq IS NULL) = (barrier_writers IS NULL)),
         CHECK (barrier_seq IS NULL OR barrier_seq > cursor_seq)
       );
 
