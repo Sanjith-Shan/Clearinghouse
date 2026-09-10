@@ -1,0 +1,413 @@
+{
+  "experiment": "exp9-risk-failure (client level)",
+  "machine": "Apple M3 Pro, 12 cores, 18 GB",
+  "ruby": "ruby 3.3.12 (2026-07-16 revision 0581089df9) [arm64-darwin25]",
+  "target": "fake-riskgate",
+  "plan": {
+    "rate": 100.0,
+    "healthy": 10.0,
+    "down": 10.0,
+    "after": 10.0,
+    "mode": "freeze",
+    "deadline_ms": 50,
+    "workers": 32
+  },
+  "calls": 3000,
+  "completed": 3000,
+  "unchecked": 1038,
+  "unchecked_by_reason": {
+    "breaker_open": 1020,
+    "timeout": 18
+  },
+  "decisions": {
+    "allow": 1084,
+    "block": 233,
+    "review": 645,
+    "risk_unavailable": 1038
+  },
+  "timeline": {
+    "fault_at": 10.005,
+    "restart_at": 20.005,
+    "first_checked_after_restart": 20.357
+  },
+  "breaker_transitions": [
+    {
+      "t": 10.103,
+      "from": "closed",
+      "to": "open",
+      "why": "5 consecutive failures"
+    },
+    {
+      "t": 12.113,
+      "from": "open",
+      "to": "half_open",
+      "why": "cool-down elapsed"
+    },
+    {
+      "t": 12.163,
+      "from": "half_open",
+      "to": "open",
+      "why": "probe failed"
+    },
+    {
+      "t": 14.172,
+      "from": "open",
+      "to": "half_open",
+      "why": "cool-down elapsed"
+    },
+    {
+      "t": 14.223,
+      "from": "half_open",
+      "to": "open",
+      "why": "probe failed"
+    },
+    {
+      "t": 16.231,
+      "from": "open",
+      "to": "half_open",
+      "why": "cool-down elapsed"
+    },
+    {
+      "t": 16.284,
+      "from": "half_open",
+      "to": "open",
+      "why": "probe failed"
+    },
+    {
+      "t": 18.29,
+      "from": "open",
+      "to": "half_open",
+      "why": "cool-down elapsed"
+    },
+    {
+      "t": 18.346,
+      "from": "half_open",
+      "to": "open",
+      "why": "probe failed"
+    },
+    {
+      "t": 20.353,
+      "from": "open",
+      "to": "half_open",
+      "why": "cool-down elapsed"
+    },
+    {
+      "t": 20.356,
+      "from": "half_open",
+      "to": "closed",
+      "why": "probe succeeded"
+    }
+  ],
+  "phases": {
+    "healthy": {
+      "calls": 1001,
+      "unchecked": 0,
+      "reasons": {},
+      "latency_ms": {
+        "p50": 3.988,
+        "p99": 9.202,
+        "p999": 13.029,
+        "max": 16.32
+      },
+      "service_ms": {
+        "p50": 2.411,
+        "p99": 7.469,
+        "p999": 11.736,
+        "max": 15.688
+      }
+    },
+    "down_breaker_closed": {
+      "calls": 10,
+      "unchecked": 10,
+      "reasons": {
+        "timeout": 10
+      },
+      "latency_ms": {
+        "p50": 53.372,
+        "p99": 58.535,
+        "p999": 58.535,
+        "max": 58.535
+      },
+      "service_ms": {
+        "p50": 52.019,
+        "p99": 57.282,
+        "p999": 57.282,
+        "max": 57.282
+      }
+    },
+    "breaker_open": {
+      "calls": 990,
+      "unchecked": 990,
+      "reasons": {
+        "breaker_open": 986,
+        "timeout": 4
+      },
+      "latency_ms": {
+        "p50": 1.955,
+        "p99": 12.752,
+        "p999": 55.941,
+        "max": 55.941
+      },
+      "service_ms": {
+        "p50": 0.192,
+        "p99": 2.268,
+        "p999": 55.658,
+        "max": 55.658
+      }
+    },
+    "recovering": {
+      "calls": 35,
+      "unchecked": 34,
+      "reasons": {
+        "breaker_open": 34
+      },
+      "latency_ms": {
+        "p50": 1.636,
+        "p99": 6.522,
+        "p999": 6.522,
+        "max": 6.522
+      },
+      "service_ms": {
+        "p50": 0.213,
+        "p99": 4.189,
+        "p999": 4.189,
+        "max": 4.189
+      }
+    },
+    "healthy_after": {
+      "calls": 964,
+      "unchecked": 4,
+      "reasons": {
+        "timeout": 4
+      },
+      "latency_ms": {
+        "p50": 4.337,
+        "p99": 32.539,
+        "p999": 55.386,
+        "max": 55.386
+      },
+      "service_ms": {
+        "p50": 2.567,
+        "p99": 27.828,
+        "p999": 54.47,
+        "max": 54.47
+      }
+    }
+  },
+  "overall": {
+    "calls": 3000,
+    "unchecked": 1038,
+    "reasons": {
+      "breaker_open": 1020,
+      "timeout": 18
+    },
+    "latency_ms": {
+      "p50": 3.349,
+      "p99": 27.399,
+      "p999": 55.386,
+      "max": 58.535
+    },
+    "service_ms": {
+      "p50": 1.929,
+      "p99": 19.771,
+      "p999": 54.079,
+      "max": 57.282
+    }
+  },
+  "per_second": [
+    {
+      "s": 0,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 7.437
+    },
+    {
+      "s": 1,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 8.81
+    },
+    {
+      "s": 2,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 8.598
+    },
+    {
+      "s": 3,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 9.098
+    },
+    {
+      "s": 4,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 8.722
+    },
+    {
+      "s": 5,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 8.39
+    },
+    {
+      "s": 6,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 9.511
+    },
+    {
+      "s": 7,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 11.964
+    },
+    {
+      "s": 8,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 7.473
+    },
+    {
+      "s": 9,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 9.253
+    },
+    {
+      "s": 10,
+      "calls": 100,
+      "unchecked": 99,
+      "p99_ms": 55.5
+    },
+    {
+      "s": 11,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 3.15
+    },
+    {
+      "s": 12,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 3.095
+    },
+    {
+      "s": 13,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 2.866
+    },
+    {
+      "s": 14,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 10.939
+    },
+    {
+      "s": 15,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 3.015
+    },
+    {
+      "s": 16,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 16.199
+    },
+    {
+      "s": 17,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 4.901
+    },
+    {
+      "s": 18,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 12.752
+    },
+    {
+      "s": 19,
+      "calls": 100,
+      "unchecked": 100,
+      "p99_ms": 3.52
+    },
+    {
+      "s": 20,
+      "calls": 100,
+      "unchecked": 35,
+      "p99_ms": 6.993
+    },
+    {
+      "s": 21,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 8.157
+    },
+    {
+      "s": 22,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 9.325
+    },
+    {
+      "s": 23,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 9.768
+    },
+    {
+      "s": 24,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 8.342
+    },
+    {
+      "s": 25,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 9.778
+    },
+    {
+      "s": 26,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 16.487
+    },
+    {
+      "s": 27,
+      "calls": 100,
+      "unchecked": 4,
+      "p99_ms": 53.968
+    },
+    {
+      "s": 28,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 19.956
+    },
+    {
+      "s": 29,
+      "calls": 100,
+      "unchecked": 0,
+      "p99_ms": 33.733
+    }
+  ],
+  "command": "bin/exp-risk-failure --rate 100 --riskgate-bin <riskgate built with go build ./cmd/riskgate at RiskGate 8fc20b1>",
+  "load_average": {
+    "before": [
+      28.89,
+      21.95,
+      31.27
+    ],
+    "after": [
+      43.8,
+      26.03,
+      32.42
+    ]
+  },
+  "riskgate_args": null
+}

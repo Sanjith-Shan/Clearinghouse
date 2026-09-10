@@ -1,0 +1,150 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 9, client level: kill RiskGate mid-run and measure what failing open costs.
+#
+#   bin/exp-risk-failure [--mode kill|freeze|both] [--rate 200] [--healthy 10] [--down 10] [--after 10]
+#                        [--deadline-ms 50] [--workers 32] [--out results/exp9-risk-failure]
+#                        [--riskgate-bin PATH --riskgate-dir DIR [--riskgate-args "-model models/ieee"]]
+#                        [--replay FILE]
+#
+# Always runs against bin/fake-riskgate. With --riskgate-bin it also runs against the real
+# RiskGate, which it starts itself (it has to own the process to kill and restart it) on the
+# port from RISKGATE_URL, or a free one. Real runs send bodies from --replay, read in place
+# (default: RiskGate's synthetic replay file). Only aggregates are written.
+#
+# kill: SIGKILL, then start a new process (connections are refused while it is down).
+# freeze: SIGSTOP, then SIGCONT (connections hang: this is the case the deadline is for).
+
+require 'bundler/setup'
+require 'fileutils'
+require 'optparse'
+require 'socket'
+require 'tmpdir'
+require_relative '../sim/experiments/risk_failure'
+
+root = File.expand_path('..', __dir__)
+opts = { mode: 'both', rate: 200.0, healthy: 10.0, down: 10.0, after: 10.0, deadline_ms: 50, workers: 32,
+         out: File.join(root, 'results/exp9-risk-failure'), riskgate_bin: nil,
+         riskgate_dir: File.expand_path('~/Documents/RiskGate'), riskgate_args: '-model models/ieee',
+         replay: File.expand_path('~/Documents/RiskGate/data/export_synthetic/test_replay.jsonl') }
+COMMAND = "bin/exp-risk-failure #{ARGV.join(' ')}".strip
+OptionParser.new do |o|
+  o.on('--mode MODE', %w[kill freeze both]) { |v| opts[:mode] = v }
+  o.on('--rate N', Float) { |v| opts[:rate] = v }
+  o.on('--healthy S', Float) { |v| opts[:healthy] = v }
+  o.on('--down S', Float) { |v| opts[:down] = v }
+  o.on('--after S', Float) { |v| opts[:after] = v }
+  o.on('--deadline-ms N', Integer) { |v| opts[:deadline_ms] = v }
+  o.on('--workers N', Integer) { |v| opts[:workers] = v }
+  o.on('--out DIR') { |v| opts[:out] = File.expand_path(v) }
+  o.on('--riskgate-bin PATH') { |v| opts[:riskgate_bin] = File.expand_path(v) }
+  o.on('--riskgate-dir DIR') { |v| opts[:riskgate_dir] = File.expand_path(v) }
+  o.on('--riskgate-args ARGS') { |v| opts[:riskgate_args] = v }
+  o.on('--replay FILE') { |v| opts[:replay] = File.expand_path(v) }
+end.parse!
+
+def free_port
+  server = TCPServer.new('127.0.0.1', 0)
+  server.addr[1]
+ensure
+  server&.close
+end
+
+def fake_target(root, tmp)
+  config = File.join(tmp, 'fake-config.json')
+  File.write(config, JSON.generate(
+                       'latency_ms' => { 'p50' => 1, 'p99' => 5 },
+                       'rules' => [
+                         { 'name' => 'very_large', 'amount_gte' => 200_000, 'decision' => 'block', 'score' => 95,
+                           'reasons' => ['amount far above normal'] },
+                         { 'name' => 'large', 'amount_gte' => 50_000, 'decision' => 'review', 'score' => 70,
+                           'reasons' => ['large amount'] }
+                       ]
+                     ))
+  port = free_port
+  Experiments::RiskFailure::Target.new(
+    label: 'fake-riskgate', url: "http://127.0.0.1:#{port}", dir: root,
+    argv: [RbConfig.ruby, Experiments::RiskFailure::FAKE_SCRIPT, '--port', port.to_s, '--config', config]
+  )
+end
+
+def fake_requests
+  random = Random.new(9)
+  amounts = Array.new(10_000) { ((random.rand**3) * 300_000).to_i + 50 }
+  lambda do |i|
+    Clearinghouse::Risk::AssessRequest.new(payment_id: format('pi_exp9_%<i>08d', i: i), created: 1_767_225_600 + i,
+                                           amount: Clearinghouse::Money.of(amounts[i % amounts.length], 'usd'))
+  end
+end
+
+def real_target(opts, tmp)
+  port = ENV['RISKGATE_URL'] ? URI(ENV.fetch('RISKGATE_URL')).port : free_port
+  Experiments::RiskFailure::Target.new(
+    label: 'riskgate', url: "http://127.0.0.1:#{port}", dir: opts[:riskgate_dir],
+    env: { 'RISKGATE_WEBHOOK_SECRETS' => 'whsec_exp9_not_a_secret' },
+    argv: [opts[:riskgate_bin], '-addr', "127.0.0.1:#{port}", '-snapshot-dir', File.join(tmp, 'riskgate-var'),
+           '-snapshot-interval', '5s', *opts[:riskgate_args].split]
+  )
+end
+
+# Replay lines are read in place and kept in memory for this process only. is_fraud is
+# dropped: RiskGate must not see labels on the assess path.
+def replay_requests(path)
+  lines = File.foreach(path).first(50_000).map { |line| JSON.parse(line) }
+  lambda do |i|
+    row = lines[i % lines.length]
+    Clearinghouse::Risk::AssessRequest.new(payment_id: "#{row.fetch('payment_id')}_exp9_#{i}",
+                                           created: row.fetch('created'),
+                                           amount: Clearinghouse::Money.of(row.fetch('amount'), row.fetch('currency')),
+                                           risk_fields: row.fetch('risk_fields'))
+  end
+end
+
+# 1, 5 and 15 minute load averages.
+def load_average
+  if File.exist?('/proc/loadavg')
+    File.read('/proc/loadavg').split.first(3).map(&:to_f)
+  else
+    IO.popen(%w[sysctl -n vm.loadavg], &:read).scan(/[\d.]+/).first(3).map(&:to_f)
+  end
+end
+
+def run_one(target, requests, opts, mode)
+  plan = Experiments::RiskFailure::Plan.new(rate: opts[:rate], healthy: opts[:healthy], down: opts[:down],
+                                            after: opts[:after], mode: mode, deadline_ms: opts[:deadline_ms],
+                                            workers: opts[:workers])
+  target.start
+  warn "== #{target.label}, #{mode}"
+  load_before = load_average
+  report = Experiments::RiskFailure::Runner.new(target: target, plan: plan, requests: requests).run
+  report['command'] = COMMAND
+  # The machine is shared; a loaded one starves both processes and shows up as
+  # timeouts in the healthy phase. The load average says how far to trust a run.
+  report['load_average'] = { 'before' => load_before, 'after' => load_average }
+  report
+ensure
+  target.stop
+end
+
+FileUtils.mkdir_p(opts[:out])
+modes = opts[:mode] == 'both' ? %w[kill freeze] : [opts[:mode]]
+if ENV['RISKGATE_URL'] && !opts[:riskgate_bin]
+  warn 'RISKGATE_URL is set, but killing and restarting RiskGate needs a process this script owns; ' \
+       'pass --riskgate-bin to include it.'
+end
+
+Dir.mktmpdir('exp9') do |tmp|
+  runs = modes.map { |mode| [fake_target(root, tmp), fake_requests, mode] }
+  if opts[:riskgate_bin]
+    requests = replay_requests(opts[:replay])
+    modes.each { |mode| runs << [real_target(opts, tmp), requests, mode] }
+  end
+  runs.each do |target, requests, mode|
+    report = run_one(target, requests, opts, mode)
+    base = File.join(opts[:out], "#{target.label}-#{mode}")
+    File.write("#{base}.json", JSON.pretty_generate(report))
+    File.write("#{base}.md", "#{Experiments::RiskFailure.summary(report)}\n")
+    puts Experiments::RiskFailure.summary(report), ''
+  end
+end

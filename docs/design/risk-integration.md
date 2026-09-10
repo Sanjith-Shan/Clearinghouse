@@ -207,3 +207,14 @@ Read from RiskGate's `internal/service` (assess.go, idempotency.go, snapshot.go)
   that usually means the retry also times out and fails open. That is correct, but it counts
   as a breaker failure.
 - `RiskGate-Deadline-Ms` is informational there. RiskGate finishes the work and counts the miss.
+
+## Measured: experiment 9 at the client level
+
+`results/exp9-risk-failure/README.md`. At 100 steps a second with RiskGate killed or frozen
+for 10 s, every payment in the outage went through unchecked, as designed. After a kill,
+another ~2 s went through unchecked *after* RiskGate was back: the first probe found it
+still starting, and the breaker waited a full cool-down. In the freeze runs, the first calls
+waited out the deadline and none took longer than 57.3 ms. Once the breaker opened, a step
+cost 1 to 2 ms at p99. The runs were on a heavily loaded shared machine, and in one of them
+a burst of 5 timeouts opened the breaker while RiskGate was healthy. The note there says
+what to retest on a quiet machine before tuning the breaker.
