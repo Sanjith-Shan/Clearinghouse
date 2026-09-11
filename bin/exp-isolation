@@ -1,0 +1,90 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 3: the isolation level shootout.
+#
+#   bin/exp-isolation [--threads 2,8,32] [--trials 5] [--ops 2000]
+#                     [--strategies rc_read_then_write,rc_for_update,serializable_retry]
+#                     [--db clearinghouse_exp3] [--out results/exp3-isolation]
+#
+# Each (strategy, threads) pair runs --trials trials with different seeds, on a
+# Sequel pool sized to the thread count, against the experiment's own scratch
+# tables in --db (created if missing; the database itself must exist). Writes
+# results.json and results.md to --out.
+
+require 'bundler/setup'
+require 'fileutils'
+require 'etc'
+require 'optparse'
+require_relative '../sim/experiments/isolation'
+
+iso = Experiments::Isolation
+root = File.expand_path('..', __dir__)
+opts = { threads: [2, 8, 32], trials: 5, ops: 2_000, strategies: iso::Strategies::ALL.map(&:name),
+         db: 'clearinghouse_exp3', out: File.join(root, 'results/exp3-isolation') }
+COMMAND = "bin/exp-isolation #{ARGV.join(' ')}".strip
+OptionParser.new do |o|
+  o.on('--threads LIST', Array) { |v| opts[:threads] = v.map { |t| Integer(t) } }
+  o.on('--trials N', Integer) { |v| opts[:trials] = v }
+  o.on('--ops N', Integer) { |v| opts[:ops] = v }
+  o.on('--strategies LIST', Array) { |v| opts[:strategies] = v }
+  o.on('--db NAME') { |v| opts[:db] = v }
+  o.on('--out DIR') { |v| opts[:out] = File.expand_path(v) }
+end.parse!
+
+# 1, 5 and 15 minute load averages. The machine is shared with other work, so
+# every run records the load before and after it.
+def load_average
+  IO.popen(%w[sysctl -n vm.loadavg], &:read).scan(/[\d.]+/).first(3).map(&:to_f)
+end
+
+CORES = Etc.nprocessors
+connect = ->(pool) { Clearinghouse::DB.connect(role: :owner, database: opts[:db], max_connections: pool) }
+admin = connect.call(1)
+pg_version = admin.get(Sequel.lit('version()'))
+iso::Schema.create!(admin)
+
+runs = []
+opts[:threads].each do |threads|
+  db = connect.call(threads)
+  opts[:strategies].each do |name|
+    strategy = iso::Strategies.named(name)
+    trials = (1..opts[:trials]).map do |seed|
+      before = load_average
+      trial = iso::Runner.new(db: db, strategy: strategy,
+                              plan: iso::Plan.new(threads: threads, ops: opts[:ops], seed: seed)).run
+      after = load_average
+      trial['load_average'] = { 'before' => before, 'after' => after,
+                                'high' => [before.first, after.first].max > CORES }
+      warn format('%-20<s>s T=%-3<t>d seed=%<seed>d %8.1<ops>f ops/s retries=%<r>d anomalies=%<a>s load=%<l>s',
+                  s: name, t: threads, seed: seed, ops: trial['ops_per_s'], r: trial['retries'],
+                  a: trial['anomalies'].select { |_, v| v.nonzero? }, l: after.first)
+      trial
+    end
+    runs << { 'summary' => iso.aggregate(trials), 'trials' => trials }
+  end
+  db.disconnect
+end
+
+high = runs.flat_map { |r| r['trials'] }.count { |t| t.dig('load_average', 'high') }
+meta = { 'command' => COMMAND, 'machine' => iso::MACHINE, 'postgres' => pg_version,
+         'postgres_host' => 'Docker (clearinghouse-db-1), localhost:54329', 'ruby' => RUBY_DESCRIPTION,
+         'pool_size' => 'equal to threads (one connection per thread, held for the whole trial)',
+         'ops_per_trial' => opts[:ops], 'trials' => opts[:trials], 'trials_run_under_high_load' => high,
+         'high_load_rule' => "1-minute load average above #{CORES} (the core count) before or after the trial" }
+FileUtils.mkdir_p(opts[:out])
+File.write(File.join(opts[:out], 'results.json'), JSON.pretty_generate(meta.merge('runs' => runs)))
+table = iso.table(runs.map { |r| r['summary'] })
+File.write(File.join(opts[:out], 'results.md'), <<~MD)
+  # Experiment 3 results
+
+  - Command: `#{COMMAND}`
+  - Machine: #{iso::MACHINE}. #{pg_version.split(' on ').first} in Docker, #{RUBY_DESCRIPTION.split(' (').first}.
+  - Pool size: equal to the thread count. #{opts[:ops]} operations per trial, #{opts[:trials]} trials (seeds) per row.
+  - Trials run under high load (#{meta['high_load_rule']}): #{high} of #{runs.sum { |r| r['trials'].length }}.
+    Per-trial load averages are in results.json.
+
+  #{table}
+MD
+puts table
+admin.disconnect
