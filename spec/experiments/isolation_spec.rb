@@ -86,6 +86,13 @@ RSpec.describe 'Experiment 3 isolation strategies' do
       expect(results).to eq([[:applied, 1], [:declined, 2]])
       expect(audit.values).to all(eq(0))
     end
+
+    it 'still retries under SERIALIZABLE with FOR UPDATE: the lock makes it wait, the snapshot is stale' do
+      results, audit = interleave(Experiments::Isolation::Strategies::SerializableRetry.new(lock: true), refund, refund)
+
+      expect(results).to eq([[:applied, 1], [:declined, 2]])
+      expect(audit.values).to all(eq(0))
+    end
   end
 
   describe 'a payout racing a dispute' do
@@ -125,8 +132,11 @@ RSpec.describe 'Experiment 3 isolation strategies' do
       db.disconnect
 
       results.each_value { |r| expect(r.fetch('completed') + r.fetch('exhausted')).to eq(120) }
+      expect(results.fetch('rc_read_then_write').fetch('retries')).to eq(0)
       expect(results.fetch('rc_for_update').fetch('anomalies').values).to all(eq(0))
-      expect(results.fetch('serializable_retry').fetch('anomalies').values).to all(eq(0))
+      %w[serializable_retry serializable_for_update].each do |name|
+        expect(results.fetch(name).fetch('anomalies').values).to all(eq(0))
+      end
       row = Experiments::Isolation.aggregate([results.fetch('rc_for_update')])
       expect(Experiments::Isolation.table([row])).to include('| rc_for_update | 4 | 1 |')
     end

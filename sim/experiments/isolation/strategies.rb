@@ -160,28 +160,35 @@ module Experiments
       # SERIALIZABLE, plain SELECT; Postgres aborts one side of a conflict with
       # 40001 (or 40P01 on a deadlock, which Sequel raises as the same class), and
       # the whole transaction runs again after a jittered backoff.
+      #
+      # With `lock: true` it also reads FOR UPDATE, which is what the idempotency
+      # layer's atomic phases do (a SERIALIZABLE transaction around code that
+      # locks the intent). The lock makes the second transaction wait instead of
+      # racing, but it still gets 40001 once the first commits, because its
+      # snapshot is older than the row it locked.
       class SerializableRetry
         extend T::Sig
 
         sig { returns(Integer) }
         attr_reader :max_attempts
 
-        sig { params(max_attempts: Integer, base_sleep: Float, max_sleep: Float).void }
-        def initialize(max_attempts: 10, base_sleep: 0.001, max_sleep: 0.05)
+        sig { params(lock: T::Boolean, max_attempts: Integer, base_sleep: Float, max_sleep: Float).void }
+        def initialize(lock: false, max_attempts: 10, base_sleep: 0.001, max_sleep: 0.05)
+          @lock = lock
           @max_attempts = max_attempts
           @base_sleep = base_sleep
           @max_sleep = max_sleep
         end
 
         sig { returns(String) }
-        def name = 'serializable_retry'
+        def name = @lock ? 'serializable_for_update' : 'serializable_retry'
 
         sig { params(db: Sequel::Database, pause: Pause, blk: Block).returns([Symbol, Integer]) }
         def run(db, pause: nil, &blk)
           attempts = 0
           begin
             attempts += 1
-            [db.transaction(isolation: :serializable) { yield Tx.new(db, lock: false, pause: pause) }, attempts]
+            [db.transaction(isolation: :serializable) { yield Tx.new(db, lock: @lock, pause: pause) }, attempts]
           rescue Sequel::SerializationFailure
             raise RetriesExhausted, attempts if attempts >= @max_attempts
 
@@ -193,7 +200,8 @@ module Experiments
         end
       end
 
-      ALL = T.let([ReadThenWrite.new, ForUpdate.new, SerializableRetry.new].freeze,
+      ALL = T.let([ReadThenWrite.new, ForUpdate.new, SerializableRetry.new,
+                   SerializableRetry.new(lock: true)].freeze,
                   T::Array[T.any(ReadThenWrite, ForUpdate, SerializableRetry)])
 
       Strategy = T.type_alias { T.any(ReadThenWrite, ForUpdate, SerializableRetry) }
