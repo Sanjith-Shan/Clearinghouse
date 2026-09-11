@@ -170,12 +170,40 @@ module Clearinghouse
         entries = reason.nil? || reason == 'late' ? exact_entries(line) : discrepancy_entries(line, target)
         txn = post(line, target, entries)
         update_line(row_id, outcome: outcome_for(reason), flow_id: target.flow_id, ledger_transaction_id: txn)
+        missing_arrived(line, target)
         return unless reason
 
         stuck = unexplained(line, target, posted: !txn.nil?)
         id = raise_exception(line, row_id, reason, T.must(detail), target: target, unexplained: stuck)
         Exceptions.close_automatically!(@db, id, note: 'cleared on arrival; nothing to do', now: @clock.now) if
           reason == 'late'
+      end
+
+      # The SLA job may already have called this line missing. It was not: it was
+      # late. An open `missing` exception closes itself. One an operator already
+      # wrote off gets its write-off reversed, because the money did arrive and the
+      # line has just been booked; leaving both would count it twice.
+      sig { params(line: SettlementCsv::Line, target: Matcher::Target).void }
+      def missing_arrived(line, target)
+        row = @db[:reconciliation_exceptions].where(reason: 'missing', flow_id: target.flow_id, line_type: line.type)
+                                             .first
+        return unless row
+
+        note = "the line arrived in the #{line.settled_on} file and was booked"
+        return Exceptions.close_automatically!(@db, row.fetch(:id), note: note, now: @clock.now) if
+          row.fetch(:status) == 'open'
+
+        write_off = row[:resolution_transaction_id]
+        return unless row[:resolution_action] == 'write_off' && write_off
+
+        reversal = begin
+          Ledger.reverse!(@db, write_off, reason: "#{row.fetch(:id)}: #{note}", effective_at: @clock.now)
+        rescue Ledger::AlreadyReversedError
+          nil # an operator already undid it
+        end
+        after = reversal ? "transaction #{reversal} reverses the write-off" : 'the write-off was already reversed'
+        @db[:reconciliation_exceptions].where(id: row.fetch(:id))
+                                       .update(resolution_note: "#{row[:resolution_note]} Later #{note}; #{after}.")
       end
 
       # The first problem found, in this order: the amount, the fee, the timing.

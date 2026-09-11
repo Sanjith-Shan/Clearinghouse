@@ -62,6 +62,7 @@ dispute dp_... on pi_...`) so `bin/explain` links it.
 | `fee_mismatch` | the amount matches and the fee differs from the contract | the cash that really moved; processing_expense at the contract fee | the difference (the acquirer owes it) |
 | `late` | the line should have been in an earlier file we already ingested (below) | the normal settlement, once | nothing; recorded and resolved on arrival |
 | `unknown_payment` | the capture's acquirer reference, or the refund's operation id, matches nothing of ours | nothing | nothing |
+| `missing` | no line has come for a movement we expect, a day past its due date (the SLA job, below) | nothing | the whole expected amount |
 
 **Duplicates are by identity, not amount.** Two partial refunds of one payment for the same
 amount are different movements (different operation ids) and both clear. A repeated line
@@ -115,6 +116,54 @@ the line is `pending`: nothing is posted, no exception is raised, and
 `Ingestor#match_pending` tries it again at the end of every ingestion (and can be called
 after the poller catches up). A dispute line for a payment we do not know is an
 `unknown_payment` straight away.
+
+## Missing lines and the data-quality job
+
+A missing line is in no file, so no line can report it. `Reconciliation::MissingDetector`
+works from our side instead: every movement our books expect the acquirer to settle, which
+is each payment's capture, each refund, each dispute's opening and each won dispute's return,
+and whether a line for it has arrived. A movement that happened on day H is due in the file
+for H + `lag_days`; it is **missing** once we have ingested a file dated `slack_days` past
+that and seen no line for it. Two choices in that sentence:
+
+- **Measured in files, not hours.** If the reconciler did not run for three days, nothing
+  becomes missing; the next files are fetched and the lines arrive. Staleness of the
+  reconciler itself is a different alert.
+- **One file of slack.** A line the acquirer sends one day late is then reported `late` when
+  it arrives, instead of `missing` the day before and then resolved. With the simulator's
+  default of one day for `late`, a late line never passes through `missing` at all.
+
+The detector ages each expected line from its own movement, so a dispute won three months
+after it opened is expected in the file two days after the win, not three months late.
+
+When a line that was reported missing does arrive, the ingestor closes the open `missing`
+exception itself with a note. If an operator had already written it off, the write-off is
+reversed in the same transaction as the late line's settlement, because the money did arrive
+and booking both would count it twice. There is a unique index on `(flow_id, line_type)` for
+`missing`, so the detector can run as often as the scheduler likes.
+
+`bin/data-quality` runs the detector and then reports, per the spec's "clearing checks and
+explainability":
+
+- **Explainability** per flow type and currency: the share of volume in flows whose clearing
+  accounts are back at zero (`Ledger::Clearing.report`).
+- **Flows open past their SLA**, with the amount stuck in each clearing account and how long
+  it has been there. SLAs (`DataQuality.default_slas`): payments and refunds lag plus slack
+  (3 days), payouts 1 day plus slack, disputes 120 days. The clearing report ages a flow from
+  its first transaction, and a dispute's clearing account is legitimately open between a
+  win and the returned funds, however long after the opening that is, so a shorter dispute
+  SLA would flag healthy disputes. Dispute lines that really are overdue are caught by the
+  detector, which does not have that problem.
+- **Orphan clearing balances**: a stored clearing balance no open flow accounts for.
+- The reconciler's open exceptions by reason, and lines still waiting for their flow.
+
+It exits 1 when anything needs attention, so a scheduler can alert on the exit status, and
+takes `--as-of` because ledger time is simulated.
+
+```
+bin/data-quality --as-of 2026-03-06T00:00:00Z
+bin/data-quality --no-raise --json
+```
 
 ## Exceptions as an API resource
 

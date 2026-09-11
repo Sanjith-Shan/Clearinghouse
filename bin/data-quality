@@ -1,0 +1,38 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The data-quality job: explainability per flow type, flows open past their SLA,
+# orphan clearing balances, the reconciler's open work, and a `missing` exception for
+# every settlement line that is overdue. Exit status 0 when healthy, 1 when anything
+# needs attention (so a scheduler can alert on it), 2 for a bad command line.
+#
+#   bin/data-quality                               as of now (the real clock)
+#   bin/data-quality --as-of 2026-02-01T00:00:00Z  as of a simulated time
+#   bin/data-quality --no-raise                    report only, write nothing
+#   bin/data-quality --json
+
+require 'bundler/setup'
+require 'json'
+require 'optparse'
+require 'time'
+require_relative '../lib/clearinghouse'
+
+options = { raise: true, json: false, limit: 20, as_of: nil }
+begin
+  OptionParser.new do |opts|
+    opts.on('--as-of TIME') { |v| options[:as_of] = Time.iso8601(v) }
+    opts.on('--no-raise') { options[:raise] = false }
+    opts.on('--json') { options[:json] = true }
+    opts.on('--limit N', Integer) { |v| options[:limit] = v }
+  end.parse!
+rescue OptionParser::ParseError, ArgumentError => e
+  warn "bin/data-quality: #{e.message}"
+  exit 2
+end
+
+clock = options[:as_of] ? Clearinghouse::Clock::Test.new(start: options[:as_of]) : Clearinghouse::Clock::Real.new
+db = Clearinghouse::DB.connect(role: :app, max_connections: 1)
+report = Clearinghouse::Reconciliation::DataQuality.new(db: db, clock: clock).run(raise_missing: options[:raise])
+printer = Clearinghouse::Reconciliation::DataQualityPrinter
+puts(options[:json] ? JSON.pretty_generate(printer.to_h(report)) : printer.render(report, limit: options[:limit]))
+exit(report.healthy? ? 0 : 1)
