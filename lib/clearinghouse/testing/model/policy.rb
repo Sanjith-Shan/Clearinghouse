@@ -33,10 +33,17 @@ module Clearinghouse
         # nothing for other currencies.
         DISPUTE_FEE = T.let({ 'usd' => 1500, 'jpy' => 1500, 'kwd' => 5000 }.freeze, T::Hash[String, Integer])
 
-        # Interpretation: a minimum charge, per currency, on create and on capture.
-        # Without one a capture smaller than its fee has a negative net, and
-        # Ledger::Flows.capture builds an invalid posting (see model-testing.md).
-        MIN_CHARGE = T.let({ 'usd' => 50, 'jpy' => 50, 'kwd' => 200 }.freeze, T::Hash[String, Integer])
+        # Payments refuses an amount smaller than our fee on it (amount_too_small), at
+        # create and at capture, so the merchant's share is never negative
+        # (docs/design/payments.md). With the default fee that is 31 cents.
+        sig { params(amount: Integer, rate_scaled: Integer, fixed: Integer).returns(T::Boolean) }
+        def self.covers_fee?(amount, rate_scaled, fixed)
+          fee(amount, rate_scaled, fixed) <= amount
+        end
+
+        # How long an authorization waits for capture before the expiry sweep
+        # cancels it (Api::Dependencies#authorization_ttl_days).
+        AUTHORIZATION_TTL_DAYS = 7
 
         APPROVING_CARDS = %w[pm_card_visa pm_card_mastercard pm_card_disputeFraudulent pm_card_timeout].freeze
         DECLINING_CARDS = T.let({
@@ -44,6 +51,9 @@ module Clearinghouse
           'pm_card_insufficientFunds' => 'insufficient_funds',
           'pm_card_expired' => 'expired_card'
         }.freeze, T::Hash[String, String])
+        # The error code of each decline. An expired card has its own code, as in
+        # Stripe's API; the others are card_declined (Payments::Errors::DECLINES).
+        DECLINE_ERROR_CODES = T.let({ 'expired_card' => 'expired_card' }.freeze, T::Hash[String, String])
         DISPUTING_CARD = 'pm_card_disputeFraudulent'
 
         FEE_SCALE = 10_000_000

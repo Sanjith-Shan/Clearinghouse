@@ -76,7 +76,8 @@ module Clearinghouse
         sig { params(sequence_seed: Integer, stats: Stats).returns([T::Array[Command], T.nilable(Failure)]) }
         def run_generated(sequence_seed, stats)
           rng = Random.new(sequence_seed)
-          generator = Generator.new(rng)
+          generator = Generator.new(rng, exclude_operations: sut.unsupported_operations,
+                                         exclude_cards: sut.unsupported_payment_methods)
           session = Session.new(sut)
           length = rng.rand(((@max_length + 1) / 2)..@max_length)
           commands = []

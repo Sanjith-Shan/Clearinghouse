@@ -61,6 +61,7 @@ module Clearinghouse
           prop :available_on, T.nilable(Time)
           prop :made_available, T::Boolean, default: false
           prop :dispute, T.nilable(String)
+          prop :authorization_expires_at, T.nilable(Time)
         end
 
         # A dispute, from the moment a capture schedules it at the acquirer.
@@ -189,8 +190,8 @@ module Clearinghouse
           return Outcome.error('parameter_invalid') unless Policy::CURRENCIES.include?(currency)
           return Outcome.error('parameter_invalid') unless %w[automatic manual].include?(capture_method)
           return Outcome.error('parameter_invalid') unless amount.positive?
-          return Outcome.error('amount_too_small') if amount < Policy::MIN_CHARGE.fetch(currency)
           return Outcome.error('resource_missing') if payment_method && !known_card?(payment_method)
+          return Outcome.error('amount_too_small') unless covers_fee?(merchant, amount, currency)
 
           status = payment_method ? 'requires_confirmation' : 'requires_payment_method'
           @intents[intent] = IntentState.new(name: intent, merchant: merchant, amount: amount, currency: currency,
@@ -210,7 +211,7 @@ module Clearinghouse
           decline = Policy::DECLINING_CARDS[payment_method]
           if decline
             pi.status = 'requires_payment_method'
-            return Outcome.error('card_declined', decline_code: decline)
+            return Outcome.error(Policy::DECLINE_ERROR_CODES.fetch(decline, 'card_declined'), decline_code: decline)
           end
 
           # pm_card_timeout approves too: the acquirer committed, and Clearinghouse
@@ -220,6 +221,7 @@ module Clearinghouse
           else
             pi.status = 'requires_capture'
             pi.capturable = pi.amount
+            pi.authorization_expires_at = @now + (Policy::AUTHORIZATION_TTL_DAYS * Policy::DAY)
           end
           intent_outcome(pi)
         end
@@ -230,10 +232,11 @@ module Clearinghouse
           return Outcome.error('resource_missing') unless pi
           return Outcome.error('payment_intent_unexpected_state') unless pi.status == 'requires_capture'
 
+          return Outcome.error('payment_intent_authorization_expired') if @now >= T.must(pi.authorization_expires_at)
+
           amount ||= pi.capturable
-          return Outcome.error('parameter_invalid') unless amount.positive?
-          return Outcome.error('amount_too_large') if amount > pi.capturable
-          return Outcome.error('amount_too_small') if amount < Policy::MIN_CHARGE.fetch(pi.currency)
+          return Outcome.error('parameter_invalid') unless amount.positive? && amount <= pi.capturable
+          return Outcome.error('amount_too_small') unless covers_fee?(pi.merchant, amount, pi.currency)
 
           capture_funds(pi, amount)
           intent_outcome(pi)
@@ -264,14 +267,13 @@ module Clearinghouse
           return Outcome.error('charge_already_refunded') if remaining.zero?
 
           amount ||= remaining
-          return Outcome.error('parameter_invalid') unless amount.positive?
-          return Outcome.error('amount_too_large') if amount > remaining
+          return Outcome.error('parameter_invalid') unless amount.positive? && amount <= remaining
 
           pi.refunded += amount
           @refunds[refund] = intent
           book(refund, :refund, pi.currency, amount, merchant: pi.merchant)
           schedule_movement(:refund, refund, pi.currency, amount, @now)
-          Outcome.success(amount: amount)
+          Outcome.success(amount: amount, status: 'succeeded')
         end
 
         sig do
@@ -303,6 +305,7 @@ module Clearinghouse
           return Outcome.error('parameter_invalid') unless hours.positive?
 
           @now += hours * Policy::HOUR
+          expire_authorizations
           deliver_notifications
           Outcome.success
         end
@@ -388,6 +391,24 @@ module Clearinghouse
         end
 
         private
+
+        sig { params(merchant: String, amount: Integer, currency: String).returns(T::Boolean) }
+        def covers_fee?(merchant, amount, currency)
+          schedule = @merchants.fetch(merchant)
+          Policy.covers_fee?(amount, schedule.fee_rate_scaled, schedule.fee_fixed.fetch(currency, 0))
+        end
+
+        # The expiry sweep: authorizations that waited too long for capture are
+        # canceled. Nothing moves; the authorization lapses at the acquirer.
+        sig { void }
+        def expire_authorizations
+          @intents.each_value do |payment|
+            next unless payment.status == 'requires_capture' && T.must(payment.authorization_expires_at) <= @now
+
+            payment.status = 'canceled'
+            payment.capturable = 0
+          end
+        end
 
         sig { params(card: String).returns(T::Boolean) }
         def known_card?(card)

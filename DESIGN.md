@@ -37,6 +37,7 @@ The design is built from public engineering writing, credited here.
 - [bin/explain](docs/design/explain.md): a readable trace of every ledger entry behind a payment, refund, dispute or payout.
 - [Load generator](docs/design/loadgen.md): open-loop load at fixed rates, latency from the intended send time (coordinated omission), scenarios and rate sweeps.
 - [RiskGate integration](docs/design/risk-integration.md): the deadline, keep-alive pool and circuit breaker, fail-open and what it costs, review holds on payouts, and where the risk step sits in confirm.
+- [Model-based testing](docs/design/model-testing.md): experiment 4. A reference model of the domain, random operation sequences checked against the ledger and the API after every step, shrinking to a replay script, and a planted-bug demo.
 
 ## Bugs the harness caught
 

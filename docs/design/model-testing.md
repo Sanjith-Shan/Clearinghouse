@@ -80,6 +80,20 @@ From `docs/design/sim.md` (the acquirer's behaviour the model has to predict):
   first file generated on or after that date, exactly once.
 - One capture per authorization; a partial capture releases the rest.
 
+From `docs/design/payments.md` (payments M2, which the model was aligned to when it
+landed):
+
+- **An amount smaller than our fee on it is refused** with `amount_too_small`, at create
+  and at capture, so the merchant's share is never negative. At the default fee that is 31
+  cents; in JPY and KWD, with no fixed part, any positive amount covers it.
+- Illegal transitions are `payment_intent_unexpected_state`. A capture past the
+  authorization and a refund past what is left are `parameter_invalid` on the amount; a
+  refund of a fully refunded payment is `charge_already_refunded`.
+- Declines are `card_declined` with the decline code, except an expired card, whose code
+  is `expired_card`.
+- **An authorization waits 7 days for capture**, then the expiry sweep cancels it. The
+  model runs the sweep whenever the clock moves, as the API adapter does.
+
 ### Interpretations where the docs are silent
 
 Each of these is a decision the model makes that another area might make differently.
@@ -89,30 +103,32 @@ When the real API is wired in and disagrees, one of the two changes, on purpose.
    `payout_delay_days` (2, the merchant default) after capture, like Stripe's
    `available_on`, whether or not the settlement line has arrived. The money-flow table
    lists "funds become available" after settlement but does not say it waits for it.
-2. **Minimum charge.** `create_intent` and `capture` refuse amounts below 50 (USD, JPY) or
-   200 (KWD) minor units with `amount_too_small`. Nothing in the docs sets one. Without
-   one, a capture smaller than its fee has a negative net, and `Ledger::Flows.capture`
-   would build a negative credit that `post!` rejects.
-3. **Dispute fee per currency.** $15.00 comes from the ledger doc; 1500 JPY and 5.000 KWD
+   Payments' `Seams.schedule_availability` passes exactly this date, so the payouts work
+   is likely to agree.
+2. **Dispute fee per currency.** $15.00 comes from the ledger doc; 1500 JPY and 5.000 KWD
    are mine.
-4. **Error codes** the docs do not list yet: `payment_intent_unexpected_state` for an
-   illegal transition, `amount_too_large` (capture past the authorization, refund past
-   what is left), `amount_too_small`, `charge_already_refunded`, `charge_disputed`,
-   `balance_insufficient` (payouts). These follow Stripe's names.
-5. **`pm_card_timeout` succeeds.** The acquirer commits and drops the connection; the
-   payments flow resolves that through the acquirer's status query. The model expects
-   the confirm to end exactly as `pm_card_visa` does. An API adapter must retry the confirm
-   under the same idempotency key (or run the completer) until the intent leaves
-   `processing`.
-6. **Notifications are delivered when the clock moves.** `advance_clock` moves time and
+3. **Error codes for areas not built yet** follow Stripe's names: `charge_disputed` (refund
+   after a dispute opened), `balance_insufficient` (payouts), `dispute_not_open` and
+   `dispute_already_closed` (the simulator's codes for resolving a dispute).
+4. **`pm_card_timeout` succeeds.** The acquirer commits and drops the connection. The
+   model expects the confirm to end as `pm_card_visa` does, which is where M3's
+   ambiguous-call handling has to get it. Payments M2 answers 503 and leaves the intent in
+   `processing`, so the API adapter leaves this card out for now.
+5. **Notifications are delivered when the clock moves.** `advance_clock` moves time and
    then lets the notification worker deliver everything due, in due-time order: disputes
    opening, payouts paid or failed. `resolve_dispute` delivers `dispute.closed` at once.
-7. **A second settlement run for the same date changes nothing**, since the acquirer
+6. **A second settlement run for the same date changes nothing**, since the acquirer
    returns the same frozen file and the reconciler dedupes by line.
-8. **Authorization expiry is not modelled.** The payments area owns its duration; add
-   an `expire_authorizations` operation once it exists.
-9. **Held is always zero.** Nothing posts to `merchant:<id>:held` until risk reviews
-   (M6). The checks still compare it, so the first posting to it is covered.
+7. **Held is always zero.** Nothing posts to `merchant:<id>:held` in the model. Risk
+   holds (M6) are on main but their payout side is not; when it lands, the model needs a
+   hold operation. The checks already compare the held account, so a posting to it that
+   the model does not expect is caught.
+
+The first version of the model had its own guesses where payments has since decided:
+a minimum charge of 50 minor units, `amount_too_large` for over-captures and over-refunds,
+`card_declined` for an expired card, and no authorization expiry. The first run against the
+API disagreed on each of those, and each time the model was wrong, not the API, because
+payments' choices are documented and deliberate. None of them was a bug.
 
 ## Systems under test
 
@@ -129,8 +145,7 @@ generator, checks and shrinker work before any real system is involved.
 ### The ledger-level system under test
 
 `LedgerSut` runs the money side of every operation through the real ledger on real
-Postgres. The domain endpoints (payments, refunds, disputes, payouts) are not on main yet,
-so the domain *decisions* (is this transition legal, did the card decline, which
+Postgres. It was built before any domain endpoint was on main, so the domain *decisions* (is this transition legal, did the card decline, which
 settlement lines arrived today) come from a shadow copy of the model. What the adapter
 does itself is what the domain code will do with the money:
 
@@ -146,10 +161,42 @@ does itself is what the domain code will do with the money:
   per payment from the entries themselves, and violations from `Ledger::Invariants.check`
   plus the clearing report's orphan balances.
 
-So today a sequence tests the ledger, the flow builders, the fee code and the payout
-balance rule against the model. It does not test domain logic; the API adapter will.
+So a sequence tests the ledger, the flow builders, the fee code and the payout balance
+rule against the model, including the flows whose domain code has not landed (disputes,
+settlement, payouts). It does not test domain logic; the API adapter does.
 Between sequences the ledger tables are emptied as the owner with triggers off for one
 transaction, and only in a database whose name contains `test`.
+
+### The API system under test
+
+`ApiSut` sends every operation as an HTTP request through the real Rack app
+(`Api::RequestLogger` around `Api::App`, via `Rack::Test`) with JSON bodies and the
+merchant's secret key. The app talks to the real acquirer simulator on a Puma server on an
+ephemeral port in the same process, over TCP. Outcomes come from the responses; the
+snapshot reads the database the app wrote (balances, the clearing report, invariants, and
+`amount_received` / `amount_refunded` from `payment_intents`), with API ids mapped back to
+the sequence's names. Nothing is shadowed.
+
+| operation | how | status |
+|---|---|---|
+| create_merchant | `POST /v1/merchants` with the admin token, `fee_percent`, `fee_fixed` | wired |
+| create_intent | `POST /v1/payment_intents` | wired |
+| confirm | `POST /v1/payment_intents/:id/confirm` | wired |
+| capture | `POST /v1/payment_intents/:id/capture` (`amount_to_capture`) | wired |
+| cancel | `POST /v1/payment_intents/:id/cancel` | wired |
+| refund | `POST /v1/refunds` | wired |
+| advance_clock | advance the test clock, run `Payments::Expiry.sweep!` | wired; TODO: run the notification poller |
+| payout | `POST /v1/payouts` | TODO (payouts) |
+| availability_sweep | the availability worker | TODO (payouts) |
+| resolve_dispute | simulator `POST /admin/disputes/:id/resolve`, then the poller | TODO (disputes) |
+| settle | simulator `POST /settlement_files`, then the reconciler | TODO (reconciler) |
+
+Unwired operations raise `NotImplementedError` naming what to call, and the adapter
+declares them in `unsupported_operations`, so the generator leaves them out rather than
+failing. It also declares `pm_card_disputeFraudulent` (its dispute arrives by
+notification) and `pm_card_timeout` (interpretation 4) in
+`unsupported_payment_methods`. Wiring an area is filling in its methods and deleting it
+from those two lists.
 
 ## Checks after every step
 
@@ -233,17 +280,21 @@ sequences of up to 40 steps with a fixed seed, plus the planted-bug checks.
 
 ## Results so far
 
-Measured on an Apple M3 Pro, Postgres 16.15 in Docker, Ruby 3.3.12 (the run files in
-`results/exp4-model/` have the details):
+Measured on an Apple M3 Pro, Postgres 16.15 in Docker, Ruby 3.3.12, with other agents'
+test suites running on the same machine (so the times are loose). The run files in
+`results/exp4-model/` have the details.
 
 | run | sequences | operations | result |
 |---|---|---|---|
-| `--sut model --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed, 10.4s |
-| `--sut ledger --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed, 260s |
+| `--sut model --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed |
+| `--sut ledger --sequences 300 --max-length 80 --seed 1`, before the model followed payments' fee rule | 300 | 17,826 | every check passed, 260s |
+| `--sut api --sequences 150 --max-length 60 --seed 1` | 150 | 6,714 | every check passed, 669s |
 
-The two runs execute the same sequences, since generation depends only on the seed and
-the model. The ledger run posted every `Ledger::Flows` event, and its `.md` lists how
-many times each operation reached each outcome, including the illegal ones.
+The model and ledger runs execute the same sequences, since generation depends only on the
+seed and the model. The API run leaves out the operations and cards its adapter cannot
+run yet, so it covers create, confirm (every declining card), capture (partial, over the
+authorization), authorizations expiring, cancel, refund (partial, full, over what is left) and the
+clock. Each run's `.md` lists how many times each operation reached each outcome.
 
 ## Planted-bug demo (deliberate, not a real bug)
 
@@ -253,15 +304,16 @@ harness shrink it, and debug from the shrunk case. The bugs live in
 real classes are never modified.
 
 **1. Fee rounding flipped to half-up** (`--plant fee_rounding`). `bin/model-test --sut
-ledger --plant fee_rounding --sequences 50 --max-length 60 --seed 1` failed at step 25 of
-the third sequence, a JPY payment of 500 whose fee landed on exactly half a yen. The
-shrinker took 51 runs to cut 25 steps to 3, and moved the currency to USD on the way:
+ledger --plant fee_rounding --sequences 50 --max-length 60 --seed 1` failed at step 47 of
+the twelfth sequence, a confirm whose payment was one of several round amounts. The
+shrinker took 68 runs to cut 47 steps to 3, and swapped the `pm_card_timeout` of the
+original for a visa on the way:
 
 ```ruby
 Clearinghouse::Testing::Model::Harness.replay(sut: :ledger, plant: :fee_rounding) do |h|
   h.create_merchant(merchant: "m1", fee_rate_scaled: 290000, fee_fixed: {"usd"=>30})
-  h.create_intent(intent: "pi_3", merchant: "m1", amount: 500, currency: "usd", capture_method: "automatic")
-  h.confirm(intent: "pi_3", payment_method: "pm_card_visa")
+  h.create_intent(intent: "pi_6", merchant: "m1", amount: 500, currency: "usd", capture_method: "automatic")
+  h.confirm(intent: "pi_6", payment_method: "pm_card_visa")
 end
 # step 3 failed check balances:
 #   merchant:m1:pending (usd): model 456, system 455, off by -1
@@ -273,7 +325,9 @@ Debugging from there takes a minute: the fee on $5.00 is one cent high, 2.9% of 
 candidates below 500 first and none of them fails, which is itself the hint: 500 is the
 smallest USD amount whose 2.9% ends in exactly .5.
 
-**2. A flow that skips its clearing account** (`--plant payout_failed_skips_clearing`):
+**2. A flow that skips its clearing account** (`--plant payout_failed_skips_clearing`,
+measured before the model followed payments' fee rule, which is why the payment below is
+the old 50 minimum):
 `payout_failed` returns the money to the merchant out of cash instead of out of
 payout_clearing. It balances, so the database accepts it. The run failed in sequence 31 at
 step 45 and shrank to 7 steps in 1465 runs (about 90 seconds, most of it Postgres round
@@ -301,19 +355,26 @@ sequence was replaced by a visa, and the payment shrank to the 50 yen minimum. T
 
 ## Findings
 
-**A capture smaller than its fee cannot be posted.** With the minimum charge taken out of
-the model (an exploratory run, not committed), the ledger adapter failed on the third step
-of `create_intent(amount: 1)` then `confirm`: `Ledger::Flows.capture` builds
+**A capture smaller than its fee cannot be posted.** While payments was still being built,
+an exploratory run with the model's minimum charge taken out (not committed) failed on
+the third step of `create_intent(amount: 1)` then `confirm`: `Ledger::Flows.capture` builds
 `merchant pending = gross - fee`, which is -29 cents, and `post!` refuses it with
-`InvalidPostingError: entry amounts must be positive`. The ledger is right to refuse. The
-gap is upstream: something has to guarantee `fee <= gross` before the acquirer is asked to
-capture, because once it has, a failed posting leaves money moved with no ledger record. A
-minimum charge amount does it for the default fee; a merchant fee schedule with a fixed part
-above the minimum would still hit it. This is interpretation 2 above, and the payments area
-should decide it. Not logged in `docs/bugs`, since no merged code does the wrong thing.
+`InvalidPostingError: entry amounts must be positive`. The ledger is right to refuse; the
+guarantee has to come before the acquirer is asked to capture. Payments M2 landed with
+exactly that guard (`Support.check_covers_fee!`, `amount_too_small`), and the model now
+encodes it. Not logged in `docs/bugs`, since no merged code did the wrong thing.
 
-Related, from reading `Flows` while writing the adapter: `capture`, `settlement` and
-`dispute_opened` drop zero-amount lines, but `funds_available` does not, so a payment whose
-fee equals its gross (a 31 cent charge on the default fee) would make the availability
-sweep fail on a zero entry. The adapter skips a zero net, and the real sweep will have to
-as well.
+**A payment whose fee equals its amount has a zero net, and `Flows.funds_available` does
+not accept one.** `capture`, `settlement` and `dispute_opened` drop zero-amount lines, but
+`funds_available` does not. Payments accepts a 31 cent USD charge at the default fee
+(fee 31, so `fee <= amount` holds), posts the capture without a pending line, and calls
+`Seams.schedule_availability` with a net of zero. When the payouts work fills that seam,
+moving zero from pending to available will raise `InvalidPostingError` unless it skips
+zero nets. The model makes no zero-net availability posting and the ledger adapter skips
+it too, so once the API adapter runs the availability sweep, a sequence with a 31 cent
+payment will check the real code on this. The generator produces amounts in 1..60 for
+this reason.
+
+**Against the real API (payments M2), no disagreement so far.** Every difference the first
+API run found was the model's guess against a documented payments decision (see
+"Policies encoded").

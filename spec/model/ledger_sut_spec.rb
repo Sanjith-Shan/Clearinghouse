@@ -72,7 +72,7 @@ RSpec.describe Clearinghouse::Testing::Model::LedgerSut, :db, :model do
 
   it 'catches the planted fee rounding bug and shrinks it to one $5.00-style payment' do
     found = runner(ledger_sut(**ModelTesting::PlantedBugs.ledger_sut_args('fee_rounding')),
-                   seed: 1, sequences: 10, max_length: 40, plant: 'fee_rounding').run.failure
+                   seed: 1, sequences: 40, max_length: 40, plant: 'fee_rounding').run.failure
     expect(found.shrunk_failure.violation.check).to eq(:balances)
     expect(found.shrunk.map(&:op)).to eq(%i[create_merchant create_intent confirm])
     expect(found.shrunk[1].args[:amount] % 500).to eq(0)
