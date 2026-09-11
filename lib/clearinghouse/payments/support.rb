@@ -29,8 +29,9 @@ module Clearinghouse
         entries = Ledger::Flows.capture(merchant_id: merchant.id, gross: gross, fee: fee)
         Ledger.post!(db, flow_type: Ledger::Flows::PAYMENT, flow_id: intent.id, description: 'capture',
                          effective_at: now, entries: entries)
+        available_on = Balances::Availability.available_on(captured_at: now, delay_days: merchant.payout_delay_days)
         Seams.schedule_availability(db, flow_id: intent.id, merchant_id: merchant.id, net: net,
-                                        available_on: now + (merchant.payout_delay_days * Clock::SECONDS_PER_DAY))
+                                        available_on: available_on, clock: ctx.clock)
       end
 
       # Our fee must not exceed what is captured, or the merchant's share would be

@@ -164,6 +164,9 @@ module Clearinghouse
                          description: "refund #{refund.id} of #{refund.payment_intent_id}",
                          effective_at: ctx.clock.now,
                          entries: Ledger::Flows.refund(merchant_id: refund.merchant_id, amount: refund.money))
+        # If the payment's review was rejected, its held money goes back to available
+        # in this transaction, as the refund takes the same amount out. A no-op otherwise.
+        Balances::Holds.release_after_refund!(db, flow_id: refund.payment_intent_id, clock: ctx.clock)
         Support.emit!(db, ctx, 'charge.refunded', T.must(intent.charge_to_api))
         done
       end

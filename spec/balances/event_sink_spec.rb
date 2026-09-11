@@ -1,19 +1,23 @@
 # typed: false
 # frozen_string_literal: true
 
-RSpec.describe Clearinghouse::Balances::NullEventSink do
-  let(:clock) { Clearinghouse::Clock::Test.new }
-  let(:db) { Sequel.mock }
+RSpec.describe Clearinghouse::Balances::OutboxEventSink, :db do
+  let(:clock) { Clearinghouse::Clock::Test.new(start: Time.utc(2026, 9, 1, 12)) }
+  let(:merchant) { new_merchant(clock: clock) }
 
-  it 'accepts the event types this area emits and drops them' do
-    Clearinghouse::Balances::EVENT_TYPES.each do |type|
-      expect { described_class.new.emit!(db, merchant_id: 'acct_1', type: type, object: {}, clock: clock) }
-        .not_to raise_error
-    end
+  it 'knows every type this area emits as an outbox event type' do
+    expect(Clearinghouse::Events::TYPES).to include(*Clearinghouse::Balances::EVENT_TYPES)
   end
 
-  it 'refuses a type it does not know, so a typo fails here and not when the outbox lands' do
-    expect { described_class.new.emit!(db, merchant_id: 'acct_1', type: 'payout.sent', object: {}, clock: clock) }
-      .to raise_error(ArgumentError, /payout.sent/)
+  it 'writes the event to the outbox, where it rolls back with the change it reports' do
+    app_db.transaction do
+      described_class.new.emit!(app_db, merchant_id: merchant.id, type: 'payout.created',
+                                        object: { 'id' => 'po_1', 'object' => 'payout' }, clock: clock)
+    end
+    app_db.transaction(rollback: :always) do
+      described_class.new.emit!(app_db, merchant_id: merchant.id, type: 'payout.paid',
+                                        object: { 'id' => 'po_1', 'object' => 'payout' }, clock: clock)
+    end
+    expect(app_db[:events].where(object_id: 'po_1').select_map(:type)).to eq(['payout.created'])
   end
 end

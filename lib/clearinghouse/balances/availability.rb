@@ -49,13 +49,19 @@ module Clearinghouse
       # `available_on` is a date. A capture at 23:59 and one at 00:01 the same day
       # become available together, which is what a merchant reading a balance
       # statement expects.
+      sig { params(captured_at: Time, delay_days: Integer).returns(Time) }
+      def self.available_on(captured_at:, delay_days:)
+        day = captured_at.utc
+        Time.utc(day.year, day.month, day.day) + (delay_days * Clock::SECONDS_PER_DAY)
+      end
+
+      # The same, with the delay read from the merchant.
       sig { params(db: Sequel::Database, merchant_id: String, captured_at: Time).returns(Time) }
       def self.available_on_for(db, merchant_id:, captured_at:)
         delay = db[:merchants].where(id: merchant_id).get(:payout_delay_days)
         raise MerchantNotFoundError, "no merchant #{merchant_id}" if delay.nil?
 
-        day = captured_at.utc
-        Time.utc(day.year, day.month, day.day) + (Integer(delay) * Clock::SECONDS_PER_DAY)
+        available_on(captured_at: captured_at, delay_days: Integer(delay))
       end
 
       # Records that `net` of this payment becomes available on `available_on`.

@@ -16,15 +16,16 @@ default 2, stored on `merchants`).
 merchant, net amount, currency, `available_on`, and once released, `released_at`,
 `released_to` and the id of the ledger transaction that released it.
 
-- **Scheduling is part of the capture.** The payments area calls
-  `Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:, clock:)` inside
-  the capture's transaction, next to the capture's ledger posting. The capture and its
+- **Scheduling is part of the capture.** `Payments::Support.post_capture!` posts the
+  capture and then calls `Payments::Seams.schedule_availability`, which calls
+  `Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:, clock:)`, in the
+  same transaction. The capture and its
   schedule commit together or not at all, so there is never pending money with no release
   scheduled, or a release for a capture that rolled back. `schedule!` is idempotent on
   `flow_id` (same terms return the existing row, different terms raise `ConflictError`),
   because a capture phase retried after a crash may call it again.
-- **`available_on` is the start of a UTC day**, `Availability.available_on_for(db,
-  merchant_id:, captured_at:)`. Stripe's `available_on` is a date, and a merchant reading
+- **`available_on` is the start of a UTC day**, `Availability.available_on(captured_at:,
+  delay_days:)` (or `available_on_for`, which reads the delay from the merchant). Stripe's `available_on` is a date, and a merchant reading
   a statement expects everything captured on one day to become available together.
 - **The sweep**, `Availability.release_due!(db, clock:)`, releases every row whose
   `available_on` has passed. It posts `Ledger::Flows.funds_available` (debit merchant
@@ -254,13 +255,13 @@ the answer, and a cancel would return money the bank is paying out.
 
 ### Events
 
-`payout.created`, `payout.paid`, `payout.failed` and `payout.canceled` are emitted in the
-same transaction as the change they report, through `Balances::EventSink`. The events outbox
-(`Events.emit!`, payments area) is not on main yet, so the default sink
-(`Balances::DEFAULT_EVENTS`) drops them, and specs use a recording stand-in that also checks
-each event is emitted inside a transaction. Wiring the outbox means changing
-`DEFAULT_EVENTS` to an adapter that calls `Events.emit!`, and adding the types in
-`Balances::EVENT_TYPES` to `Events::TYPES`.
+`payout.created`, `payout.paid`, `payout.failed` and `payout.canceled` (and `review.opened`
+and `review.closed` below) are emitted in the same transaction as the change they report,
+through `Balances::EventSink`. The default, `OutboxEventSink`, calls `Events.emit!`, so each
+event exists if and only if its change committed. Domain specs pass a recording sink that
+also checks every event is emitted inside a transaction. These events carry no request id
+yet, because the sink interface doesn't pass one. Threading the request's
+`Events::Request` through is the next step if webhook consumers need it.
 
 ## Risk-review holds ("safer payouts")
 
@@ -338,23 +339,32 @@ The object follows Stripe's Review: `payment_intent`, `open`, `opened_reason: "r
 word. Closing a closed review is 400 `review_closed`. Events: `review.opened` and
 `review.closed`.
 
-### What the refund seam needs from payments
+### How a reject refunds
 
-`Balances::DEFAULT_REFUNDS` is `UnwiredRefundRequester`, which raises
-`RefundsNotWiredError`. A reject fails, and the review stays open, rather than closing
-without a refund. Wiring it:
+`POST /v1/reviews/:id/reject` passes `Balances::PaymentsRefundRequester` to `close_hold!`:
 
-1. Implement `request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id`. It
-   runs inside the reject's transaction and only starts the refund (creates it and
-   reserves `amount_refunded`). The acquirer call happens in the refund's own later
-   phases.
-2. In the refund phase that posts `Ledger::Flows.refund`, call
-   `Balances::Holds.release_after_refund!(db, flow_id: payment_intent_id, clock:)` in the
-   same transaction. It is idempotent and does nothing for a payment with no rejected hold,
-   so every refund can call it.
-3. Point `DEFAULT_REFUNDS` at the implementation.
+1. Inside the reject's transaction, `request_refund!` runs the refund's first step,
+   `Payments::Refunds.reserve!` (a full refund, reason `fraudulent`, created pending, with
+   its amount reserved on the intent). If the payment can't be refunded (already refunded,
+   not captured), the payments error comes back and the whole reject rolls back, so the
+   review stays open.
+2. After that commits, `finish!` makes the acquirer call and records it, the same steps as
+   `POST /v1/refunds`.
+3. `Refunds.mark_succeeded` posts `Flows.refund` and calls
+   `Holds.release_after_refund!` in the same transaction. That call is a no-op for a
+   payment without a rejected review, so every refund makes it.
 
-`spec/support/balances.rb` (`StandInRefunds`) does exactly this, which is what the specs run.
+`spec/api/reviews_spec.rb` runs this end to end: a real card payment, a hold, the sweep,
+then a reject. The acquirer gets exactly one refund, the refund succeeds, held goes to
+zero, and available ends at -$3.20 (the fee is not returned). If the acquirer gives no
+definite answer, the payments area's retryable 503 comes back, the review is already
+closed as rejected, and the refund stays pending like any refund with a lost answer.
+Driving it to completion is the completer's job once it exists.
+
+Callers without a request context get `UnwiredRefundRequester` by default, which raises
+rather than closing a review without a refund. The domain specs use `StandInRefunds`
+(`spec/support/balances.rb`) because they post captures at the ledger level with no
+payment_intents row to refund.
 
 ## Negative balances
 
@@ -408,6 +418,10 @@ exists for that). Both are policy decisions for a real platform, and nothing in 
 depends on them.
 
 ## Running it
+
+`spec/api/payment_to_payout_spec.rb` runs the whole path through the real payments API:
+confirm, the scheduled release, `GET /v1/balance` before and after, a payout, the bank's
+notification, and the payout's flow explained with its events in the outbox.
 
 Everything here is driven by the clock, and the order matters:
 

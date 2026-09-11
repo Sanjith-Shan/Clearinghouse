@@ -53,9 +53,15 @@ module Clearinghouse
           raise Errors::NotFoundError.resource('review', starting_after.to_s, param: 'starting_after')
         end
 
+        # A reject refunds the payment: the refund starts inside the reject's
+        # transaction and goes to the acquirer once that has committed.
         sig { params(ctx: Context, id: String, decision: Symbol).returns(Balances::Holds::Hold) }
         def self.close(ctx, id, decision)
-          Balances::Holds.close_hold!(ctx.db, id, merchant_id: ctx.merchant!.id, decision: decision, clock: ctx.clock)
+          refunds = Balances::PaymentsRefundRequester.new(ctx)
+          hold = Balances::Holds.close_hold!(ctx.db, id, merchant_id: ctx.merchant!.id, decision: decision,
+                                                         clock: ctx.clock, refunds: refunds)
+          refunds.finish!
+          hold
         rescue Balances::Holds::NotFoundError
           raise Errors::NotFoundError.resource('review', id)
         rescue Balances::Holds::AlreadyClosedError

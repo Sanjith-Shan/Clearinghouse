@@ -3,13 +3,13 @@
 
 require_relative 'db'
 require_relative 'balances'
-require_relative '../sim/sim_helper'
+require_relative 'acquirer'
 
 DBHelper.clean_tables('payouts')
 
-# Stand-in for the events outbox (payments area) until Events.emit! lands. It
-# records what would have been emitted and checks the one property the outbox
-# depends on: every event is emitted inside the transaction of its state change.
+# Records what domain code emits, for specs that call it directly, and checks the
+# one property the outbox depends on: every event is emitted inside the
+# transaction of its state change.
 class RecordingEventSink
   include Clearinghouse::Balances::EventSink
 
@@ -32,13 +32,14 @@ class RecordingEventSink
   end
 end
 
-# A real simulator on a real socket (the bank for payouts), and the real client.
+# The shared real simulator on a real socket (the bank for payouts), reset before
+# each example, and the real client.
 module PayoutHelpers
   def self.included(base)
-    base.let(:sim) { SimServer.start }
+    base.let(:sim) { AcquirerSpec.server }
     base.let(:bank) { Clearinghouse::Acquirer::Client.new(clock: clock, base_url: sim.url) }
     base.let(:events) { RecordingEventSink.new }
-    base.after { sim.stop }
+    base.before { AcquirerSpec.simulator.reset! }
   end
 
   # Captures `gross` and releases it to available at once. The merchant must have

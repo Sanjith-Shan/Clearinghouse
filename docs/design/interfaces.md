@@ -176,7 +176,8 @@ See `docs/design/payouts.md`.
 ```ruby
 Balances::Availability.available_on_for(db, merchant_id:, captured_at:) -> Time   # start of UTC day + payout_delay_days
 Balances::Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:, clock:) -> Scheduled | nil
-  # Call inside the capture's transaction. Idempotent on flow_id; ConflictError on different terms.
+  # Called by Payments::Seams.schedule_availability inside the capture transaction. Idempotent on flow_id;
+  # ConflictError on different terms.
   # nil (nothing scheduled) for a zero net.
 Balances::Availability.release_due!(db, clock:) -> ReleaseReport   # the sweep; safe to run concurrently
 ```
@@ -194,13 +195,15 @@ Payouts.run_scheduled!(db, bank:, clock:) -> [Payout]          # daily sweep, af
 ```
 
 Events go through `Balances::EventSink` (`emit!(db, merchant_id:, type:, object:, clock:)`), inside the
-state change's transaction; `Balances::EVENT_TYPES` lists them.
+state change's transaction. The default writes to the outbox with `Events.emit!`, and `Balances::EVENT_TYPES`
+lists them (all in `Events::TYPES`).
 
 Risk-review holds (`lib/clearinghouse/balances/holds.rb`):
 
 ```ruby
 Balances::Holds.open_hold!(db, flow_id:, merchant_id:, amount:, reason:, clock:) -> Hold   # RiskGate said review
 Balances::Holds.close_hold!(db, id, merchant_id:, decision: :approve | :reject, clock:) -> Hold
-Balances::Holds.release_after_refund!(db, flow_id:, clock:)   # refunds call this where they post Flows.refund
-Balances::RefundRequester#request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id   # payments implements
+Balances::Holds.release_after_refund!(db, flow_id:, clock:)   # Refunds.mark_succeeded calls it with Flows.refund
+Balances::RefundRequester#request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id
+Balances::PaymentsRefundRequester.new(ctx)   # through Payments::Refunds; #finish! after the reject commits
 ```
