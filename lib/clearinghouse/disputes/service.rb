@@ -28,12 +28,9 @@ module Clearinghouse
       extend T::Sig
 
       sig do
-        params(lookup: PaymentLookup, events: EventSink, clock: Clock, fee_policy: FeePolicy,
-               crash_hook: T.nilable(T.proc.params(point: String).void)).void
+        params(clock: Clock, fee_policy: FeePolicy, crash_hook: T.nilable(T.proc.params(point: String).void)).void
       end
-      def initialize(lookup:, events:, clock:, fee_policy: FeePolicy.new, crash_hook: nil)
-        @lookup = lookup
-        @events = events
+      def initialize(clock:, fee_policy: FeePolicy.new, crash_hook: nil)
         @clock = clock
         @fee_policy = fee_policy
         @crash_hook = crash_hook
@@ -55,7 +52,7 @@ module Clearinghouse
           next existing if existing
 
           reference = string(data, 'acquirer_reference')
-          payment = @lookup.by_acquirer_reference(db, reference)
+          payment = PaymentLookup.by_acquirer_reference(db, reference)
           raise UnknownPaymentError, "#{acquirer_id} is for #{reference}, which matches no payment" unless payment
 
           amount = money(data)
@@ -88,9 +85,12 @@ module Clearinghouse
 
       # The merchant accepts the loss. Nothing moves: the money left their balance
       # when the dispute opened. Accepting twice returns the same dispute, so a
-      # retried request is harmless.
-      sig { params(db: Sequel::Database, merchant_id: String, id: String).returns(Dispute) }
-      def accept(db, merchant_id:, id:)
+      # retried request is harmless. `request` is the API request, for the event.
+      sig do
+        params(db: Sequel::Database, merchant_id: String, id: String, request: T.nilable(Events::Request))
+          .returns(Dispute)
+      end
+      def accept(db, merchant_id:, id:, request: nil)
         dispute = T.let(db.transaction do
           found = Disputes.find(db, merchant_id: merchant_id, id: id, lock: true)
           raise NotFoundError, "no dispute #{id}" unless found
@@ -99,7 +99,7 @@ module Clearinghouse
           next found if found.status == 'lost'
           raise AlreadyClosedError, "#{id} was already won" if found.status == 'won'
 
-          closed = close!(db, found, status: 'lost', closed_by: 'merchant', at: @clock.now)
+          closed = close!(db, found, status: 'lost', closed_by: 'merchant', at: @clock.now, request: request)
           crash!('effects_written')
           closed
         end, Dispute)
@@ -162,19 +162,21 @@ module Clearinghouse
 
       sig do
         params(db: Sequel::Database, dispute: Dispute, status: String, closed_by: String, at: Time,
-               won_transaction_id: T.nilable(Integer)).returns(Dispute)
+               won_transaction_id: T.nilable(Integer), request: T.nilable(Events::Request)).returns(Dispute)
       end
-      def close!(db, dispute, status:, closed_by:, at:, won_transaction_id: nil)
+      def close!(db, dispute, status:, closed_by:, at:, won_transaction_id: nil, request: nil)
         closed = dispute.with(status: status, closed_by: closed_by, closed_at: at,
                               won_transaction_id: won_transaction_id)
         Disputes.save!(db, closed, now: @clock.now)
-        emit(db, closed, 'charge.dispute.closed')
+        emit(db, closed, 'charge.dispute.closed', request: request)
         closed
       end
 
-      sig { params(db: Sequel::Database, dispute: Dispute, type: String).void }
-      def emit(db, dispute, type)
-        @events.emit!(db, merchant_id: dispute.merchant_id, type: type, object: dispute.to_api, clock: @clock)
+      # Into the outbox, in the caller's transaction.
+      sig { params(db: Sequel::Database, dispute: Dispute, type: String, request: T.nilable(Events::Request)).void }
+      def emit(db, dispute, type, request: nil)
+        Events.emit!(db, merchant_id: dispute.merchant_id, type: type, object: dispute.to_api, clock: @clock,
+                         request: request)
       end
 
       sig { params(data: T::Hash[String, T.untyped]).returns(Money) }

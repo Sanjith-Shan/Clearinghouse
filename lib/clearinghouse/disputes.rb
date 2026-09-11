@@ -19,21 +19,6 @@ module Clearinghouse
     # The merchant tried to accept a dispute that is already won.
     class AlreadyClosedError < Error; end
 
-    # Where the transactional outbox plugs in. `Events.emit!` (payments work) has this
-    # shape; it must write in the caller's database transaction.
-    module EventSink
-      extend T::Sig
-      extend T::Helpers
-
-      interface!
-
-      sig do
-        abstract.params(db: Sequel::Database, merchant_id: String, type: String, object: T::Hash[String, T.untyped],
-                        clock: Clock).returns(String)
-      end
-      def emit!(db, merchant_id:, type:, object:, clock:); end
-    end
-
     # Where a crash can land, per mutating flow. The two notification flows run inside
     # the poller's transaction, so their points are the poller's. The merchant's
     # close runs in its own. The crash matrix (spec/settlement/disputes_recovery_spec.rb)

@@ -235,10 +235,9 @@ Balances::PaymentsRefundRequester.new(ctx)   # through Payments::Refunds; #finis
 
 ```ruby
 NotificationPoller::Handlers#register(type) { |db, notification| ... }   # runs inside the poller's transaction
-Settlement.notification_handlers(disputes:) -> Handlers                     # what bin/poller runs with
-PaymentLookup#by_acquirer_reference(db, acquirer_reference) -> Payment(id, merchant_id, currency) | nil
-Disputes::EventSink#emit!(db, merchant_id:, type:, object:, clock:)        # Events.emit! has this shape
-Disputes::Service#opened / #closed(db, notification), #accept(db, merchant_id:, id:)
+Settlement.notification_handlers(clock:) -> Handlers                        # what bin/poller runs with
+PaymentLookup.by_acquirer_reference(db, acquirer_reference) -> Payment(id, merchant_id, currency) | nil
+Disputes::Service#opened / #closed(db, notification), #accept(db, merchant_id:, id:, request: nil)
 ```
 
 Payouts registers `payout.paid` and `payout.failed` on the same `Handlers`. A handler must

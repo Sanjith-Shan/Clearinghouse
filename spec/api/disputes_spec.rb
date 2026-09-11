@@ -6,19 +6,15 @@ RSpec.describe Clearinghouse::Api::Routes::Disputes do
   include_context 'with a merchant'
 
   let(:db) { ApiSpecHelpers.db }
-  let(:lookup) { StandInPaymentLookup.new }
-  let(:events) { RecordingEvents.new }
-  let(:service) { Clearinghouse::Disputes::Service.new(lookup: lookup, events: events, clock: clock) }
-  let(:deps) do
-    Clearinghouse::Api::Dependencies.new(db: db, clock: clock, admin_token: 'admin_spec_token', disputes: service)
-  end
+  let(:service) { Clearinghouse::Disputes::Service.new(clock: clock) }
   let(:other_merchant) do
     Clearinghouse::Merchants.create(db, clock: clock, name: 'Other', api_version: merchant_api_version).first
   end
 
   # A dispute.opened as the poller would hand it over, for a payment of `owner`.
   def open_dispute(owner, num, amount: 5_000)
-    lookup.add_payment("acq_#{num}", id: "pi_#{num}", merchant_id: owner.id)
+    insert_intent(db, merchant_id: owner.id, status: 'succeeded', amount: amount, amount_received: amount,
+                      acquirer_reference: "acq_#{num}")
     notification = Clearinghouse::Acquirer::Notification.new(
       id: "ntf_#{num}", type: 'dispute.opened', created_at: clock.now, cursor: num.to_s,
       data: { 'dispute_id' => "dsp_#{num}", 'acquirer_reference' => "acq_#{num}", 'amount' => amount,
@@ -65,7 +61,8 @@ RSpec.describe Clearinghouse::Api::Routes::Disputes do
     it 'returns the dispute in the shape RiskGate reads' do
       dispute = open_dispute(merchant, 1)
       get "/v1/disputes/#{dispute.id}", {}, auth
-      expect(json_body).to eq('id' => dispute.id, 'object' => 'dispute', 'payment_intent' => 'pi_1', 'amount' => 5_000,
+      expect(json_body).to eq('id' => dispute.id, 'object' => 'dispute', 'payment_intent' => dispute.payment_intent,
+                              'amount' => 5_000,
                               'currency' => 'usd', 'reason' => 'fraudulent', 'status' => 'needs_response',
                               'fee' => 1_500, 'created' => Time.utc(2026, 9, 1, 12).to_i, 'livemode' => false)
     end
@@ -86,7 +83,9 @@ RSpec.describe Clearinghouse::Api::Routes::Disputes do
         expect(last_response.status).to eq(200)
         expect(json_body).to include('id' => dispute.id, 'status' => 'lost')
       end
-      expect(events.types).to eq(%w[charge.dispute.created charge.dispute.closed])
+      expect(db[:events].where(object_id: dispute.id).order(:seq).select_map(:type))
+        .to eq(%w[charge.dispute.created charge.dispute.closed])
+      expect(db[:events].where(type: 'charge.dispute.closed').get(:request_id)).to start_with('req_')
     end
 
     it 'refuses to close a won dispute' do
@@ -101,16 +100,6 @@ RSpec.describe Clearinghouse::Api::Routes::Disputes do
       dispute = open_dispute(other_merchant, 1)
       post "/v1/disputes/#{dispute.id}/close", {}, auth
       expect(last_response.status).to eq(404)
-    end
-
-    context 'when the disputes service is not wired' do
-      let(:deps) { Clearinghouse::Api::Dependencies.new(db: db, clock: clock) }
-
-      it 'answers api_error rather than pretend' do
-        post '/v1/disputes/dp_x/close', {}, auth
-        expect(last_response.status).to eq(500)
-        expect(json_body['error']).to include('type' => 'api_error')
-      end
     end
   end
 end

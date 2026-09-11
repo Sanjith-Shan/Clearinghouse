@@ -144,14 +144,15 @@ has `dispute_locked`, `effects_written` and `committed`, and recovery is the cli
 the request. `spec/settlement/disputes_recovery_spec.rb` crashes at all nine and checks one
 dispute row, one posting per step, one event per state change, and the ledger invariants.
 
-### Seams (what is not on main yet)
+### What it is built on
 
-- `PaymentLookup#by_acquirer_reference` finds the PaymentIntent behind an acquirer reference.
-  The payments work owns `payment_intents.acquirer_reference`; its implementation plugs in
-  here. Specs use `StandInPaymentLookup` in `spec/support/settlement.rb`.
-- `Disputes::EventSink#emit!` has the shape of `Events.emit!`, the outbox. Specs use
-  `RecordingEvents`, which records an event only when its transaction commits.
-- `Api::Dependencies#disputes` is nil until both exist, and the close endpoint answers
-  `api_error` until then. `Settlement.notification_handlers(disputes:)` registers the
-  handlers for `bin/poller`.
-- `disputes.payment_intent` gets a foreign key once `payment_intents` exists.
+- `PaymentLookup.by_acquirer_reference` finds the PaymentIntent behind an acquirer reference
+  (`payment_intents.acquirer_reference`, indexed by the disputes migration).
+- Events go through the outbox, `Events.emit!`, in the same transaction. Both types
+  (`charge.dispute.created`, `charge.dispute.closed`) were already in `Events::TYPES`. The
+  merchant's accept carries the API request id on its event; the notification handlers run
+  outside a request and carry none.
+- The specs make payments with the real payments operations (`Payments::Operations.create`
+  and `confirm`, a background context, the simulator on a real port), so the dispute sees the
+  same intent row and capture posting production would.
+- `disputes.payment_intent` is a foreign key to `payment_intents`.

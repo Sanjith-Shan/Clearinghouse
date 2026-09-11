@@ -4,17 +4,10 @@
 module Clearinghouse
   # Finds our own payment from the acquirer's identifier for it. The acquirer only
   # knows its `acq_...` reference; disputes and the reconciler need the PaymentIntent
-  # and the merchant behind it.
-  #
-  # This is a seam. PaymentIntents (with their `acquirer_reference` column) belong to
-  # the payments work, which is not on main yet. Code here depends only on this
-  # interface; the implementation over the payment_intents table plugs in when that
-  # lands, and specs use the in-memory stand-in in spec/support.
+  # and the merchant behind it. Not scoped to a merchant: the caller is the acquirer,
+  # and the answer says which merchant it is.
   module PaymentLookup
     extend T::Sig
-    extend T::Helpers
-
-    interface!
 
     # What the settlement side needs to know about a payment.
     class Payment < T::Struct
@@ -23,7 +16,11 @@ module Clearinghouse
       const :currency, String
     end
 
-    sig { abstract.params(db: Sequel::Database, acquirer_reference: String).returns(T.nilable(Payment)) }
-    def by_acquirer_reference(db, acquirer_reference); end
+    sig { params(db: Sequel::Database, acquirer_reference: String).returns(T.nilable(Payment)) }
+    def self.by_acquirer_reference(db, acquirer_reference)
+      row = db[:payment_intents].where(acquirer_reference: acquirer_reference)
+                                .select(:id, :merchant_id, :currency).first
+      row ? Payment.new(id: row.fetch(:id), merchant_id: row.fetch(:merchant_id), currency: row.fetch(:currency)) : nil
+    end
   end
 end

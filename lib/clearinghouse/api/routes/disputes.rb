@@ -50,10 +50,9 @@ module Clearinghouse
 
         sig { params(ctx: Context, id: String).returns(Clearinghouse::Disputes::Dispute) }
         def self.accept(ctx, id)
-          service = ctx.deps.disputes
-          raise Clearinghouse::Error, 'Api::Dependencies#disputes is not wired' unless service
-
-          T.cast(service, Clearinghouse::Disputes::Service).accept(ctx.db, merchant_id: ctx.merchant!.id, id: id)
+          Clearinghouse::Disputes::Service.new(clock: ctx.clock)
+                                          .accept(ctx.db, merchant_id: ctx.merchant!.id, id: id,
+                                                          request: ctx.event_request)
         rescue Clearinghouse::Disputes::NotFoundError
           raise Errors::NotFoundError.resource('dispute', id)
         rescue Clearinghouse::Disputes::AlreadyClosedError

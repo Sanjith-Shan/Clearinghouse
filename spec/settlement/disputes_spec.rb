@@ -36,18 +36,18 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       expect(txn).to include(flow_id: dispute.id, flow_type: 'dispute', effective_at: Time.utc(2026, 3, 9, 9),
                              description: "dispute #{dispute.id} opened on #{pi}")
       expect(Clearinghouse::Ledger::Invariants.check(app_db)).to be_empty
-      expect(events.committed.map { |e| [e.type, e.merchant_id] }).to eq([['charge.dispute.created', merchant.id]])
-      expect(events.committed.first.object)
+      expect(dispute_events.map { |e| [e['type'], e['merchant_id']] }).to eq([['charge.dispute.created', merchant.id]])
+      expect(dispute_events.first['data']['object'])
         .to include('id' => dispute.id, 'object' => 'dispute', 'payment_intent' => pi, 'amount' => 10_000,
                     'currency' => 'usd', 'reason' => 'fraudulent', 'status' => 'needs_response')
     end
 
     it 'disputes the full captured amount even after a partial refund, as the network does' do
       pi, = captured_payment
-      Clearinghouse::Ledger.post!(app_db, flow_type: 'refund', flow_id: 're_1', description: "refund re_1 of #{pi}",
-                                          effective_at: clock.now,
-                                          entries: Clearinghouse::Ledger::Flows.refund(merchant_id: merchant.id,
-                                                                                       amount: usd(4_000)))
+      Clearinghouse::Payments::Operations.refund(payments_context, Clearinghouse::Payments::Refunds::Input.new(
+                                                                     payment_intent_id: pi, amount: 4_000,
+                                                                     reason: nil, metadata: {}
+                                                                   ))
       clock.advance(7 * day)
       poller.poll
       expect(the_dispute.amount).to eq(usd(10_000))
@@ -65,12 +65,12 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       clock.advance(7 * day)
       expect { poller.poll }.to raise_error(Clearinghouse::Disputes::UnknownPaymentError, /matches no payment/)
       expect(app_db[:disputes].count + app_db[:processed_notifications].count).to eq(0)
-      expect(events.committed).to be_empty
+      expect(dispute_events).to be_empty
     end
 
     it 'refuses a dispute in another currency than its payment' do
-      _, reference = captured_payment
-      lookup.add_payment(reference, id: 'pi_x', merchant_id: merchant.id, currency: 'eur')
+      pi, = captured_payment
+      owner_db[:payment_intents].where(id: pi).update(currency: 'eur') # as if our record were wrong
       clock.advance(7 * day)
       expect { poller.poll }.to raise_error(Clearinghouse::Disputes::InconsistentNotificationError, /usd.*eur/)
     end
@@ -82,15 +82,15 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       first = service.opened(app_db, notification)
       expect(service.opened(app_db, notification).id).to eq(first.id)
       expect(app_db[:ledger_transactions].where(flow_id: first.id).count).to eq(1)
-      expect(events.committed.length).to eq(1)
+      expect(dispute_events.length).to eq(1)
     end
 
     it 'rejects a malformed notification' do
+      _, reference = captured_payment
       bad = Clearinghouse::Acquirer::Notification.new(id: 'ntf_1', type: 'dispute.opened', created_at: clock.now,
                                                       cursor: '1', data: { 'dispute_id' => 'dsp_1',
-                                                                           'acquirer_reference' => 'acq_1',
+                                                                           'acquirer_reference' => reference,
                                                                            'amount' => -5, 'currency' => 'usd' })
-      lookup.add_payment('acq_1', id: 'pi_1', merchant_id: merchant.id)
       expect { service.opened(app_db, bad) }.to raise_error(Clearinghouse::Disputes::InconsistentNotificationError,
                                                             /not positive/)
       expect { service.opened(app_db, bad.with(data: {})) }.to raise_error(/no dispute_id/)
@@ -111,8 +111,8 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       expect(dispute_account('dispute_clearing')).to eq(0) # the acquirer's two settlement lines are still to come
       expect(app_db[:ledger_transactions].where(id: dispute.won_transaction_id).get(:description))
         .to eq("dispute #{dispute.id} won on #{dispute.payment_intent}")
-      expect(events.types).to eq(%w[charge.dispute.created charge.dispute.closed])
-      expect(events.committed.last.object).to include('status' => 'won')
+      expect(dispute_event_types).to eq(%w[charge.dispute.created charge.dispute.closed])
+      expect(dispute_events.last['data']['object']).to include('status' => 'won')
     end
 
     it 'posts nothing more on a loss' do
@@ -121,7 +121,7 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       poller.poll
       expect(the_dispute).to have_attributes(status: 'lost', closed_by: 'acquirer')
       expect(app_db[:ledger_transactions].count).to eq(postings)
-      expect(events.committed.last.object).to include('status' => 'lost')
+      expect(dispute_events.last['data']['object']).to include('status' => 'lost')
     end
 
     it 'refuses a close for a dispute that was never opened here' do
@@ -142,7 +142,7 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       )
       service.closed(app_db, again)
       expect(app_db[:ledger_transactions].where(flow_id: the_dispute.id).count).to eq(2)
-      expect(events.committed.length).to eq(2)
+      expect(dispute_events.length).to eq(2)
       expect { service.closed(app_db, again.with(data: again.data.merge('outcome' => 'lost'))) }
         .to raise_error(/was won and is now reported lost/)
     end
@@ -168,7 +168,7 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       expect(accept.call).to have_attributes(status: 'lost', closed_by: 'merchant', closed_at: clock.now)
       expect(accept.call.status).to eq('lost')
       expect(app_db[:ledger_transactions].count).to eq(postings)
-      expect(events.types).to eq(%w[charge.dispute.created charge.dispute.closed])
+      expect(dispute_event_types).to eq(%w[charge.dispute.created charge.dispute.closed])
     end
 
     it 'ignores the acquirer confirming the loss afterwards' do
@@ -176,7 +176,7 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
       resolve_at_acquirer('lost')
       poller.poll
       expect(the_dispute).to have_attributes(status: 'lost', closed_by: 'merchant')
-      expect(events.committed.length).to eq(2)
+      expect(dispute_events.length).to eq(2)
     end
 
     it 'still returns the money if the acquirer rules for the merchant anyway' do

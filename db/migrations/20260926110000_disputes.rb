@@ -7,8 +7,8 @@
 #
 # - acquirer_dispute_id is unique, the backstop against applying one dispute twice
 #   if the poller's own dedupe were ever bypassed.
-# - payment_intent has no foreign key yet: payment_intents is not on main. Add it
-#   when it lands.
+# - Disputes and settlement lines find their payment by the acquirer's reference,
+#   so payment_intents gets an index on it.
 # - A closed dispute has a close time, an open one does not, and a won dispute
 #   points at the posting that returned the merchant's money.
 #
@@ -19,7 +19,7 @@ Sequel.migration do
       CREATE TABLE disputes (
         id                    text PRIMARY KEY CHECK (id ~ '^dp_[A-Za-z0-9]{24}$'),
         merchant_id           text NOT NULL REFERENCES merchants (id),
-        payment_intent        text NOT NULL CHECK (payment_intent ~ '^pi_'),
+        payment_intent        text NOT NULL REFERENCES payment_intents (id),
         amount                bigint NOT NULL CHECK (amount > 0),
         fee                   bigint NOT NULL CHECK (fee >= 0),
         currency              text NOT NULL CHECK (currency ~ '^[a-z]{3}$'),
@@ -42,11 +42,13 @@ Sequel.migration do
       );
       CREATE INDEX disputes_merchant_created ON disputes (merchant_id, created_at DESC, id DESC);
       CREATE INDEX disputes_acquirer_reference ON disputes (acquirer_reference);
+      CREATE INDEX payment_intents_acquirer_reference ON payment_intents (acquirer_reference);
     SQL
     run 'GRANT SELECT, INSERT, UPDATE ON disputes TO clearinghouse_app'
   end
 
   down do
+    run 'DROP INDEX payment_intents_acquirer_reference'
     drop_table(:disputes)
   end
 end

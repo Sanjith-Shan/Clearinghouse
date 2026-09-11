@@ -46,59 +46,11 @@ module SettlementHelpers
   end
 end
 
-# Stand-in for the payments work's lookup over payment_intents.acquirer_reference,
-# which is not on main yet. Replace with the real one when it lands.
-class StandInPaymentLookup
-  include Clearinghouse::PaymentLookup
-
-  def initialize
-    @payments = {}
-  end
-
-  def add_payment(acquirer_reference, id:, merchant_id:, currency: 'usd')
-    @payments[acquirer_reference] = Clearinghouse::PaymentLookup::Payment.new(id: id, merchant_id: merchant_id,
-                                                                              currency: currency)
-  end
-
-  def by_acquirer_reference(_db, acquirer_reference)
-    @payments[acquirer_reference]
-  end
-end
-
-# Stand-in for Events.emit! (the payments work's outbox). It records an event only
-# when the database transaction it was emitted in commits, which is the property the
-# real outbox gets from being a row in that transaction.
-class RecordingEvents
-  include Clearinghouse::Disputes::EventSink
-
-  Event = Struct.new(:id, :merchant_id, :type, :object, :created, keyword_init: true)
-
-  attr_reader :committed
-
-  def initialize
-    @committed = []
-    @mutex = Mutex.new
-  end
-
-  def emit!(db, merchant_id:, type:, object:, clock:)
-    event = Event.new(id: Clearinghouse::Ids.generate('evt'), merchant_id: merchant_id, type: type,
-                      object: JSON.parse(JSON.generate(object)), created: clock.now.to_i)
-    db.after_commit { @mutex.synchronize { @committed << event } }
-    event.id
-  end
-
-  def types
-    committed.map(&:type)
-  end
-end
-
-# A merchant, a payment captured at the acquirer and in our ledger with its funds
-# available, and the lookup entry that ties the two together.
+# A merchant, and payments made through the real payments code against the
+# simulator (the same operations the API runs, with a background context).
 module DisputeHelpers
   def self.included(base)
-    base.let(:lookup) { StandInPaymentLookup.new }
-    base.let(:events) { RecordingEvents.new }
-    base.let(:service) { Clearinghouse::Disputes::Service.new(lookup: lookup, events: events, clock: clock) }
+    base.let(:service) { Clearinghouse::Disputes::Service.new(clock: clock) }
     base.let(:merchant) do
       Clearinghouse::Merchants.create(app_db, clock: clock, name: 'Rocket Rides', api_version: '2026-09-01').first
     end
@@ -108,21 +60,31 @@ module DisputeHelpers
     balance_of("merchant:#{merchant.id}:available", currency)
   end
 
-  # Returns [payment_intent id, acquirer reference].
-  def captured_payment(amount: 10_000, currency: 'usd', payment_method: 'pm_card_disputeFraudulent')
-    key = SecureRandom.hex(8)
-    reference = acquirer_charge(amount: amount, currency: currency, payment_method: payment_method, key: key)
-    pi = "pi_#{key}"
-    lookup.add_payment(reference, id: pi, merchant_id: merchant.id, currency: currency)
-    gross = Clearinghouse::Money.of(amount, currency)
-    net, fee = merchant.fee_schedule.split(gross)
-    flows = Clearinghouse::Ledger::Flows
-    [flows.capture(merchant_id: merchant.id, gross: gross, fee: fee),
-     flows.funds_available(merchant_id: merchant.id, net: net)].each do |entries|
-      Clearinghouse::Ledger.post!(app_db, flow_type: 'payment', flow_id: pi, description: "payment #{pi}",
-                                          effective_at: clock.now, entries: entries)
-    end
-    [pi, reference]
+  def payments_context(at_clock = clock)
+    acquirer = at_clock.equal?(clock) ? client : Clearinghouse::Acquirer::Client.new(clock: at_clock, base_url: sim.url)
+    deps = Clearinghouse::Api::Dependencies.new(db: app_db, clock: at_clock, acquirer: acquirer)
+    Clearinghouse::Api::Context.background(deps, merchant)
+  end
+
+  # Creates and confirms an automatic-capture PaymentIntent, then makes its net
+  # available, the posting the payouts work's availability job will make after the
+  # settlement delay. Returns [payment_intent id, acquirer reference]. `at_clock`
+  # makes the payment with another clock (a lagging one, say).
+  def captured_payment(amount: 10_000, currency: 'usd', payment_method: 'pm_card_disputeFraudulent', at_clock: clock)
+    payments = Clearinghouse::Payments
+    ctx = payments_context(at_clock)
+    intent = payments::Operations.create(ctx, payments::Create::Input.new(
+                                                amount: amount, currency: currency, payment_method: payment_method,
+                                                capture_method: 'automatic', customer_email: nil, metadata: {},
+                                                risk_fields: {}
+                                              ))
+    done = payments::Operations.confirm(ctx, payments::Confirm::Input.new(intent_id: intent.id, payment_method: nil))
+    net = merchant.fee_schedule.split(Clearinghouse::Money.of(amount, currency)).first
+    Clearinghouse::Ledger.post!(app_db, flow_type: 'payment', flow_id: done.id, description: 'funds available',
+                                        effective_at: at_clock.now,
+                                        entries: Clearinghouse::Ledger::Flows.funds_available(merchant_id: merchant.id,
+                                                                                              net: net))
+    [done.id, T.must(done.acquirer_reference)]
   end
 
   def poller(hook: nil, handlers: service.register(Clearinghouse::Acquirer::NotificationPoller::Handlers.new))
@@ -140,5 +102,15 @@ module DisputeHelpers
     raise "expected one dispute, found #{rows.length}" unless rows.length == 1
 
     Clearinghouse::Disputes::Dispute.from_row(rows.first)
+  end
+
+  # Dispute events in the outbox, oldest first, as their envelopes.
+  def dispute_events
+    app_db[:events].where(Sequel.like(:type, 'charge.dispute.%')).order(:seq)
+                   .map { |row| Clearinghouse::Events.envelope(row).merge('merchant_id' => row[:merchant_id]) }
+  end
+
+  def dispute_event_types
+    dispute_events.map { |event| event['type'] }
   end
 end

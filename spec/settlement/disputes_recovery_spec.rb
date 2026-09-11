@@ -35,7 +35,7 @@ RSpec.describe Clearinghouse::Disputes, :db do
 
       expect_consistent
       expect(postings(the_dispute)).to eq(1)
-      expect(events.types).to eq(['charge.dispute.created'])
+      expect(dispute_event_types).to eq(['charge.dispute.created'])
       expect(available).to eq(9_680 - 10_000 - 1_500)
     end
   end
@@ -52,7 +52,7 @@ RSpec.describe Clearinghouse::Disputes, :db do
       expect_consistent
       expect(the_dispute.status).to eq('won')
       expect(postings(the_dispute)).to eq(2)
-      expect(events.types).to eq(%w[charge.dispute.created charge.dispute.closed])
+      expect(dispute_event_types).to eq(%w[charge.dispute.created charge.dispute.closed])
       expect(available).to eq(9_680 - 1_500)
     end
   end
@@ -63,8 +63,7 @@ RSpec.describe Clearinghouse::Disputes, :db do
       clock.advance(7 * day)
       poller.poll
       id = the_dispute.id
-      crashing = Clearinghouse::Disputes::Service.new(lookup: lookup, events: events, clock: clock,
-                                                      crash_hook: crash_once_at(point))
+      crashing = Clearinghouse::Disputes::Service.new(clock: clock, crash_hook: crash_once_at(point))
       expect { crashing.accept(app_db, merchant_id: merchant.id, id: id) }
         .to raise_error(SettlementHelpers::SimulatedCrash)
       retried = service.accept(app_db, merchant_id: merchant.id, id: id)
@@ -72,7 +71,7 @@ RSpec.describe Clearinghouse::Disputes, :db do
       expect_consistent
       expect(retried).to have_attributes(status: 'lost', closed_by: 'merchant')
       expect(postings(retried)).to eq(1)
-      expect(events.types).to eq(%w[charge.dispute.created charge.dispute.closed])
+      expect(dispute_event_types).to eq(%w[charge.dispute.created charge.dispute.closed])
     end
   end
 end
