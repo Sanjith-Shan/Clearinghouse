@@ -1,0 +1,71 @@
+{
+  "command": "bin/model-test --sut ledger --sequences 50 --max-length 60 --seed 1 --plant fee_rounding",
+  "machine": {
+    "cpu": "Apple M3 Pro",
+    "os": "Darwin 25.5.0",
+    "ruby": "3.3.12",
+    "postgres": "PostgreSQL 16.15",
+    "database": "clearinghouse_test_model",
+    "pool_size": 2
+  },
+  "elapsed_seconds": 2.2,
+  "sequences": 3,
+  "operations": 138,
+  "passed": false,
+  "by_operation": {
+    "advance_clock": 17,
+    "availability_sweep": 11,
+    "cancel": 6,
+    "capture": 6,
+    "confirm": 25,
+    "create_intent": 28,
+    "create_merchant": 4,
+    "payout": 13,
+    "refund": 14,
+    "resolve_dispute": 2,
+    "settle": 12
+  },
+  "by_outcome": {
+    "advance_clock ok": 17,
+    "availability_sweep ok": 11,
+    "cancel ok": 3,
+    "cancel payment_intent_unexpected_state": 3,
+    "capture ok": 4,
+    "capture payment_intent_unexpected_state": 2,
+    "confirm card_declined": 3,
+    "confirm ok": 13,
+    "confirm payment_intent_unexpected_state": 1,
+    "confirm resource_missing": 8,
+    "create_intent amount_too_small": 6,
+    "create_intent ok": 22,
+    "create_merchant ok": 4,
+    "payout balance_insufficient": 10,
+    "payout ok": 3,
+    "refund amount_too_large": 1,
+    "refund charge_already_refunded": 2,
+    "refund ok": 11,
+    "resolve_dispute dispute_not_open": 2,
+    "settle ok": 12
+  },
+  "money_events": {
+    "capture": 10,
+    "dispute_debited": 1,
+    "dispute_opened": 1,
+    "funds_available": 2,
+    "payout": 3,
+    "refund": 11,
+    "refund_settled": 5,
+    "settlement": 6
+  },
+  "failure": {
+    "sequence_seed": 1000005,
+    "check": "balances",
+    "original_steps": 25,
+    "shrunk_steps": 3,
+    "shrink_runs": 51,
+    "details": [
+      "merchant:m1:pending (usd): model 456, system 455, off by -1",
+      "platform:fee_revenue (usd): model 44, system 45, off by 1"
+    ]
+  }
+}

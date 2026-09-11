@@ -126,6 +126,31 @@ The reference model implements `Sut` itself, so the harness can run the model ag
 second copy of the model. That run must be clean, and it is the sanity check that the
 generator, checks and shrinker work before any real system is involved.
 
+### The ledger-level system under test
+
+`LedgerSut` runs the money side of every operation through the real ledger on real
+Postgres. The domain endpoints (payments, refunds, disputes, payouts) are not on main yet,
+so the domain *decisions* (is this transition legal, did the card decline, which
+settlement lines arrived today) come from a shadow copy of the model. What the adapter
+does itself is what the domain code will do with the money:
+
+- computes our fee with `FeeSchedule` and the acquirer's with the simulator's schedule,
+  not with the model's arithmetic;
+- posts the `Ledger::Flows` builder for each event with `Ledger.post!`, under the object's
+  flow id and the simulated clock, one database transaction per operation;
+- **decides payouts itself**, reading available with `Ledger.balance_for_update` inside the
+  posting's transaction, which is the check the payouts code must make;
+- snapshots balances from `account_balances` (the row `Ledger.balance` returns, read in one
+  query rather than one per account, which made each step about ten times slower; a spec
+  checks the two agree), open flows from `Ledger::Clearing.report`, captured and refunded
+  per payment from the entries themselves, and violations from `Ledger::Invariants.check`
+  plus the clearing report's orphan balances.
+
+So today a sequence tests the ledger, the flow builders, the fee code and the payout
+balance rule against the model. It does not test domain logic; the API adapter will.
+Between sequences the ledger tables are emptied as the owner with triggers off for one
+transaction, and only in a database whose name contains `test`.
+
 ## Checks after every step
 
 In this order, and the first one that fails names the failure:
@@ -191,3 +216,104 @@ end
 
 Each `h.<operation>` runs the step on the model and the system, prints both outcomes and
 raises `Harness::Failed` with the check's details at the failing step.
+
+## Running it
+
+```
+bin/model-test --sut ledger --sequences 300 --max-length 80 --seed 1
+bin/model-test --sut model                                   # the model against itself
+bin/model-test --sut ledger --plant fee_rounding             # the planted-bug demo
+```
+
+It prints sequences run and operations executed, writes
+`results/exp4-model/<run>.md` and `.json` (machine, Postgres version, command, and counts of
+every operation outcome and every money event, so a run that never reached a path is
+visible), and on a failure `<run>-repro.rb`. In CI, `spec/model/ledger_sut_spec.rb` runs 12
+sequences of up to 40 steps with a fixed seed, plus the planted-bug checks.
+
+## Results so far
+
+Measured on an Apple M3 Pro, Postgres 16.15 in Docker, Ruby 3.3.12 (the run files in
+`results/exp4-model/` have the details):
+
+| run | sequences | operations | result |
+|---|---|---|---|
+| `--sut model --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed, 10.4s |
+| `--sut ledger --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed, 260s |
+
+The two runs execute the same sequences, since generation depends only on the seed and
+the model. The ledger run posted every `Ledger::Flows` event, and its `.md` lists how
+many times each operation reached each outcome, including the illegal ones.
+
+## Planted-bug demo (deliberate, not a real bug)
+
+This is the spec's interview-defense item 10 done on purpose: break something, let the
+harness shrink it, and debug from the shrunk case. The bugs live in
+`lib/clearinghouse/testing/model/planted_bugs.rb` and are injected into `LedgerSut`; the
+real classes are never modified.
+
+**1. Fee rounding flipped to half-up** (`--plant fee_rounding`). `bin/model-test --sut
+ledger --plant fee_rounding --sequences 50 --max-length 60 --seed 1` failed at step 25 of
+the third sequence, a JPY payment of 500 whose fee landed on exactly half a yen. The
+shrinker took 51 runs to cut 25 steps to 3, and moved the currency to USD on the way:
+
+```ruby
+Clearinghouse::Testing::Model::Harness.replay(sut: :ledger, plant: :fee_rounding) do |h|
+  h.create_merchant(merchant: "m1", fee_rate_scaled: 290000, fee_fixed: {"usd"=>30})
+  h.create_intent(intent: "pi_3", merchant: "m1", amount: 500, currency: "usd", capture_method: "automatic")
+  h.confirm(intent: "pi_3", payment_method: "pm_card_visa")
+end
+# step 3 failed check balances:
+#   merchant:m1:pending (usd): model 456, system 455, off by -1
+#   platform:fee_revenue (usd): model 44, system 45, off by 1
+```
+
+Debugging from there takes a minute: the fee on $5.00 is one cent high, 2.9% of 500 is
+14.5, and the model's half-even says 14. The shrinker's amount pass tried the round
+candidates below 500 first and none of them fails, which is itself the hint: 500 is the
+smallest USD amount whose 2.9% ends in exactly .5.
+
+**2. A flow that skips its clearing account** (`--plant payout_failed_skips_clearing`):
+`payout_failed` returns the money to the merchant out of cash instead of out of
+payout_clearing. It balances, so the database accepts it. The run failed in sequence 31 at
+step 45 and shrank to 7 steps in 1465 runs (about 90 seconds, most of it Postgres round
+trips):
+
+```ruby
+h.create_merchant(merchant: "m1", fee_rate_scaled: 290000, fee_fixed: {"usd"=>30})
+h.create_intent(intent: "pi_2", merchant: "m1", amount: 50, currency: "jpy", capture_method: "automatic")
+h.confirm(intent: "pi_2", payment_method: "pm_card_visa")
+h.advance_clock(hours: 48)
+h.availability_sweep
+h.payout(payout: "po_5", merchant: "m1", currency: "jpy", amount: 13)
+h.advance_clock(hours: 24)
+# step 7 failed check balances:
+#   platform:cash (jpy): model 0, system 13, off by 13
+#   platform:payout_clearing (jpy): model 0, system 13, off by 13
+```
+
+Every step left is needed: a payment, time for its funds to become available, a payout
+whose amount ends in 13 (the simulator's failure rule, which the shrinker found by trying
+13 first), and the day for the bank to answer. The disputing card of the original
+sequence was replaced by a visa, and the payment shrank to the 50 yen minimum. The
+`open_flows` check would have caught it too (po_5 still holds 13 in clearing), but
+`balances` comes first.
+
+## Findings
+
+**A capture smaller than its fee cannot be posted.** With the minimum charge taken out of
+the model (an exploratory run, not committed), the ledger adapter failed on the third step
+of `create_intent(amount: 1)` then `confirm`: `Ledger::Flows.capture` builds
+`merchant pending = gross - fee`, which is -29 cents, and `post!` refuses it with
+`InvalidPostingError: entry amounts must be positive`. The ledger is right to refuse. The
+gap is upstream: something has to guarantee `fee <= gross` before the acquirer is asked to
+capture, because once it has, a failed posting leaves money moved with no ledger record. A
+minimum charge amount does it for the default fee; a merchant fee schedule with a fixed part
+above the minimum would still hit it. This is interpretation 2 above, and the payments area
+should decide it. Not logged in `docs/bugs`, since no merged code does the wrong thing.
+
+Related, from reading `Flows` while writing the adapter: `capture`, `settlement` and
+`dispute_opened` drop zero-amount lines, but `funds_available` does not, so a payment whose
+fee equals its gross (a 31 cent charge on the default fee) would make the availability
+sweep fail on a zero entry. The adapter skips a zero net, and the real sweep will have to
+as well.

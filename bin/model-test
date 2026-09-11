@@ -1,0 +1,129 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Model-based testing, experiment 4. Generates random sequences of API operations,
+# runs each against the reference model and a system under test, checks every
+# invariant after every step, and on a failure shrinks the sequence and writes a
+# script that replays it. See docs/design/model-testing.md.
+#
+#   bin/model-test --sut ledger --sequences 200 --max-length 60 --seed 1
+#   bin/model-test --sut ledger --plant fee_rounding      # the planted-bug demo
+#   bin/model-test --sut model                            # the model against itself
+#
+# Writes results/exp4-model/<run>.md and .json, and <run>-repro.rb on a failure.
+# Exits 1 when a check failed, 2 when the system under test cannot run a sequence yet.
+
+require 'bundler/setup'
+require 'fileutils'
+require 'json'
+require 'optparse'
+require 'rbconfig'
+
+ENV['CLEARINGHOUSE_ENV'] ||= 'test'
+require_relative '../lib/clearinghouse/testing/model'
+
+options = { sut: 'ledger', sequences: 100, max_length: 60, seed: 1, plant: nil,
+            out: File.expand_path('../results/exp4-model', __dir__) }
+OptionParser.new do |opts|
+  opts.banner = 'usage: bin/model-test [options]'
+  opts.on('--sut NAME', %w[model ledger api], 'model, ledger or api (default ledger)') { |v| options[:sut] = v }
+  opts.on('--sequences N', Integer, 'sequences to run (default 100)') { |v| options[:sequences] = v }
+  opts.on('--max-length L', Integer, 'longest sequence; each is L/2..L long (default 60)') do |v|
+    options[:max_length] = v
+  end
+  opts.on('--seed S', Integer, 'seed (default 1)') { |v| options[:seed] = v }
+  opts.on('--plant BUG', Clearinghouse::Testing::Model::PlantedBugs::NAMES, 'run with a planted bug') do |v|
+    options[:plant] = v
+  end
+  opts.on('--out DIR', 'results directory (default results/exp4-model)') { |v| options[:out] = v }
+end.parse!
+
+M = Clearinghouse::Testing::Model
+command = "bin/model-test --sut #{options[:sut]} " \
+          "--sequences #{options[:sequences]} --max-length #{options[:max_length]} --seed #{options[:seed]}" \
+          "#{" --plant #{options[:plant]}" if options[:plant]}"
+run_name = [options[:sut], options[:plant], "seed#{options[:seed]}", "n#{options[:sequences]}",
+            "l#{options[:max_length]}"].compact.join('-')
+
+def machine
+  cpu = `sysctl -n machdep.cpu.brand_string 2>/dev/null`.strip
+  cpu = RbConfig::CONFIG['host_cpu'] if cpu.empty?
+  postgres = begin
+    db = Clearinghouse::DB.connect(role: :app, max_connections: 1)
+    db.get(Sequel.function(:version)).to_s[/PostgreSQL [\d.]+/].tap { db.disconnect }
+  rescue StandardError => e
+    "unavailable (#{e.class})"
+  end
+  { 'cpu' => cpu, 'os' => `uname -sr`.strip, 'ruby' => RUBY_VERSION, 'postgres' => postgres,
+    'database' => ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_test'), 'pool_size' => 2 }
+end
+
+started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+runner = M::Runner.new(sut_factory: -> { M.build_sut(options[:sut], plant: options[:plant]) },
+                       sut_name: options[:sut], seed: options[:seed], sequences: options[:sequences],
+                       max_length: options[:max_length], plant: options[:plant], log: $stdout)
+begin
+  report = runner.run
+rescue NotImplementedError => e
+  warn "the #{options[:sut]} adapter cannot run this sequence yet:\n#{e.message}"
+  exit 2
+end
+elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+stats = report.stats
+failure = report.failure
+
+puts
+puts "sequences run:        #{stats.sequences}"
+puts "operations executed:  #{stats.operations}"
+puts "elapsed:              #{elapsed.round(1)}s"
+if failure
+  puts "\nFAILED: #{failure.original_failure}"
+  puts "\nshrunk from #{failure.original.length} to #{failure.shrunk.length} steps " \
+       "in #{failure.shrink_attempts} runs:\n\n#{failure.script}"
+else
+  puts 'every check passed after every step'
+end
+
+FileUtils.mkdir_p(options[:out])
+info = machine
+summary = {
+  'command' => command, 'machine' => info, 'elapsed_seconds' => elapsed.round(1),
+  'sequences' => stats.sequences, 'operations' => stats.operations, 'passed' => failure.nil?,
+  'by_operation' => stats.by_operation.sort.to_h, 'by_outcome' => stats.by_outcome.sort.to_h,
+  'money_events' => stats.by_event.sort.to_h
+}
+if failure
+  summary['failure'] = { 'sequence_seed' => failure.sequence_seed, 'check' => failure.shrunk_failure.violation.check,
+                         'original_steps' => failure.original.length, 'shrunk_steps' => failure.shrunk.length,
+                         'shrink_runs' => failure.shrink_attempts,
+                         'details' => failure.shrunk_failure.violation.details }
+  File.write(File.join(options[:out], "#{run_name}-repro.rb"), failure.script)
+end
+File.write(File.join(options[:out], "#{run_name}.json"), "#{JSON.pretty_generate(summary)}\n")
+
+table = ->(hash) { hash.sort.map { |k, v| "| #{k} | #{v} |" }.join("\n") }
+File.write(File.join(options[:out], "#{run_name}.md"), <<~MD)
+  # Experiment 4: #{run_name}
+
+  `#{command}`
+
+  Machine: #{info['cpu']}, #{info['os']}, Ruby #{info['ruby']}, #{info['postgres']} in Docker,
+  database `#{info['database']}`, pool size #{info['pool_size']}. Elapsed #{elapsed.round(1)}s.
+
+  **#{stats.sequences} sequences, #{stats.operations} operations,
+  #{failure ? "FAILED check `#{failure.shrunk_failure.violation.check}`" : 'every check passed after every step'}.**
+  #{"\nShrunk from #{failure.original.length} to #{failure.shrunk.length} steps; replay with `#{run_name}-repro.rb`.\n" if failure}
+  ## Outcomes (expected by the model)
+
+  | operation and outcome | count |
+  |---|---|
+  #{table.call(stats.by_outcome)}
+
+  ## Money events posted
+
+  | Ledger::Flows event | count |
+  |---|---|
+  #{table.call(stats.by_event)}
+MD
+puts "\nwrote #{File.join(options[:out], run_name)}.{md,json}"
+exit(failure ? 1 : 0)

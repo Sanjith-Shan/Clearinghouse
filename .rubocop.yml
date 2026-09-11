@@ -11,6 +11,7 @@ AllCops:
     - tmp/**/*
     - sorbet/rbi/**/*
     - clients/go/**/*
+    - results/**/*
 
 Metrics/MethodLength:
   Max: 30
