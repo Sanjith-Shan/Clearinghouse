@@ -37,14 +37,14 @@ module Clearinghouse
         def self.register_writes(app)
           app.post '/v1/payment_intents' do
             T.bind(self, App)
-            respond(Payments::Operations.create(ctx, Routes::PaymentIntents.create_input(api_params)).to_api)
+            run_flow(Payments::Flows::CREATE_INTENT, Routes::PaymentIntents.create_input(api_params))
           end
 
           app.post '/v1/payment_intents/:id/confirm' do |id|
             T.bind(self, App)
             p = api_params.permit!('payment_method')
             input = Payments::Confirm::Input.new(intent_id: id, payment_method: Routes::PaymentIntents.payment_method(p))
-            respond(Payments::Operations.confirm(ctx, input).to_api)
+            run_flow(Payments::Flows::CONFIRM_INTENT, input)
           end
 
           app.post '/v1/payment_intents/:id/capture' do |id|
@@ -54,15 +54,15 @@ module Clearinghouse
                                                  amount_to_capture: p.integer(
                                                    'amount_to_capture', min: 1
                                                  ))
-            respond(Payments::Operations.capture(ctx, input).to_api)
+            run_flow(Payments::Flows::CAPTURE_INTENT, input)
           end
 
           app.post '/v1/payment_intents/:id/cancel' do |id|
             T.bind(self, App)
             p = api_params.permit!('cancellation_reason')
             reason = p.enum('cancellation_reason', Payments::Cancel::REASONS)
-            respond(Payments::Operations.cancel(ctx, Payments::Cancel::Input.new(intent_id: id,
-                                                                                 cancellation_reason: reason)).to_api)
+            run_flow(Payments::Flows::CANCEL_INTENT, Payments::Cancel::Input.new(intent_id: id,
+                                                                                 cancellation_reason: reason))
           end
         end
 

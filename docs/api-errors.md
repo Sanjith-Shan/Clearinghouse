@@ -46,6 +46,8 @@ header is absent when that is not known. See `docs/design/api.md`.
 - `acquirer_unavailable` (503): the card network did not answer, so the outcome is not known yet. Nothing has failed. Retry with the same `Idempotency-Key` and the request resumes where it stopped.
 - `idempotency_key_reused`: the key was first used with different parameters. Use a new key for a different request.
 - `idempotency_key_in_use`: the key's first request is still running. Retry shortly.
+- `idempotency_key_invalid`: the `Idempotency-Key` header is empty or longer than 255 characters.
+- `lock_timeout` (409): another request is changing this PaymentIntent right now (a capture while a cancel is in flight). Retry shortly.
 - `api_key_missing`: no `Authorization` header.
 - `api_key_invalid`: the key does not match any merchant.
 - `admin_token_invalid`: `POST /v1/merchants` needs the admin token, or merchant creation is disabled.

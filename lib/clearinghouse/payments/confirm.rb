@@ -43,6 +43,48 @@ module Clearinghouse
                                                    attempt: intent.attempt + 1, last_payment_error: nil))
       end
 
+      # The risk check for this attempt (docs/design/risk-integration.md). A network
+      # call, so it runs with no transaction open. nil when the app has no RiskGate
+      # client. The request is a pure function of the intent and the attempt, so
+      # asking again on resume is a replay on RiskGate's side.
+      sig { params(ctx: Api::Context, intent: PaymentIntent).returns(T.nilable(Risk::Step::Outcome)) }
+      def self.assess_risk(ctx, intent)
+        client = ctx.deps.risk_client
+        return nil if client.nil?
+
+        Risk::Step.call({ id: intent.id, amount: intent.amount, currency: intent.currency,
+                          created_at: intent.created_at, risk_fields: intent.risk_fields },
+                        attempt: intent.attempt, clock: ctx.clock, client: client)
+      end
+
+      # Stores the verdict, and acts on it only now that it is stored. A block ends
+      # the attempt like a decline, before the acquirer hears of it, and returns the
+      # error to answer with.
+      sig do
+        params(db: Sequel::Database, ctx: Api::Context, intent_id: String,
+               outcome: T.nilable(Risk::Step::Outcome)).returns(T.nilable(Api::Errors::RiskError))
+      end
+      def self.record_risk!(db, ctx, intent_id, outcome)
+        return nil if outcome.nil?
+
+        intent = PaymentIntents.lock!(db, merchant_id: ctx.merchant!.id, id: intent_id)
+        verdict = outcome.verdict
+        if verdict.proceed?
+          Support.save!(db, ctx, intent, intent.copy(risk: verdict.risk))
+          return nil
+        end
+
+        error = T.must(verdict.error)
+        to = Errors.transition!(intent, E::RiskBlocked)
+        blocked = Support.save!(db, ctx, intent, intent.copy(
+                                                   status: to, risk: verdict.risk, payment_method: nil,
+                                                   last_payment_error: { 'code' => error.code, 'decline_code' => nil,
+                                                                         'message' => error.message }
+                                                 ))
+        Support.emit!(db, ctx, 'payment_intent.payment_failed', blocked.to_api)
+        error
+      end
+
       # The authorization itself. Automatic capture asks the acquirer to capture in
       # the same call, so one request moves the money.
       sig { params(ctx: Api::Context, intent: PaymentIntent).returns(Acquirer::Outcome) }

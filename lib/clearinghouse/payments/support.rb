@@ -31,6 +31,10 @@ module Clearinghouse
                          effective_at: now, entries: entries)
         Seams.schedule_availability(db, flow_id: intent.id, merchant_id: merchant.id, net: net,
                                         available_on: now + (merchant.payout_delay_days * Clock::SECONDS_PER_DAY))
+        # A payment RiskGate sent to review holds the merchant's payout of what was
+        # captured (docs/design/risk-integration.md).
+        Risk::Step.hold_on_capture!(db, risk: intent.risk, merchant_id: merchant.id, payment_intent_id: intent.id,
+                                        amount_captured: gross, clock: ctx.clock)
       end
 
       # Our fee must not exceed what is captured, or the merchant's share would be

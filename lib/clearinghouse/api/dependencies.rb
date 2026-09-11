@@ -3,6 +3,8 @@
 
 require 'stringio'
 require_relative '../acquirer'
+require_relative '../risk'
+require_relative '../idempotency'
 
 module Clearinghouse
   module Api
@@ -24,6 +26,17 @@ module Clearinghouse
       # How long an authorization can wait for capture before the expiry sweep
       # cancels it, in simulated days. Card networks allow about a week.
       const :authorization_ttl_days, Integer, default: 7
+      # RiskGate, asked during every confirm. nil means no risk check at all (the
+      # intent's `risk` stays null), which only specs and experiments that are not
+      # about risk use; from_env always builds one.
+      const :risk_client, T.nilable(Risk::Client), default: nil
+      # How long a request's lease on its idempotency key lasts without a phase
+      # committing. Longer than the slowest foreign call (acquirer read timeout
+      # plus the risk deadline), or a slow request would be resumed by another
+      # while it is still running.
+      const :idempotency_lock_timeout, Numeric, default: Idempotency::Runner::DEFAULT_LOCK_TIMEOUT
+      # Called at every recovery point. DISARMED except in crash experiments.
+      const :crash_hook, Idempotency::CrashHook, factory: -> { Idempotency::CrashHook::DISARMED }
       # Guards POST /v1/merchants. nil disables the endpoint.
       const :admin_token, T.nilable(String), default: nil
       # Renders responses at the caller's version. Tests may pass an engine with
@@ -39,6 +52,11 @@ module Clearinghouse
           db: DB.connect(role: :app, max_connections: Integer(ENV.fetch('CLEARINGHOUSE_DB_POOL', '10'), 10)),
           clock: clock,
           acquirer: Acquirer::Client.new(clock: clock),
+          risk_client: Risk.client,
+          idempotency_lock_timeout: Float(ENV.fetch('CLEARINGHOUSE_IDEMPOTENCY_LOCK_TIMEOUT',
+                                                    Idempotency::Runner::DEFAULT_LOCK_TIMEOUT.to_s)),
+          # DISARMED unless CLEARINGHOUSE_ENV is test or experiment (CrashHook.from_env).
+          crash_hook: Idempotency::CrashHook.from_env,
           admin_token: ENV.fetch('CLEARINGHOUSE_ADMIN_TOKEN', nil),
           log: $stdout
         )

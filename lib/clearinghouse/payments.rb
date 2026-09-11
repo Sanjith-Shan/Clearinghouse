@@ -15,7 +15,8 @@ require_relative 'payments/cancel'
 require_relative 'payments/expiry'
 require_relative 'payments/refund'
 require_relative 'payments/balance'
-require_relative 'payments/operations'
+require_relative 'payments/intent_lock'
+require_relative 'payments/flows'
 
 module Clearinghouse
   # PaymentIntents and refunds: the state machine, the services behind the API
