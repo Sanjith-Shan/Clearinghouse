@@ -18,6 +18,7 @@ outbox. Idempotency and crash recovery have their own note (`idempotency.md`).
 | processing | authorization_approved | requires_capture | capture_method manual |
 | processing | authorization_approved | succeeded | capture_method automatic |
 | processing | authorization_declined | requires_payment_method | |
+| processing | risk_blocked | requires_payment_method | |
 | requires_capture | capture | succeeded | |
 | requires_payment_method | cancel | canceled | |
 | requires_confirmation | cancel | canceled | |
@@ -32,7 +33,7 @@ turns that into `invalid_request_error` with code `payment_intent_unexpected_sta
 message that lists the statuses that would have worked, generated from the table.
 
 Because the machine is data, the tests are generated from it. `StateMachine.illegal_pairs`
-is every `(status, event)` the table does not list (32 of 42), and
+is every `(status, event)` the table does not list (37 of 48), and
 `spec/payments/state_machine_spec.rb` asserts each one is refused. A row added to the table
 changes the list automatically. There is also a test
 that the table is deterministic (for any capture method, at most one row matches a
@@ -113,10 +114,11 @@ held while the network is slow.
 | capture | `Capture.check!`, `request`, `record!` |
 | cancel | `Cancel.check!`, `void` (only with an authorization to release), `record!` |
 
-`Payments::Operations` runs the steps in order. That is the synchronous path, and a crash
-between two steps leaves the intent where the last committed step put it. The idempotency
-layer (`idempotency.md`) runs the same steps as atomic phases and records a recovery point
-with each one, which is what makes them resumable.
+`Payments::Flows` runs these steps as the atomic phases of idempotent flows. Each step commits
+in a SERIALIZABLE transaction together with the recovery point it reaches, and each acquirer
+call sits between two of them, so any stopped request can be resumed from the key row.
+See `idempotency.md`. (The first version ran the steps in plain transactions, one after
+another, with nothing to resume from.)
 
 ### Confirm
 
@@ -135,8 +137,17 @@ with each one, which is what makes them resumable.
 
 An `Unknown` or `Unavailable` answer is neither. The intent stays in `processing` and the
 caller gets a 503 `acquirer_unavailable`, which never marks the payment failed:
-`pm_card_timeout` really did charge the card. Resolving that is M3's ambiguous-call
-handling.
+`pm_card_timeout` really did charge the card. The retry asks the acquirer what happened
+under the attempt's key (`idempotency.md`, "The ambiguous foreign call").
+
+Between `lock!` and the authorization, the flow asks RiskGate (`Confirm.assess_risk`, with no
+transaction open) and stores the verdict in its own phase (`Confirm.record_risk!`). A `block`
+ends the attempt like a decline (`risk_blocked` in the table: back to
+`requires_payment_method`, `last_payment_error.code = payment_blocked`,
+`payment_intent.payment_failed`, 402 `risk_error`) before the acquirer hears of it. A
+`review` proceeds, and the capture transaction opens a payout hold for what was captured
+(`Risk::Step.hold_on_capture!` in `Support.post_capture!`). An app built without a RiskGate
+client skips the check and leaves `risk` null. See `risk-integration.md`.
 
 ### What reaches the ledger
 

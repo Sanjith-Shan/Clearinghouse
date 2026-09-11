@@ -1,7 +1,7 @@
 # typed: false
 # frozen_string_literal: true
 
-DBHelper.clean_tables('events', 'refunds', 'payment_intents')
+DBHelper.clean_tables('events', 'refunds', 'payment_intents', 'idempotency_keys')
 
 # Builders for payments specs.
 module PaymentsSpecHelpers

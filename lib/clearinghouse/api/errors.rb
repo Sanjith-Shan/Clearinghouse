@@ -169,6 +169,22 @@ module Clearinghouse
         def http_status = 401
       end
 
+      # The object is owned by another request that is still running (a capture
+      # while a cancel of the same intent is between its phases). Stripe's code for
+      # this is lock_timeout. Transient, so it is never stored as a key's response.
+      class LockTimeoutError < InvalidRequestError
+        sig { params(message: String).void }
+        def initialize(message)
+          super(message, code: 'lock_timeout')
+        end
+
+        sig { override.returns(Integer) }
+        def http_status = 409
+
+        sig { override.returns(RetryHint) }
+        def retry_hint = RetryHint::Retry
+      end
+
       # Nothing raises this yet (the spec leaves rate limiting out of scope), but the
       # type exists so clients and the SDK handle it from day one.
       class RateLimitError < Base

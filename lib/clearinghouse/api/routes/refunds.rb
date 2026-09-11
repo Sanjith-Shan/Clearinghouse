@@ -12,9 +12,7 @@ module Clearinghouse
         def self.registered(app)
           app.post '/v1/refunds' do
             T.bind(self, App)
-            input = Routes::Refunds.input(api_params)
-            refund = Payments::Operations.refund(ctx, input)
-            respond(Payments::Refunds.to_api(ctx.db, ctx, refund))
+            run_flow(Payments::Flows::CREATE_REFUND, Routes::Refunds.input(api_params))
           end
 
           app.get '/v1/refunds/:id' do |id|

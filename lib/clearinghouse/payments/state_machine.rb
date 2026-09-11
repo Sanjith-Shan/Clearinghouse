@@ -13,7 +13,7 @@ module Clearinghouse
     #   requires_payment_method -> requires_confirmation -> processing -> requires_capture -> succeeded
     #             |                         |                   |               |
     #             +----------> canceled <---+                   |               +--> canceled (void, or expiry)
-    #                                                           +-> requires_payment_method (decline)
+    #                                                           +-> requires_payment_method (decline, risk block)
     #                                                           +-> succeeded (automatic capture)
     #
     # `processing` cannot be canceled. It means an authorization is in flight
@@ -47,6 +47,7 @@ module Clearinghouse
           Refund = new('refund')
           AuthorizationApproved = new('authorization_approved')
           AuthorizationDeclined = new('authorization_declined')
+          RiskBlocked = new('risk_blocked')
           AuthorizationExpired = new('authorization_expired')
         end
       end
@@ -90,6 +91,8 @@ module Clearinghouse
         Transition.new(from: S::Processing, event: E::AuthorizationApproved, to: S::Succeeded,
                        guard: Guard::AutomaticCapture),
         Transition.new(from: S::Processing, event: E::AuthorizationDeclined, to: S::RequiresPaymentMethod),
+        # RiskGate said block: the attempt ends before the acquirer hears of it.
+        Transition.new(from: S::Processing, event: E::RiskBlocked, to: S::RequiresPaymentMethod),
         # A partial capture is still this row: the rest of the authorization is released.
         Transition.new(from: S::RequiresCapture, event: E::Capture, to: S::Succeeded),
         Transition.new(from: S::RequiresPaymentMethod, event: E::Cancel, to: S::Canceled),

@@ -122,6 +122,53 @@ module Clearinghouse
         JSON.generate(body)
       end
 
+      IDEMPOTENCY_KEY_MAX = 255
+
+      # Runs a mutating operation under the request's Idempotency-Key (or a
+      # generated one when there is none) and sends whatever the flow's key row
+      # says to send: a fresh response, or the stored one for a replay, with
+      # Idempotent-Replayed and Original-Request as Stripe sends them.
+      sig { params(flow: Idempotency::Flow, input: T::Struct).returns(String) }
+      def run_flow(flow, input)
+        key = idempotency_key!
+        runner = Idempotency::Runner.new(db: @deps.db, clock: @deps.clock, lock_timeout: @deps.idempotency_lock_timeout,
+                                         crash_hook: @deps.crash_hook)
+        request = Idempotency::Runner::Request.new(merchant_id: ctx.merchant!.id, key: key,
+                                                   http_method: T.must(self.request.request_method),
+                                                   path: T.must(self.request.path_info), params: api_params.raw,
+                                                   request_id: ctx.request_id)
+        renderer = FlowRenderer.new(ctx, api_version: ctx.api_version, expand: api_params.expand)
+        result = runner.call(flow: flow, input: input, request: request, context: ctx, renderer: renderer)
+        send_stored(result)
+      rescue Idempotency::KeyReusedError
+        raise Errors::IdempotencyKeyReusedError, T.must(key)
+      rescue Idempotency::KeyInUseError, Idempotency::LockLostError
+        raise Errors::IdempotencyKeyInUseError, key || 'generated'
+      end
+
+      sig { returns(T.nilable(String)) }
+      def idempotency_key!
+        key = ctx.idempotency_key
+        return nil if key.nil?
+        return key if !key.strip.empty? && key.length <= IDEMPOTENCY_KEY_MAX
+
+        raise Errors::InvalidRequestError.new(
+          "Idempotency-Key must be 1 to #{IDEMPOTENCY_KEY_MAX} characters.", code: 'idempotency_key_invalid'
+        )
+      end
+
+      sig { params(result: Idempotency::Runner::Result).returns(String) }
+      def send_stored(result)
+        response = result.response
+        status(response.status)
+        response.headers.each { |name, value| headers[name] = value }
+        if result.replayed
+          headers['idempotent-replayed'] = 'true'
+          headers['original-request'] = result.original_request_id
+        end
+        response.body
+      end
+
       sig { params(object: T::Hash[String, T.untyped]).returns(T::Hash[String, T.untyped]) }
       def render_resource(object)
         @deps.versioning.render(object, ctx.api_version, expand: api_params.expand, context: ctx)
