@@ -238,6 +238,35 @@ That error is transient, so it is not stored against the key. If the owner crash
 completer finishes it and releases the intent. Refunds don't take the intent. They reserve
 their amount under the row lock instead (`payments.md`), so several can be in flight at once.
 
+## The completer and the reaper
+
+`Idempotency::Completer` finishes requests nobody is finishing. A key is a candidate when it
+is unfinished, nobody holds it (the lease expired, or the request gave it back after a
+retryable error), and its last run is at least `grace` ago. `grace` defaults to the lock
+timeout, and it leaves a client that was just told to retry time to do it itself. Each
+candidate is resumed through `Runner#resume`, under exactly the lease rules a client retry
+uses, so a completer and a client, or two completers, never run one key at once. The loser
+gets `KeyInUseError` and the pass reports the key as busy. A key whose acquirer still doesn't
+answer is reported as failed, stays where it is, and is tried again on the next pass.
+
+The completer knows nothing about payments. It needs a registry (to find the key's flow) and
+a resumer. `Api::Completion.resume` rebuilds the request's context from the row alone: the
+merchant, the original request id (so events it emits carry the request that caused them),
+the key if the client supplied one, and a renderer at the stored API version and `expand[]`.
+The response it stores is then exactly what the client's retry replays.
+
+`Idempotency::Reaper.run` deletes finished keys older than 24 hours on the injected clock. It
+never deletes an unfinished key, however old. Each one is a request the completer still owes an
+ending, and its row is the only record of how far it got. The reaper counts them (`stuck`) for
+an operator instead. A finished key past its 24 hours that the reaper hasn't reached yet is
+treated as gone by the next request that uses it, so the contract doesn't depend on the
+reaper's schedule.
+
+`bin/completer` runs, on every tick, the authorization expiry sweep, a completer pass and a
+reaper pass, and prints one JSON line with what each did. `--once` does a single tick, and
+`--interval`, `--grace` and `--limit` tune it. It is configured like the server
+(`Dependencies.from_env`).
+
 ## What goes beyond rocket-rides
 
 - **The ambiguous call is resolved by asking, not by trusting the remote replay**, with

@@ -8,6 +8,7 @@ require_relative 'idempotency/store'
 require_relative 'idempotency/serializable'
 require_relative 'idempotency/crash_hook'
 require_relative 'idempotency/runner'
+require_relative 'idempotency/completer'
 
 module Clearinghouse
   # Idempotency keys and crash recovery: atomic phases between foreign calls,
