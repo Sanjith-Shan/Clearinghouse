@@ -38,12 +38,14 @@ module Clearinghouse
       end
 
       # Settlement file line for a capture. The acquirer pays gross minus its own
-      # processing fee; the receivable clears for the full gross.
+      # processing fee; the receivable clears for the full gross. On a capture
+      # smaller than the acquirer's fixed fee (1 yen, 1 fils) the acquirer takes
+      # the difference from us instead, so cash is credited, not debited.
       sig { params(gross: Money, acquirer_fee: Money).returns(T::Array[Entry]) }
       def self.settlement(gross:, acquirer_fee:)
-        present([Entry.debit(CASH, gross - acquirer_fee),
-                 Entry.debit(PROCESSING_EXPENSE, acquirer_fee),
-                 Entry.credit(RECEIVABLE, gross)])
+        net = gross - acquirer_fee
+        cash = net.negative? ? Entry.credit(CASH, -net) : Entry.debit(CASH, net)
+        present([cash, Entry.debit(PROCESSING_EXPENSE, acquirer_fee), Entry.credit(RECEIVABLE, gross)])
       end
 
       # The settlement delay has passed; the merchant's net can be paid out.
