@@ -3,9 +3,11 @@
 
 module Clearinghouse
   module Webhooks
-    # The rules of a per-endpoint circuit breaker, as pure functions over its state.
-    # Breakers persists the state on the endpoint row and applies these rules under a
-    # row lock, so every worker in every process sees one breaker per endpoint.
+    # The rules of a per-endpoint circuit breaker after each attempt, as pure functions
+    # over its state. Breakers persists the state on the endpoint row and applies these
+    # rules under a row lock, so every worker in every process sees one breaker per
+    # endpoint. The claim side (skip an open endpoint, admit one probe once the
+    # cool-down is over) runs inside the claim function, webhook_claim_isolated.
     #
     #   closed    --threshold consecutive failures-->  open (until retry_at)
     #   open      --retry_at reached, at claim time--> half_open
@@ -61,29 +63,6 @@ module Clearinghouse
 
       sig { returns(State) }
       def after_success = State::CLOSED
-
-      # At claim time: nil if nothing may be claimed now, otherwise the state to claim
-      # under (an open breaker whose cool-down is over becomes half_open).
-      sig { params(current: State, now: Time).returns(T.nilable(State)) }
-      def admit(current, now:)
-        return current unless current.state == 'open'
-
-        retry_at = current.retry_at
-        return nil if retry_at && now < retry_at
-
-        State.new(state: 'half_open', consecutive_failures: current.consecutive_failures,
-                  reopens: current.reopens, retry_at: nil)
-      end
-
-      # How many deliveries may be in flight to an endpoint in this state.
-      sig { params(current: State, max_in_flight: Integer).returns(Integer) }
-      def in_flight_limit(current, max_in_flight)
-        case current.state
-        when 'closed' then max_in_flight
-        when 'half_open' then 1
-        else 0
-        end
-      end
 
       sig { params(reopens: Integer).returns(Float) }
       def cooldown_after(reopens)

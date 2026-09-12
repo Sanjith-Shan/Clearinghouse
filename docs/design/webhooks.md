@@ -237,19 +237,36 @@ healthy endpoints' deliveries sit behind them. Three defences, all enforced in P
 they hold across every worker process.
 
 **1. In-flight cap per endpoint** (default 4, `--max-in-flight`). A delivery is in flight
-while it holds a live lease. `IsolatedQueue#claim`:
+while it holds a live lease. A claim is one call to the PL/pgSQL function
+`webhook_claim_isolated`, which:
 
 1. Picks candidate endpoints: those with due, unleased deliveries that are neither open
    nor at their cap, oldest due delivery first. No locks; this is a hint.
-2. For each candidate, one short transaction: lock the endpoint row `FOR UPDATE SKIP
-   LOCKED` (if another claimer has it, move on to the next endpoint, never wait), check the
-   breaker, count the endpoint's live leases, and lease one delivery only if under the cap.
+2. For each candidate: locks the endpoint row `FOR UPDATE SKIP LOCKED` (if another claimer
+   has it, moves on to the next endpoint, never waits), checks the breaker, counts the
+   endpoint's live leases in a fresh statement, and leases one delivery only if under the
+   cap. The first to succeed is returned.
 
 Claims for one endpoint take turns on its row lock, and each commits its lease before
-releasing the lock, so each sees every lease before it. The cap cannot race, across
-threads or processes. A spec runs twelve claimers on two separate connection pools
-against one endpoint with a cap of 3 and gets exactly 3; with the row lock removed it gets
-4.
+releasing the lock, so each sees every lease before it (in PL/pgSQL each statement of a
+volatile function takes a new snapshot under READ COMMITTED, so the count is taken after
+the lock). The cap cannot race, across threads or processes. A spec runs twelve claimers
+on two separate connection pools against one endpoint with a cap of 3 and gets exactly 3;
+with the row lock removed from the function it gets 4.
+
+*Why a function.* The first version did the same steps from Ruby: a candidate query, then
+per endpoint `BEGIN`, lock, count, lease, `COMMIT`, five or six round trips per claim
+where FIFO needs one. A trial run of experiment 6 with every endpoint healthy showed
+isolation *slower* than FIFO (median time to delivery 3.6 s against 0.7 s), and
+`exp/webhooks/claim_bench.rb`, which claims and completes 1500 deliveries with 32
+threads and no HTTP, measured 62 and 83 claims a second for isolation against 245 and
+386 for FIFO, on a machine where one Postgres round trip took about 3 ms (Docker on
+macOS, other test suites running). Per-endpoint isolation that costs a factor of three
+in throughput would lose to FIFO on any workload without a hostile endpoint in it. The
+function runs the identical steps in one round trip. The one behavioural difference:
+an endpoint row that was locked and then skipped (at its cap) stays locked until the
+claim ends, milliseconds later, instead of being released at once. I have not re-run the
+bench since the change; that and the experiment are to be re-run on a quiet machine.
 
 *Why a row lock and a lease count, and not the alternatives.* A counter column
 (`in_flight += 1` on claim, `-= 1` on record) is cheaper to read, but a worker killed
