@@ -37,6 +37,7 @@ The design is built from public engineering writing, credited here.
 - [bin/explain](docs/design/explain.md): a readable trace of every ledger entry behind a payment, refund, dispute or payout.
 - [Load generator](docs/design/loadgen.md): open-loop load at fixed rates, latency from the intended send time (coordinated omission), scenarios and rate sweeps.
 - [RiskGate integration](docs/design/risk-integration.md): the deadline, keep-alive pool and circuit breaker, fail-open and what it costs, review holds on payouts, and where the risk step sits in confirm.
+- [Isolation](docs/design/isolation.md): experiment 3, READ COMMITTED read-then-write against `FOR UPDATE` against SERIALIZABLE with retry, the anomalies each allows, and what ships where.
 
 ## Bugs the harness caught
 
