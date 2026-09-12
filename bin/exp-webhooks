@@ -26,6 +26,7 @@ PLANS = {
 }.freeze
 
 root = File.expand_path('..', __dir__)
+command = ['bin/exp-webhooks', *ARGV].join(' ')
 options = { runs: PLANS.keys, out: File.join(root, 'results/exp6-webhooks') }
 overrides = {}
 OptionParser.new do |opts|
@@ -51,8 +52,8 @@ FileUtils.mkdir_p([raw_dir, options[:out]])
 settings = Experiments::Webhooks::Driver::Settings.new(raw_dir: raw_dir, **overrides)
 driver = Experiments::Webhooks::Driver.new(settings)
 
-def capture(command)
-  `#{command} 2>/dev/null`.strip
+def capture(shell)
+  `#{shell} 2>/dev/null`.strip
 rescue SystemCallError
   ''
 end
@@ -74,7 +75,7 @@ results = options[:runs].map do |name|
   summary
 end
 
-report = { 'command' => "bin/exp-webhooks #{ARGV.join(' ')}".strip, 'command_line' => $PROGRAM_NAME,
+report = { 'command' => command,
            'machine' => machine, 'settings' => settings.serialize.except('raw_dir'), 'runs' => results }
 File.write(File.join(options[:out], 'summary.json'), "#{JSON.pretty_generate(report)}\n")
 

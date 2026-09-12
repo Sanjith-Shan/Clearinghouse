@@ -318,6 +318,11 @@ deliveries queued ahead of twelve healthy ones. Isolated: the hung endpoint gets
 attempts, its breaker opens, and the healthy twelve arrive in well under the time one hung
 attempt takes. FIFO: all twelve hung attempts go first.
 
+Experiment 6 (`bin/exp-webhooks`) is the full-size version: 100 endpoints, 32 workers in
+four processes, and a run that `kill -9`s workers. Its method, the way simulated and wall
+time interact in it, and its results are in
+[results/exp6-webhooks/README.md](../../results/exp6-webhooks/README.md).
+
 ## Running it
 
 ```
