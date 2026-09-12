@@ -289,6 +289,7 @@ test suites running on the same machine (so the times are loose). The run files 
 | `--sut model --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed |
 | `--sut ledger --sequences 300 --max-length 80 --seed 1`, before the model followed payments' fee rule | 300 | 17,826 | every check passed, 260s |
 | `--sut api --sequences 150 --max-length 60 --seed 1` | 150 | 6,714 | every check passed, 669s |
+| `--sut ledger --sequences 300 --max-length 80 --seed 1`, after | 130 | 7,660 | **failed** on sequence 130: the settlement bug under Findings |
 
 The model and ledger runs execute the same sequences, since generation depends only on the
 seed and the model. The API run leaves out the operations and cards its adapter cannot
@@ -374,6 +375,13 @@ zero nets. The model makes no zero-net availability posting and the ledger adapt
 it too, so once the API adapter runs the availability sweep, a sequence with a 31 cent
 payment will check the real code on this. The generator produces amounts in 1..60 for
 this reason.
+
+**A payment smaller than the acquirer's fee could never be settled** (a real bug, in
+`docs/bugs/model-settlement-fee-over-gross.md`). Once the model followed payments' fee rule,
+the ledger run with seed 1 found that a 1 fils payment, which payments accepts, produces a
+settlement line whose acquirer fee (10 fils) exceeds its amount, and `Flows.settlement`
+built a negative cash debit that `post!` refused. It shrank from 56 steps to 5. Fixed in
+`Flows.settlement`.
 
 **Against the real API (payments M2), no disagreement so far.** Every difference the first
 API run found was the model's guess against a documented payments decision (see
