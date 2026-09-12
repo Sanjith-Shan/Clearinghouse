@@ -232,6 +232,8 @@ module Clearinghouse
       register Routes::Merchants
       register Routes::PaymentIntents
       register Routes::Refunds
+      register Routes::WebhookEndpoints
+      register Routes::Events
     end
   end
 end
