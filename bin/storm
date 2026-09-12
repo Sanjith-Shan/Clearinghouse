@@ -1,0 +1,135 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 1, the retry storm (docs/design/storm.md). Starts its own acquirer simulator
+# (bin/sim) and its own API server (Puma, sim/experiments/storm.ru, CLEARINGHOUSE_ENV=experiment),
+# creates and migrates the database if needed, runs the storm and writes
+# results/exp1-retry-storm/<timestamp>/{results.json,results.md}.
+#
+#   bin/storm --impl none|naive|clearinghouse|all --intents N --concurrency K --drop-rate R
+#             [--seed S] [--out DIR] [--label smoke|full] [--parallel P] [--max-retries M]
+#             [--server-threads T] [--db-pool N] [--sim-threads N] [--acquirer-latency P50,P99]
+#             [--baseline-on-unknown fail|hold] [--db NAME] [--request-log]
+#
+# `--impl all` runs the three back to back against the same processes, with the same seed.
+# Runs are labelled smoke unless --label full says otherwise.
+
+require 'bundler/setup'
+require 'fileutils'
+require 'optparse'
+require 'rbconfig'
+require 'socket'
+require_relative '../sim/experiments/storm'
+require_relative '../lib/clearinghouse/experiments/storm_baselines'
+
+ROOT = File.expand_path('..', __dir__)
+COMMAND = "bin/storm #{ARGV.join(' ')}".strip
+
+opts = { impl: 'all', intents: 20, concurrency: 8, drop_rate: 0.2, seed: 1, out: nil, label: 'smoke',
+         parallel: 4, max_retries: 10, server_threads: 16, db_pool: nil, sim_threads: 32,
+         acquirer_latency: [0, 0], on_unknown: 'fail', db: ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_storm'),
+         request_log: false }
+OptionParser.new do |o|
+  o.on('--impl IMPL', Experiments::Storm::IMPLS + ['all']) { |v| opts[:impl] = v }
+  o.on('--intents N', Integer) { |v| opts[:intents] = v }
+  o.on('--concurrency K', Integer) { |v| opts[:concurrency] = v }
+  o.on('--drop-rate R', Float) { |v| opts[:drop_rate] = v }
+  o.on('--seed S', Integer) { |v| opts[:seed] = v }
+  o.on('--out DIR') { |v| opts[:out] = File.expand_path(v) }
+  o.on('--label LABEL', %w[smoke full]) { |v| opts[:label] = v }
+  o.on('--parallel P', Integer) { |v| opts[:parallel] = v }
+  o.on('--max-retries M', Integer) { |v| opts[:max_retries] = v }
+  o.on('--server-threads T', Integer) { |v| opts[:server_threads] = v }
+  o.on('--db-pool N', Integer) { |v| opts[:db_pool] = v }
+  o.on('--sim-threads N', Integer) { |v| opts[:sim_threads] = v }
+  o.on('--acquirer-latency P50,P99', Array) { |v| opts[:acquirer_latency] = v.map { |x| Integer(x, 10) } }
+  o.on('--baseline-on-unknown MODE', %w[fail hold]) { |v| opts[:on_unknown] = v }
+  o.on('--db NAME') { |v| opts[:db] = v }
+  o.on('--request-log') { opts[:request_log] = true }
+end.parse!
+opts[:db_pool] ||= opts[:server_threads]
+stamp = Time.now.utc.strftime('%Y%m%dT%H%M%SZ')
+out = opts[:out] || File.join(ROOT, 'results/exp1-retry-storm', "#{stamp}-#{opts[:label]}")
+FileUtils.mkdir_p(out)
+
+def free_port
+  server = TCPServer.new('127.0.0.1', 0)
+  server.addr[1]
+ensure
+  server&.close
+end
+
+def uptime = IO.popen(['uptime'], &:read).strip
+
+def wait_until_up(url, pid, what)
+  deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 60
+  loop do
+    Net::HTTP.get_response(URI(url))
+    return
+  rescue SystemCallError, IOError, Net::OpenTimeout, Net::ReadTimeout
+    raise "#{what} exited during boot" if Process.waitpid(pid, Process::WNOHANG)
+    raise "#{what} did not come up at #{url}" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+    sleep 0.1
+  end
+end
+
+# The database, created and migrated if this is its first run.
+def prepare_database(name)
+  admin = Clearinghouse::DB.connect(role: :owner, database: 'postgres', max_connections: 1)
+  if admin[:pg_database].where(datname: name).empty?
+    admin.run("CREATE DATABASE #{admin.literal(Sequel.identifier(name))}")
+  end
+  admin.disconnect
+  Clearinghouse::DB.migrate!(database: name)
+  owner = Clearinghouse::DB.connect(role: :owner, database: name, max_connections: 1)
+  Clearinghouse::Experiments::StormBaselines.ensure_table!(owner)
+  owner.disconnect
+end
+
+prepare_database(opts[:db])
+sim_port = free_port
+api_port = free_port
+sim_url = "http://127.0.0.1:#{sim_port}"
+api_url = "http://127.0.0.1:#{api_port}"
+pids = []
+begin
+  pids << Process.spawn(RbConfig.ruby, File.join(ROOT, 'bin/sim'), '--port', sim_port.to_s, '--threads',
+                        opts[:sim_threads].to_s, chdir: ROOT, out: File.join(out, 'sim.log'), err: %i[child out])
+  wait_until_up("#{sim_url}/admin/config", pids.last, 'bin/sim')
+  env = { 'CLEARINGHOUSE_ENV' => 'experiment', 'CLEARINGHOUSE_DB' => opts[:db],
+          'CLEARINGHOUSE_DB_POOL' => opts[:db_pool].to_s, 'CLEARINGHOUSE_ACQUIRER_URL' => sim_url,
+          'STORM_ON_UNKNOWN' => opts[:on_unknown], 'RACK_ENV' => 'production' }
+  env['STORM_REQUEST_LOG'] = File.join(out, 'requests.log') if opts[:request_log]
+  threads = "#{opts[:server_threads]}:#{opts[:server_threads]}"
+  pids << Process.spawn(env, RbConfig.ruby, '-S', 'bundle', 'exec', 'puma', '-b', "tcp://127.0.0.1:#{api_port}",
+                        '-t', threads, '-w', '0', 'sim/experiments/storm.ru',
+                        chdir: ROOT, out: File.join(out, 'server.log'), err: %i[child out])
+  wait_until_up("#{api_url}/healthz", pids.last, 'the API server')
+
+  plan = Experiments::Storm::Plan.new(intents: opts[:intents], concurrency: opts[:concurrency],
+                                      drop_rate: opts[:drop_rate], seed: opts[:seed], parallel: opts[:parallel],
+                                      max_retries: opts[:max_retries],
+                                      acquirer_latency_ms: [opts[:acquirer_latency][0], opts[:acquirer_latency][1]])
+  db = Clearinghouse::DB.connect(role: :app, database: opts[:db], max_connections: 4)
+  runner = Experiments::Storm::Runner.new(api_url: api_url, sim_url: sim_url, db: db, plan: plan)
+  impls = opts[:impl] == 'all' ? Experiments::Storm::IMPLS : [opts[:impl]]
+  report = { 'label' => opts[:label], 'command' => COMMAND, 'machine' => Experiments::Storm::MACHINE,
+             'started_at' => Time.now.utc.iso8601, 'load_before' => uptime, 'plan' => plan.serialize,
+             'server' => { 'threads' => opts[:server_threads], 'db_pool' => opts[:db_pool],
+                           'sim_threads' => opts[:sim_threads], 'baseline_on_unknown' => opts[:on_unknown],
+                           'database' => opts[:db] } }
+  report['results'] = impls.map { |impl| runner.run(impl) }
+  report['load_after'] = uptime
+  File.write(File.join(out, 'results.json'), "#{JSON.pretty_generate(report)}\n")
+  File.write(File.join(out, 'results.md'), Experiments::Storm.markdown(report))
+  puts Experiments::Storm.markdown(report)
+  puts "\nwritten to #{out}"
+ensure
+  pids.reverse_each do |pid|
+    Process.kill('TERM', pid)
+    Process.wait(pid)
+  rescue Errno::ESRCH, Errno::ECHILD
+    nil
+  end
+end
