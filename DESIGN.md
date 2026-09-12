@@ -35,6 +35,7 @@ The design is built from public engineering writing, credited here.
 - [Acquirer simulator](docs/design/sim.md): the simulated card acquirer, how it drops responses after committing, and why the client separates Unknown from Unavailable.
 - [Client library](docs/design/client.md): the Ruby client, and why it reuses one idempotency key across every retry of a call.
 - [bin/explain](docs/design/explain.md): a readable trace of every ledger entry behind a payment, refund, dispute or payout.
+- [Code quality](docs/design/quality.md): mutation testing with one database per mutant job, the coverage gates, and every surviving mutant explained.
 - [Load generator](docs/design/loadgen.md): open-loop load at fixed rates, latency from the intended send time (coordinated omission), scenarios and rate sweeps.
 
 ## Bugs the harness caught
