@@ -1,0 +1,50 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 2: crash the API at every recovery point of every registered flow, restart it,
+# recover, and check nothing was lost, doubled or changed. See docs/design/crash-matrix.md.
+#
+#   bin/crash-matrix [--recovery retry] [--only NAME[,NAME]] [--no-variants]
+#                    [--lock-timeout 1] [--db clearinghouse_exp2] [--out results/exp2-crash-matrix]
+#
+# The cases come from Clearinghouse::Payments::Flows.registry.crash_points, never from a list
+# here. --only narrows the run by substring for development; such a run is marked partial.
+# Writes <out>/<timestamp>-<mode>/report.json and report.md, and each process's log under
+# tmp/crash-matrix/. Exits 1 if any case failed.
+
+require 'bundler/setup'
+require 'fileutils'
+require 'optparse'
+require_relative '../sim/experiments/crash_matrix'
+
+root = File.expand_path('..', __dir__)
+opts = { recovery: 'retry', only: nil, variants: true, lock_timeout: 1.0, db: 'clearinghouse_exp2',
+         out: File.join(root, 'results/exp2-crash-matrix') }
+COMMAND = "bin/crash-matrix #{ARGV.join(' ')}".strip
+OptionParser.new do |o|
+  o.on('--recovery MODE', Experiments::CrashMatrix::RecoveryMode::ALL) { |v| opts[:recovery] = v }
+  o.on('--only NAMES', Array) { |v| opts[:only] = v }
+  o.on('--no-variants') { opts[:variants] = false }
+  o.on('--lock-timeout S', Float) { |v| opts[:lock_timeout] = v }
+  o.on('--db NAME') { |v| opts[:db] = v }
+  o.on('--out DIR') { |v| opts[:out] = File.expand_path(v) }
+end.parse!
+
+registry = Clearinghouse::Payments::Flows.registry
+cases = Experiments::CrashMatrix.plan(registry, only: opts[:only], variants: opts[:variants])
+stamp = Clearinghouse::Clock::Real.new.now.strftime('%Y%m%dT%H%M%SZ')
+dir = File.join(opts[:out], "#{stamp}-#{opts[:recovery]}")
+FileUtils.mkdir_p(dir)
+settings = Experiments::CrashMatrix::Settings.new(
+  db_name: opts[:db], recovery: opts[:recovery], lock_timeout: opts[:lock_timeout],
+  log_dir: File.join(root, 'tmp/crash-matrix', File.basename(dir))
+)
+warn "#{cases.length} cases (#{registry.crash_points.length} registry crash points), recovery: #{opts[:recovery]}"
+session = Experiments::CrashMatrix::Session.new(settings: settings, cases: cases, full: opts[:only].nil?,
+                                                progress: ->(line) { warn line })
+report = session.run(command: COMMAND)
+File.write(File.join(dir, 'report.json'), JSON.pretty_generate(report))
+File.write(File.join(dir, 'report.md'), Experiments::CrashMatrix.markdown(report))
+puts report['headline']
+puts "report: #{dir}/report.md"
+exit(report['failed'].zero? ? 0 : 1)
