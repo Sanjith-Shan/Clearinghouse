@@ -77,7 +77,10 @@ For one that does not, the difference stays in clearing, the flow stays unexplai
 exception's `unexplained_amount` says how much (signed on the clearing account's normal
 side). The data-quality report finds it without being told there was a problem.
 
-A line gets one reason, checked in the order amount, fee, timing.
+A line gets at most one of `amount_mismatch` and `fee_mismatch`, amount first, because a
+wrong amount usually drags the fee with it. Lateness is judged separately, so a line that is
+both late and wrong gets both exceptions. Experiment 5's random injections can hit a
+deferred line again in the file it moves to, which is how this came up.
 
 ### What "late" means, and the carried-over line that is not late
 
@@ -200,3 +203,4 @@ cannot apply (nothing stuck to write off, a transaction from another flow) is
   this work adds. The refund path (`Payments::Refunds.mark_succeeded`) stores the acquirer's
   operation id from the approved outcome. Two refunds of one payment share an acquirer
   reference, so this id is the only thing in the file that tells them apart.
+
