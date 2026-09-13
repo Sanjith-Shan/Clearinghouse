@@ -5,7 +5,7 @@ module Clearinghouse
   module Api
     module Routes
       # Reading the events outbox: GET /v1/events and GET /v1/events/:id, rendered at the
-      # caller's API version like any other response.
+      # caller's API version like any other response, and the manual webhook resend.
       #
       # Stripe freezes an event's shape at the account version current when it was
       # created. Here the stored event is always the latest shape and every reader gets
@@ -30,6 +30,27 @@ module Clearinghouse
             api_params.permit!
             respond(Events.envelope(ctx, Events.find!(ctx, id)))
           end
+
+          # Manual resend of one event to one endpoint, like
+          # `stripe events resend <event> --webhook-endpoint=<endpoint>`. Returns the
+          # delivery, which a worker picks up as soon as one is free.
+          app.post '/v1/events/:id/retry' do |id|
+            T.bind(self, App)
+            p = api_params.permit!('webhook_endpoint')
+            respond(Webhooks::Deliveries.to_api(Events.resend(ctx, Events.find!(ctx, id), p)))
+          end
+        end
+
+        sig do
+          params(ctx: Context, event: T::Hash[Symbol, T.untyped], params: Params).returns(T::Hash[Symbol, T.untyped])
+        end
+        def self.resend(ctx, event, params)
+          endpoint_id = T.must(params.string('webhook_endpoint', required: true))
+          endpoint = Webhooks::Endpoints.find(ctx.db, ctx.merchant!.id, endpoint_id) ||
+                     raise(Errors::NotFoundError.resource('webhook_endpoint', endpoint_id, param: 'webhook_endpoint'))
+          Webhooks::Deliveries.resend!(ctx.db, clock: ctx.clock, event: event, endpoint: endpoint)
+        rescue Webhooks::Deliveries::Error => e
+          raise Errors::InvalidRequestError.new(e.message, code: 'webhook_resend_refused', param: 'webhook_endpoint')
         end
 
         sig { params(ctx: Context, id: String).returns(T::Hash[Symbol, T.untyped]) }

@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs webhook delivery workers: N threads in this process, each claiming due
+# deliveries from Postgres. Start as many processes as you like; they coordinate
+# only through the database. TERM or INT stops after the current deliveries.
+#
+#   bin/webhook-worker --threads 8
+#
+# Uses the wall clock (Clock::Real). --test-mode allows http://localhost and
+# http://127.0.0.1 URLs, for local experiments only.
+require 'bundler/setup'
+require 'optparse'
+require_relative '../lib/clearinghouse'
+
+options = { threads: 8, lease: 60.0, connect_timeout: 2.0, read_timeout: 5.0, total_timeout: 10.0,
+            idle_sleep: 0.05, test_mode: false, seed: nil, log: false }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/webhook-worker [options]'
+  opts.on('--threads N', Integer, 'delivery threads (default 8)') { |v| options[:threads] = v }
+  opts.on('--lease SECONDS', Float, 'lease per claim (default 60)') { |v| options[:lease] = v }
+  opts.on('--connect-timeout SECONDS', Float, 'default 2') { |v| options[:connect_timeout] = v }
+  opts.on('--read-timeout SECONDS', Float, 'default 5') { |v| options[:read_timeout] = v }
+  opts.on('--total-timeout SECONDS', Float, 'default 10') { |v| options[:total_timeout] = v }
+  opts.on('--idle-sleep SECONDS', Float, 'poll interval when nothing is due (default 0.05)') do |v|
+    options[:idle_sleep] = v
+  end
+  opts.on('--seed N', Integer, 'seed for retry jitter (default random)') { |v| options[:seed] = v }
+  opts.on('--test-mode', 'allow http://localhost URLs') { options[:test_mode] = true }
+  opts.on('--log', 'one JSON line per attempt on stdout') { options[:log] = true }
+end.parse!
+
+$stdout.sync = true
+db = Clearinghouse::DB.connect(role: :app, max_connections: options[:threads] + 1)
+clock = Clearinghouse::Clock::Real.new
+http = Clearinghouse::Webhooks::SafeHttp.new(
+  resolver: Clearinghouse::Webhooks::Egress::SystemResolver.new, test_mode: options[:test_mode],
+  connect_timeout: options[:connect_timeout], read_timeout: options[:read_timeout],
+  total_timeout: options[:total_timeout]
+)
+seed = options[:seed] || Random.new_seed
+log = options[:log] ? $stdout : nil
+pool = Clearinghouse::Webhooks::WorkerPool.new(threads: options[:threads], idle_sleep: options[:idle_sleep],
+                                               log: $stderr) do |index|
+  Clearinghouse::Webhooks::Worker.new(db: db, clock: clock, http: http, rng: Random.new(seed + index),
+                                      lease_seconds: options[:lease], name: "#{Process.pid}-#{index}", log: log)
+end
+
+%w[TERM INT].each { |signal| trap(signal) { Thread.new { pool.stop } } }
+warn "webhook-worker #{Process.pid}: #{options[:threads]} threads"
+pool.start.wait

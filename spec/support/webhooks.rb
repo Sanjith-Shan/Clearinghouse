@@ -3,7 +3,7 @@
 
 require_relative 'db'
 
-DBHelper.clean_tables('events', 'webhook_endpoints')
+DBHelper.clean_tables('events', 'webhook_endpoints', 'webhook_deliveries', 'webhook_dispatch_cursors')
 
 # Wiring for webhook specs.
 module WebhookSpecHelpers
@@ -27,6 +27,22 @@ module WebhookSpecHelpers
     Clearinghouse::Webhooks::Endpoints.create(db, clock: clock, merchant_id: merchant_id, url: url,
                                                   enabled_events: events, api_version: api_version,
                                                   url_check: url_check)
+  end
+
+  def self.emit(db, clock:, merchant_id:, type: 'payment_intent.succeeded', object: payment_intent)
+    Clearinghouse::Events.emit!(db, merchant_id: merchant_id, type: type, object: object, clock: clock)
+  end
+
+  def self.worker(db, clock:, http: egress, seed: 1, **)
+    Clearinghouse::Webhooks::Worker.new(db: db, clock: clock, http: http, rng: Random.new(seed), **)
+  end
+
+  def self.dispatcher(db, clock:, **)
+    Clearinghouse::Webhooks::Dispatcher.new(db: db, clock: clock, **)
+  end
+
+  def self.delivery(db, event_id)
+    db[:webhook_deliveries].where(event_id: event_id).first
   end
 
   # The PaymentIntent fixture, as the payments work will serialize it.
