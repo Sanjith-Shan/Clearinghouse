@@ -204,3 +204,62 @@ cannot apply (nothing stuck to write off, a transaction from another flow) is
   operation id from the approved outcome. Two refunds of one payment share an acquirer
   reference, so this id is the only thing in the file that tells them apart.
 
+## Experiment 5: a month with injected discrepancies
+
+`bin/exp-reconciliation` (code in `lib/clearinghouse/experiments/`) runs a simulated month
+and scores the reconciler against the simulator's ground truth. Results and the exact
+commands are in `results/exp5-reconciliation/`.
+
+**Setup.** The acquirer simulator and the API run in the experiment's process, each on a
+real port, sharing one test clock. Three merchants sell in USD, JPY and KWD. N payments are
+drawn up front from the seed (day, time, merchant, amount, card), so the traffic does not
+depend on anything the system under test does: most cards approve, 2% decline, 3% are
+`pm_card_disputeFraudulent`. 15% of payments get a refund one to five days later, half of
+them full. Every dispute gets a ruling two to four days after it opens (won or lost at even
+odds), and a quarter are accepted by the merchant first. Every third day one payment is made
+with a clock two days behind, after that day's file was built, which makes the simulator
+carry its line into the next file: a line that settles after its due date with nothing
+wrong, the case the reconciler must not flag.
+
+**Traffic goes through the API.** Payments (create, confirm), refunds, and dispute accepts
+use the Ruby client library against the running API, and the operator resolves exceptions
+through `POST /v1/reconciliation_exceptions/:id/resolve`. The lagging-clock payments go
+through the same payments operations without HTTP, because the API runs on the experiment's
+one clock. `--driver service` runs everything that way, as a fallback.
+
+**Stand-ins.** Funds availability and payouts belong to the payouts work, which is not on
+main. Until it is, the experiment moves each capture's net to available after the payout
+delay and pays merchants out through the acquirer itself, posting the money-flow table's own
+entries and handling `payout.paid` and `payout.failed` on the same poller. The reconciler
+never reads any of it.
+
+**Each day:** at 00:30 the poller runs, the day's file is fetched and reconciled, pending
+lines are retried and the SLA job runs; at 01:00 availability and payouts; then the day's
+traffic in time order. K discrepancies of all six types are injected with the simulator's
+`{random: n, seed}` into the files of days 3 to 30 (the first two have nothing due). A quiet
+tail of 14 days lets disputes opened late in the month (seven days after capture), their
+rulings and the last lines finish.
+
+**Scoring** (`ReconciliationMonth::Scorer`). An injected discrepancy is detected when an
+exception of the same type names the same movement (acquirer reference, line type, and
+operation id where the exception has one). An exception that matches nothing injected is a
+false exception. Explainability is `Ledger::Clearing.report` at the end of the tail, before
+and after resolving every open exception (write-off where money is stuck, a note
+otherwise).
+
+Random injection can hit the same line twice, because a deferred line is fair game again
+in the file it moves to. Three consequences for scoring, each found by running the small
+month in `spec/experiments/reconciliation_month_spec.rb` until it failed:
+
+- A line deferred twice arrives once and is reported late once; that one exception covers
+  both `late` injections.
+- A line late by more than the slack is called `missing` by the SLA job first, and that
+  exception closes itself when the line arrives. It is counted as `missing_then_arrived`, not
+  as false. This is the reconciler doing what it should: on the day the line was overdue, it
+  was missing.
+- A line deferred and then dropped by `missing` never arrives, so nobody could ever see that
+  it was late. That `late` is counted as `not_observable` rather than as a miss.
+
+Ids are random (`SecureRandom`), so the acquirer references differ between runs and the
+seeded injection picks different lines each time: two runs with one seed have the same
+traffic plan and the same injection draws, but not the same lines.
