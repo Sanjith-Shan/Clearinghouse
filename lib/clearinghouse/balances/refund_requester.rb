@@ -4,7 +4,7 @@
 module Clearinghouse
   module Balances
     # How rejecting a review refunds the payment. Refunds belong to the payments
-    # area and are not on main yet, so Holds calls through this seam.
+    # area; PaymentsRefundRequester is the implementation a request uses.
     #
     # The contract, for whoever implements it:
     #
@@ -29,22 +29,67 @@ module Clearinghouse
       def request_refund!(db, payment_intent_id:, reason:, clock:); end
     end
 
-    # Raised by the default requester: rejecting a review cannot work until the
-    # payments area's refunds are wired in.
+    # Raised by the default requester: a reject needs a request context (the
+    # merchant, the acquirer) to refund through, so it has to pass one in.
     class RefundsNotWiredError < Clearinghouse::Error; end
 
-    # The default until refunds land. Refuses loudly rather than closing a review
-    # as rejected without refunding anything.
+    # The default for callers without a request context. Refuses loudly rather
+    # than closing a review as rejected without refunding anything.
     class UnwiredRefundRequester
       extend T::Sig
       include RefundRequester
 
       sig { override.params(db: Sequel::Database, payment_intent_id: String, reason: String, clock: Clock).returns(String) }
       def request_refund!(db, payment_intent_id:, reason:, clock:) # rubocop:disable Lint/UnusedMethodArgument
-        raise RefundsNotWiredError, "cannot refund #{payment_intent_id}: refunds are not wired into Balances yet"
+        raise RefundsNotWiredError,
+              "cannot refund #{payment_intent_id}: pass a RefundRequester such as PaymentsRefundRequester"
       end
     end
 
     DEFAULT_REFUNDS = T.let(UnwiredRefundRequester.new, RefundRequester)
+
+    # Rejects through the payments area's refunds. `request_refund!` runs the
+    # refund's first step (Refunds.reserve!: create it pending, reserve the amount
+    # on the intent) inside the reject's transaction. After that transaction
+    # commits, `finish!` makes the acquirer call and records the answer, the same
+    # steps as POST /v1/refunds. Recording a success posts the refund and, in the
+    # same transaction, Holds.release_after_refund!.
+    class PaymentsRefundRequester
+      extend T::Sig
+      include RefundRequester
+
+      sig { returns(T::Array[String]) }
+      attr_reader :started
+
+      sig { params(ctx: Api::Context).void }
+      def initialize(ctx)
+        @ctx = ctx
+        @started = T.let([], T::Array[String])
+      end
+
+      sig do
+        override.params(db: Sequel::Database, payment_intent_id: String, reason: String, clock: Clock).returns(String)
+      end
+      def request_refund!(db, payment_intent_id:, reason:, clock:) # rubocop:disable Lint/UnusedMethodArgument
+        input = Payments::Refunds::Input.new(payment_intent_id: payment_intent_id, amount: nil, reason: reason,
+                                             metadata: {})
+        refund = Payments::Refunds.reserve!(db, @ctx, input)
+        @started << refund.id
+        refund.id
+      end
+
+      # Drives every refund this requester started to the acquirer and back. An
+      # acquirer that gives no definite answer raises the payments area's retryable
+      # 503 and leaves the refund pending, as POST /v1/refunds does.
+      sig { void }
+      def finish!
+        db = @ctx.db
+        @started.each do |id|
+          refund = Payments::Refunds.find!(db, @ctx, id)
+          outcome = Payments::Operations.definite!(Payments::Refunds.request(@ctx, refund))
+          db.transaction { Payments::Refunds.record!(db, @ctx, id, outcome) }
+        end
+      end
+    end
   end
 end

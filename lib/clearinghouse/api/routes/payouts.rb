@@ -91,10 +91,7 @@ module Clearinghouse
         # plays the bank too).
         sig { params(ctx: Context).returns(Acquirer::Client) }
         def self.bank(ctx)
-          acquirer = ctx.deps.acquirer
-          raise Clearinghouse::Error, 'no acquirer client configured' unless acquirer.is_a?(Acquirer::Client)
-
-          acquirer
+          ctx.acquirer!
         end
       end
     end

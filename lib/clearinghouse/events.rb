@@ -23,8 +23,12 @@ module Clearinghouse
       charge.refund.updated
       charge.dispute.created
       charge.dispute.closed
+      payout.created
       payout.paid
       payout.failed
+      payout.canceled
+      review.opened
+      review.closed
       webhook_endpoint.disabled
     ].freeze
 

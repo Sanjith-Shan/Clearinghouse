@@ -16,15 +16,16 @@ default 2, stored on `merchants`).
 merchant, net amount, currency, `available_on`, and once released, `released_at`,
 `released_to` and the id of the ledger transaction that released it.
 
-- **Scheduling is part of the capture.** The payments area calls
-  `Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:, clock:)` inside
-  the capture's transaction, next to the capture's ledger posting. The capture and its
+- **Scheduling is part of the capture.** `Payments::Support.post_capture!` posts the
+  capture and then calls `Payments::Seams.schedule_availability`, which calls
+  `Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:, clock:)`, in the
+  same transaction. The capture and its
   schedule commit together or not at all, so there is never pending money with no release
   scheduled, or a release for a capture that rolled back. `schedule!` is idempotent on
   `flow_id` (same terms return the existing row, different terms raise `ConflictError`),
   because a capture phase retried after a crash may call it again.
-- **`available_on` is the start of a UTC day**, `Availability.available_on_for(db,
-  merchant_id:, captured_at:)`. Stripe's `available_on` is a date, and a merchant reading
+- **`available_on` is the start of a UTC day**, `Availability.available_on(captured_at:,
+  delay_days:)` (or `available_on_for`, which reads the delay from the merchant). Stripe's `available_on` is a date, and a merchant reading
   a statement expects everything captured on one day to become available together.
 - **The sweep**, `Availability.release_due!(db, clock:)`, releases every row whose
   `available_on` has passed. It posts `Ledger::Flows.funds_available` (debit merchant
@@ -254,13 +255,13 @@ the answer, and a cancel would return money the bank is paying out.
 
 ### Events
 
-`payout.created`, `payout.paid`, `payout.failed` and `payout.canceled` are emitted in the
-same transaction as the change they report, through `Balances::EventSink`. The events outbox
-(`Events.emit!`, payments area) is not on main yet, so the default sink
-(`Balances::DEFAULT_EVENTS`) drops them, and specs use a recording stand-in that also checks
-each event is emitted inside a transaction. Wiring the outbox means changing
-`DEFAULT_EVENTS` to an adapter that calls `Events.emit!`, and adding the types in
-`Balances::EVENT_TYPES` to `Events::TYPES`.
+`payout.created`, `payout.paid`, `payout.failed` and `payout.canceled` (and `review.opened`
+and `review.closed` below) are emitted in the same transaction as the change they report,
+through `Balances::EventSink`. The default, `OutboxEventSink`, calls `Events.emit!`, so each
+event exists if and only if its change committed. Domain specs pass a recording sink that
+also checks every event is emitted inside a transaction. These events carry no request id
+yet, because the sink interface doesn't pass one. Threading the request's
+`Events::Request` through is the next step if webhook consumers need it.
 
 ## Risk-review holds ("safer payouts")
 
@@ -338,20 +339,99 @@ The object follows Stripe's Review: `payment_intent`, `open`, `opened_reason: "r
 word. Closing a closed review is 400 `review_closed`. Events: `review.opened` and
 `review.closed`.
 
-### What the refund seam needs from payments
+### How a reject refunds
 
-`Balances::DEFAULT_REFUNDS` is `UnwiredRefundRequester`, which raises
-`RefundsNotWiredError`. A reject fails, and the review stays open, rather than closing
-without a refund. Wiring it:
+`POST /v1/reviews/:id/reject` passes `Balances::PaymentsRefundRequester` to `close_hold!`:
 
-1. Implement `request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id`. It
-   runs inside the reject's transaction and only starts the refund (creates it and
-   reserves `amount_refunded`). The acquirer call happens in the refund's own later
-   phases.
-2. In the refund phase that posts `Ledger::Flows.refund`, call
-   `Balances::Holds.release_after_refund!(db, flow_id: payment_intent_id, clock:)` in the
-   same transaction. It is idempotent and does nothing for a payment with no rejected hold,
-   so every refund can call it.
-3. Point `DEFAULT_REFUNDS` at the implementation.
+1. Inside the reject's transaction, `request_refund!` runs the refund's first step,
+   `Payments::Refunds.reserve!` (a full refund, reason `fraudulent`, created pending, with
+   its amount reserved on the intent). If the payment can't be refunded (already refunded,
+   not captured), the payments error comes back and the whole reject rolls back, so the
+   review stays open.
+2. After that commits, `finish!` makes the acquirer call and records it, the same steps as
+   `POST /v1/refunds`.
+3. `Refunds.mark_succeeded` posts `Flows.refund` and calls
+   `Holds.release_after_refund!` in the same transaction. That call is a no-op for a
+   payment without a rejected review, so every refund makes it.
 
-`spec/support/balances.rb` (`StandInRefunds`) does exactly this, which is what the specs run.
+`spec/api/reviews_spec.rb` runs this end to end: a real card payment, a hold, the sweep,
+then a reject. The acquirer gets exactly one refund, the refund succeeds, held goes to
+zero, and available ends at -$3.20 (the fee is not returned). If the acquirer gives no
+definite answer, the payments area's retryable 503 comes back, the review is already
+closed as rejected, and the refund stays pending like any refund with a lost answer.
+Driving it to completion is the completer's job once it exists.
+
+Callers without a request context get `UnwiredRefundRequester` by default, which raises
+rather than closing a review without a refund. The domain specs use `StandInRefunds`
+(`spec/support/balances.rb`) because they post captures at the ledger level with no
+payment_intents row to refund.
+
+## Negative balances
+
+The policy was set in `docs/design/ledger.md`. This is how it plays out with payouts. Specs
+are in `spec/payouts/negative_balance_spec.rb`, which posts disputes and refunds at the ledger
+level through `Ledger::Flows`, the way the disputes and payments areas will.
+
+**A dispute or refund may take available below zero.** The card network has already
+decided a dispute, and a refund the merchant asked for is owed to the cardholder. Refusing
+either because the merchant's balance is low would only move the loss to us. The debit is
+posted in full, and the negative balance is a debt the merchant owes the platform.
+
+**Payouts are blocked while available is zero or negative.** `reserve!` checks
+`available.positive?` under the balance row lock, and otherwise raises
+`BalanceInsufficientError` (API: `balance_insufficient`). The automatic sweep only looks at
+positive balances, and re-checks under the lock.
+
+**Later captures pay the debt down on their own.** Availability credits the same
+`merchant available` account, so each release reduces the debt before anything becomes
+payable. Nothing tracks the debt separately, because the balance *is* the debt.
+
+**Held money does not pay it down.** Money under review stays in `held` until the review is
+approved, like any other money. Approval moves it to available, and at that point it
+covers the debt first.
+
+Worked example, from the first spec (fee 2.9% + 30c, dispute fee $15.00):
+
+| Step | Entries | Available after | Payout? |
+|---|---|---|---|
+| $100 captured and released | Dr pending 96.80 / Cr available 96.80 | 96.80 | yes |
+| Payout of everything | Dr available 96.80 / Cr payout_clearing 96.80 | 0.00 | blocked at zero |
+| Dispute $100 opened | Dr available 100.00, Dr available 15.00 / Cr dispute_clearing 100.00, Cr dispute_fee_revenue 15.00 | -115.00 | blocked |
+| $100 captured and released | Dr pending 96.80 / Cr available 96.80 | -18.20 | blocked |
+| $50 captured and released | Dr pending 48.25 / Cr available 48.25 | 30.05 | yes, 30.05 and no more |
+
+A refund past the balance works the same way (Dr available / Cr refund_clearing), and so
+does a review opened after its money was paid out (Dr available / Cr held).
+
+**Racing a dispute.** The dispute's posting updates the same `account_balances` row that
+`reserve!` locks, so a payout and a dispute on one merchant serialize. Either the payout
+goes first and the dispute then takes the balance negative, or the dispute goes first and
+the payout sees only what is left. A spec runs the two at once and checks that the result
+is one of those two outcomes. It can't tell "decided on a stale balance" apart from "went
+first", so the proof that the lock matters is the 12-thread payout spec above.
+
+**What is not built.** The spec mentions debiting a reserve before going negative. There is
+no rolling reserve. It would be a fourth merchant account that a share of each capture is
+released into, with its own `available_on`, and the availability sweep already has the
+shape for it. Nothing writes off a debt that is never repaid either (`platform:dispute_losses`
+exists for that). Both are policy decisions for a real platform, and nothing in M4 or M6
+depends on them.
+
+## Running it
+
+`spec/api/payment_to_payout_spec.rb` runs the whole path through the real payments API:
+confirm, the scheduled release, `GET /v1/balance` before and after, a payout, the bank's
+notification, and the payout's flow explained with its events in the outbox.
+
+Everything here is driven by the clock, and the order matters:
+
+1. `Availability.release_due!`: due money to available, or to held under review.
+2. `Payouts.run_scheduled!`: today's automatic payouts, which see what step 1 released.
+3. `Payouts.resume_incomplete!`: payouts whose request stopped mid-way.
+4. The notification poller (disputes area) calls `Payouts.handle_notification` for each
+   `payout.paid` and `payout.failed`.
+
+Each step is idempotent, so re-running it after a crash is safe. Steps 1 and 2 also have
+specs that run several copies at once. Steps 3 and 4 rely on the payout row lock and the
+recovery point checks for that. Something has to call them on a schedule. That is the worker the
+coordinator wires up (or `bin/demo`), not this area.

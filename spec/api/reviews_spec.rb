@@ -4,16 +4,16 @@
 RSpec.describe Clearinghouse::Api::Routes::Reviews, :db do
   include_context 'with the api app'
   include_context 'with a merchant'
-
-  let(:refunds) { StandInRefunds.new }
-
-  before { stub_const('Clearinghouse::Balances::DEFAULT_REFUNDS', refunds) }
+  include_context 'with the acquirer'
 
   after { Clearinghouse::Ledger::Invariants.check!(app_db) }
 
+  # A real card payment through the payments API, then the hold the risk
+  # integration opens when RiskGate answers `review`.
   def review_payment(gross = 10_000)
-    flow_id, = capture!(merchant, gross, clock: clock)
-    Clearinghouse::Balances::Holds.open_hold!(app_db, flow_id: flow_id, merchant_id: merchant.id,
+    intent = create_intent(amount: gross)
+    confirm(intent['id'])
+    Clearinghouse::Balances::Holds.open_hold!(app_db, flow_id: intent['id'], merchant_id: merchant.id,
                                                       amount: money(gross), reason: 'rule:high_velocity', clock: clock)
   end
 
@@ -44,14 +44,38 @@ RSpec.describe Clearinghouse::Api::Routes::Reviews, :db do
     expect(merchant_balance(merchant, 'held')).to eq(0)
   end
 
-  it 'rejects: the payment is refunded and the money stays held' do
+  it 'rejects: refunds the payment for real, and the held money only offsets the refund' do
     hold = review_payment
     release!
     post "/v1/reviews/#{hold.id}/reject", '', auth
+    expect(last_response.status).to eq(200)
     expect(json_body).to include('open' => false, 'closed_reason' => 'refunded_as_fraud')
-    expect(refunds.requested.map { |r| r[:payment_intent_id] }).to eq([hold.flow_id])
-    expect(merchant_balance(merchant, 'held')).to eq(9_680)
-    expect(merchant_balance(merchant, 'available')).to eq(0)
+
+    refund = app_db[:refunds].where(payment_intent_id: hold.flow_id).first
+    expect(refund).to include(amount: 10_000, status: 'succeeded', reason: 'fraudulent')
+    expect(app_db[:risk_holds].where(id: hold.id).get(:refund_id)).to eq(refund[:id])
+    expect(acquirer.calls_of(:refund).map(&:last)).to eq([refund[:id]])
+    expect([merchant_balance(merchant, 'held'), merchant_balance(merchant, 'available')]).to eq([0, -320]) # fee kept
+    expect(event_types(hold.id)).to eq(%w[review.opened review.closed])
+    expect(app_db[:events].where(type: 'charge.refunded').count).to eq(1)
+  end
+
+  it 'rejects before the money is due: the refund posts first and the sweep then releases to available' do
+    hold = review_payment
+    post "/v1/reviews/#{hold.id}/reject", '', auth
+    expect(merchant_balance(merchant, 'available')).to eq(-10_000)
+    release!
+    expect(merchant_balance(merchant, 'available')).to eq(-320)
+    expect(merchant_balance(merchant, 'held')).to eq(0)
+  end
+
+  it 'leaves the review open when the refund cannot start' do
+    hold = review_payment
+    api_post('/v1/refunds', payment_intent: hold.flow_id) # the merchant already refunded it in full
+    post "/v1/reviews/#{hold.id}/reject", '', auth
+    expect(last_response.status).to eq(400)
+    expect(json_body['error']).to include('code' => 'charge_already_refunded')
+    expect(Clearinghouse::Balances::Holds.find(app_db, id: hold.id).open?).to be(true)
   end
 
   it 'refuses to close a review twice, and 404s one that is not the merchant\'s' do
