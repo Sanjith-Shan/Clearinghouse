@@ -91,6 +91,17 @@ module Clearinghouse
         row ? from_row(row) : nil
       end
 
+      # The same row, locked FOR UPDATE until the caller's transaction ends, or nil
+      # if the payment has no release scheduled. Holds use it to serialize with the
+      # sweep over one payment's money.
+      sig { params(db: Sequel::Database, flow_id: String).returns(T.nilable(Scheduled)) }
+      def self.find_for_update(db, flow_id)
+        raise Clearinghouse::Error, 'find_for_update needs an open database transaction' unless db.in_transaction?
+
+        row = db[TABLE].where(flow_id: flow_id).for_update.first
+        row ? from_row(row) : nil
+      end
+
       # Releases everything due by the clock's now, in batches. Each batch is one
       # database transaction that claims its rows with FOR UPDATE SKIP LOCKED, posts
       # one ledger transaction per row and sets `released_at`. So:
@@ -122,14 +133,23 @@ module Clearinghouse
 
       # Posts the availability transaction for one claimed row and marks it. The
       # posting is dated at the row's `available_on`, not at the sweep's now: the
-      # money became available on that day even if the sweep ran late.
+      # money became available on that day even if the sweep ran late. A payment
+      # under risk review goes to held instead (see Holds), and its hold records
+      # the amount in the same transaction.
       sig { params(db: Sequel::Database, scheduled: Scheduled, now: Time).returns(Scheduled) }
       def self.release(db, scheduled, now)
+        held = Holds.withholds?(db, scheduled.flow_id)
+        merchant_id = scheduled.merchant_id
+        entries = if held
+                    Ledger::Flows.funds_held(merchant_id: merchant_id, net: scheduled.net)
+                  else
+                    Ledger::Flows.funds_available(merchant_id: merchant_id, net: scheduled.net)
+                  end
         txn = Ledger.post!(db, flow_type: Ledger::Flows::PAYMENT, flow_id: scheduled.flow_id,
-                               description: 'funds available', effective_at: scheduled.available_on,
-                               entries: Ledger::Flows.funds_available(merchant_id: scheduled.merchant_id,
-                                                                      net: scheduled.net))
-        mark_released(db, scheduled, now, 'available', txn)
+                               description: held ? 'funds held for review' : 'funds available',
+                               effective_at: scheduled.available_on, entries: entries)
+        Holds.record_held!(db, scheduled.flow_id, scheduled.net) if held
+        mark_released(db, scheduled, now, held ? 'held' : 'available', txn)
       end
       private_class_method :release
 

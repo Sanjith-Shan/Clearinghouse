@@ -8,6 +8,9 @@ RSpec.describe Clearinghouse::Ledger::Flows do
       capture: { merchant_id: 'm1', gross: usd[10_000], fee: usd[320] },
       settlement: { gross: usd[10_000], acquirer_fee: usd[160] },
       funds_available: { merchant_id: 'm1', net: usd[9680] },
+      funds_held: { merchant_id: 'm1', net: usd[9680] },
+      funds_withheld: { merchant_id: 'm1', amount: usd[9680] },
+      hold_released: { merchant_id: 'm1', amount: usd[9680] },
       refund: { merchant_id: 'm1', amount: usd[4000] },
       refund_settled: { amount: usd[4000] },
       dispute_opened: { merchant_id: 'm1', amount: usd[10_000], fee: usd[1500] },
@@ -52,5 +55,14 @@ RSpec.describe Clearinghouse::Ledger::Flows do
     settlement = described_class.settlement(gross: usd[500], acquirer_fee: usd[0])
     expect(lines(capture)).to eq([['Dr', 'platform:processor_receivable', 500], ['Cr', 'merchant:m1:pending', 500]])
     expect(lines(settlement)).to eq([['Dr', 'platform:cash', 500], ['Cr', 'platform:processor_receivable', 500]])
+  end
+
+  it 'moves a reviewed payment between pending, held and available without touching any other account' do
+    expect(lines(described_class.funds_held(merchant_id: 'm1', net: usd[9680])))
+      .to eq([['Dr', 'merchant:m1:pending', 9680], ['Cr', 'merchant:m1:held', 9680]])
+    expect(lines(described_class.funds_withheld(merchant_id: 'm1', amount: usd[9680])))
+      .to eq([['Dr', 'merchant:m1:available', 9680], ['Cr', 'merchant:m1:held', 9680]])
+    expect(lines(described_class.hold_released(merchant_id: 'm1', amount: usd[9680])))
+      .to eq([['Dr', 'merchant:m1:held', 9680], ['Cr', 'merchant:m1:available', 9680]])
   end
 end

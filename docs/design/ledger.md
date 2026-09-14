@@ -49,6 +49,9 @@ the code cannot drift apart without a test noticing (`spec/ledger/flows_spec.rb`
 | payment `pi_` | Capture | processor_receivable 100.00 | merchant pending 96.80, fee_revenue 3.20 | processor_receivable 100.00 |
 | payment | Settlement received | cash 98.40, processing_expense 1.60 | processor_receivable 100.00 | processor_receivable 0 |
 | payment | Funds become available | merchant pending 96.80 | merchant available 96.80 | (none touched) |
+| payment | Funds become available, payment under review (M6) | merchant pending 96.80 | merchant held 96.80 | (none touched) |
+| payment | Review opened after funds were available | merchant available 96.80 | merchant held 96.80 | (none touched) |
+| payment | Review closed (approved, or its refund posted) | merchant held 96.80 | merchant available 96.80 | (none touched) |
 | refund `re_` | Refund $40.00 | merchant available 40.00 | refund_clearing 40.00 | refund_clearing 40.00 |
 | refund | Refund settled | refund_clearing 40.00 | cash 40.00 | refund_clearing 0 |
 | dispute `dp_` | Dispute opened, fee $15.00 | merchant available 100.00, merchant available 15.00 | dispute_clearing 100.00, dispute_fee_revenue 15.00 | dispute_clearing 100.00 |

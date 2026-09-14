@@ -261,3 +261,97 @@ same transaction as the change they report, through `Balances::EventSink`. The e
 each event is emitted inside a transaction. Wiring the outbox means changing
 `DEFAULT_EVENTS` to an adapter that calls `Events.emit!`, and adding the types in
 `Balances::EVENT_TYPES` to `Events::TYPES`.
+
+## Risk-review holds ("safer payouts")
+
+Code: `lib/clearinghouse/balances/holds.rb`, API `lib/clearinghouse/api/routes/reviews.rb`.
+
+M6's rule is that a payment RiskGate answers `review` for goes through, but **the merchant's
+payout of those funds waits until the review is closed**. A hold (`risk_holds`, one per
+payment, ids `prv_` as Stripe's Reviews) does that with the merchant's third account,
+`merchant:<id>:held`. Payouts only ever read and debit `available`, so there is no code path
+from `held` to a bank. The rule is enforced by where the money sits, not by a filter
+every payout query has to remember.
+
+| Event | Debit | Credit |
+|---|---|---|
+| Funds due while under review (`Flows.funds_held`) | merchant pending | merchant held |
+| Review opened after the funds were available (`Flows.funds_withheld`) | merchant available | merchant held |
+| Review approved, or the rejecting refund posted (`Flows.hold_released`) | merchant held | merchant available |
+
+These are posted under the payment's own flow (`pi_`), and no clearing account is involved.
+The rows are also in the ledger's money-flow table.
+
+### Lifecycle
+
+- **Open.** The risk integration calls `Holds.open_hold!(db, flow_id:, merchant_id:, amount:,
+  reason:, clock:)` when RiskGate says `review`. That is normally during confirm, before the
+  capture has scheduled anything. When the availability sweep reaches the payment, it asks
+  `Holds.withholds?` and posts pending -> held instead of pending -> available, recording the
+  amount in `risk_holds.held_amount` in the same transaction. If the review opens after the
+  money was already available, `open_hold!` moves it back (available -> held). That can take
+  available negative if a payout already spent it, and then the negative-balance rules
+  below apply.
+- **Approve** (`close_hold!(decision: :approve)`, `POST /v1/reviews/:id/approve`). Whatever
+  the hold has in held goes to available. If the sweep has not reached the payment yet,
+  nothing moves now, and the sweep later releases straight to available.
+- **Reject** (`close_hold!(decision: :reject)`, `POST /v1/reviews/:id/reject`). The payment is
+  refunded through the `Balances::RefundRequester` seam, and **nothing is released**. The
+  refund debits merchant available (the ledger's refund row), so the held money has to go
+  back to available at the same moment, or the merchant would be charged twice. It
+  can't go earlier, or a payout could pay out a payment we just called fraud. So the refund
+  calls `Holds.release_after_refund!` in the transaction that posts its own entries, and
+  the two postings cancel on `available`. Until that refund posts, `withholds?` stays true,
+  so a sweep in between still sends the money to held.
+
+`amount` on a hold is the payment amount under review, for display. The money actually held
+is the payment's net, `held_amount`, which is what approve and release move.
+
+### Races
+
+Every path that touches one payment's money locks its `scheduled_availabilities` row first
+and its `risk_holds` row second, in the same order as the sweep. So approve, reject,
+open-after-release and release-after-refund each either run entirely before a sweep's
+release of that payment or entirely after it, and none can deadlock with it. The database
+also refuses the states a lost race would produce: an approved hold, or one whose refund
+has posted, with money still counted as held (`CHECK`s on `risk_holds`).
+
+Two specs cover it. A random one runs a sweep and four approvers over 16 reviewed payments
+at once. In the deterministic one, the sweep pauses after deciding "held" while still
+holding the availability lock. The approval has to wait for it, and afterwards the money is
+in available and nothing is held. Removing the availability lock from the approve path made
+the deterministic spec fail. The random spec passed with the same lock removed, because
+the window is too narrow to hit by chance, and that is why the deterministic spec exists.
+
+### Reviews API
+
+| Endpoint | |
+|---|---|
+| `GET /v1/reviews` | `open` (true or false), `limit`, `starting_after` |
+| `GET /v1/reviews/:id` | |
+| `POST /v1/reviews/:id/approve` | |
+| `POST /v1/reviews/:id/reject` | Clearinghouse's own. Stripe rejects by refunding the charge |
+
+The object follows Stripe's Review: `payment_intent`, `open`, `opened_reason: "rule"`,
+`closed_reason` (`approved` or `refunded_as_fraud`), plus `amount`, `currency` and
+`reason`. Here `reason` is RiskGate's reason for the review, where Stripe's is a status
+word. Closing a closed review is 400 `review_closed`. Events: `review.opened` and
+`review.closed`.
+
+### What the refund seam needs from payments
+
+`Balances::DEFAULT_REFUNDS` is `UnwiredRefundRequester`, which raises
+`RefundsNotWiredError`. A reject fails, and the review stays open, rather than closing
+without a refund. Wiring it:
+
+1. Implement `request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id`. It
+   runs inside the reject's transaction and only starts the refund (creates it and
+   reserves `amount_refunded`). The acquirer call happens in the refund's own later
+   phases.
+2. In the refund phase that posts `Ledger::Flows.refund`, call
+   `Balances::Holds.release_after_refund!(db, flow_id: payment_intent_id, clock:)` in the
+   same transaction. It is idempotent and does nothing for a payment with no rejected hold,
+   so every refund can call it.
+3. Point `DEFAULT_REFUNDS` at the implementation.
+
+`spec/support/balances.rb` (`StandInRefunds`) does exactly this, which is what the specs run.

@@ -235,6 +235,7 @@ module Clearinghouse
       register Routes::WebhookEndpoints
       register Routes::Events
       register Routes::Payouts
+      register Routes::Reviews
     end
   end
 end

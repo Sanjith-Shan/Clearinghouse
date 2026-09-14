@@ -60,3 +60,37 @@ end
 RSpec.configure do |config|
   config.include BalanceHelpers, :db
 end
+
+DBHelper.clean_tables('risk_holds')
+
+# Stand-in for the payments area's refunds, behind Balances::RefundRequester.
+# request_refund! only records the request, as the real one only starts the
+# refund. post_refund! is what the real refund must do when it posts: its ledger
+# entries and Holds.release_after_refund! in one transaction.
+class StandInRefunds
+  include Clearinghouse::Balances::RefundRequester
+
+  attr_reader :requested
+
+  def initialize
+    @requested = []
+  end
+
+  def request_refund!(db, payment_intent_id:, reason:, clock:)
+    raise 'refund requested outside the reject transaction' unless db.in_transaction?
+
+    id = Clearinghouse::Ids.generate('re')
+    @requested << { id: id, payment_intent_id: payment_intent_id, reason: reason, at: clock.now }
+    id
+  end
+
+  def post_refund!(db, refund_id:, payment_intent_id:, merchant_id:, amount:, clock:)
+    db.transaction do
+      Clearinghouse::Ledger.post!(db, flow_type: 'refund', flow_id: refund_id, description: 'refund',
+                                      effective_at: clock.now,
+                                      entries: Clearinghouse::Ledger::Flows.refund(merchant_id: merchant_id,
+                                                                                   amount: amount))
+      Clearinghouse::Balances::Holds.release_after_refund!(db, flow_id: payment_intent_id, clock: clock)
+    end
+  end
+end

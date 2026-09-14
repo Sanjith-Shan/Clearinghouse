@@ -53,6 +53,29 @@ module Clearinghouse
          Entry.credit(AccountCode.merchant(merchant_id, 'available'), net)]
       end
 
+      # The settlement delay has passed but the payment is under risk review: the
+      # net goes to held instead of available, where no payout can reach it.
+      sig { params(merchant_id: String, net: Money).returns(T::Array[Entry]) }
+      def self.funds_held(merchant_id:, net:)
+        [Entry.debit(AccountCode.merchant(merchant_id, 'pending'), net),
+         Entry.credit(AccountCode.merchant(merchant_id, 'held'), net)]
+      end
+
+      # A review opened after the payment's net was already available.
+      sig { params(merchant_id: String, amount: Money).returns(T::Array[Entry]) }
+      def self.funds_withheld(merchant_id:, amount:)
+        [Entry.debit(AccountCode.merchant(merchant_id, 'available'), amount),
+         Entry.credit(AccountCode.merchant(merchant_id, 'held'), amount)]
+      end
+
+      # The review closed: approved, or the refund that rejected it has taken its
+      # amount out of available.
+      sig { params(merchant_id: String, amount: Money).returns(T::Array[Entry]) }
+      def self.hold_released(merchant_id:, amount:)
+        [Entry.debit(AccountCode.merchant(merchant_id, 'held'), amount),
+         Entry.credit(AccountCode.merchant(merchant_id, 'available'), amount)]
+      end
+
       # Refund issued. Our fee is not returned (docs/design/ledger.md).
       sig { params(merchant_id: String, amount: Money).returns(T::Array[Entry]) }
       def self.refund(merchant_id:, amount:)
