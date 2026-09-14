@@ -54,3 +54,5 @@ header is absent when that is not known. See `docs/design/api.md`.
 - `api_version_invalid`: the `Clearinghouse-Version` header names a version that does not exist.
 - `rate_limit`: slow down and retry.
 - `payment_blocked`: RiskGate blocked the payment. Retrying the same payment will not help.
+- `balance_insufficient`: the available balance cannot cover the payout: it is lower than `amount`, or zero or negative (payouts are blocked while a negative balance is being paid down). `param` is `amount`.
+- `payout_not_cancelable`: the payout has been sent to the bank or has finished. Only a pending payout that has not been sent can be canceled.

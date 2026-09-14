@@ -21,6 +21,7 @@ require_relative 'api/routes/payment_intents'
 require_relative 'api/routes/refunds'
 require_relative 'api/routes/webhook_endpoints'
 require_relative 'api/routes/events'
+require_relative 'api/routes/payouts'
 require_relative 'api/app'
 
 module Clearinghouse
