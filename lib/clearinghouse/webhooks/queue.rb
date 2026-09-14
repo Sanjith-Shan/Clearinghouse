@@ -103,7 +103,8 @@ module Clearinghouse
     #   lease at once (1 while its breaker is half-open). The cap is enforced in the
     #   claim itself: the claimer locks the endpoint row with FOR UPDATE SKIP LOCKED,
     #   counts that endpoint's live leases, and only then leases a delivery, all in one
-    #   short transaction. Claims for one endpoint therefore take turns on its row
+    #   statement: a PL/pgSQL function, so a claim is one round trip to Postgres.
+    #   Claims for one endpoint therefore take turns on its row
     #   lock, and each sees every lease committed before it, so the count cannot race,
     #   across threads or processes. Counting leases instead of keeping a counter
     #   means a worker killed mid-delivery cannot leak a slot: its lease expires and
@@ -120,49 +121,10 @@ module Clearinghouse
       extend T::Sig
       include Queue
 
-      # Endpoints with due, unleased deliveries that are neither open nor at their cap,
-      # oldest due first. A hint only: nothing is locked, and every condition is checked
-      # again under the endpoint's row lock.
-      CANDIDATES_SQL = <<~SQL.freeze
-        WITH due AS (
-          SELECT d.endpoint_id, min(d.next_attempt_at) AS due_at
-          FROM webhook_deliveries d
-          WHERE #{Queue::CLAIMABLE}
-          GROUP BY d.endpoint_id
-        )
-        SELECT due.endpoint_id
-        FROM due
-        JOIN webhook_endpoints e ON e.id = due.endpoint_id
-        WHERE e.status = 'enabled' AND e.deleted_at IS NULL
-          AND (e.breaker_state <> 'open' OR e.breaker_retry_at <= :now)
-          AND (
-            SELECT count(*) FROM webhook_deliveries l
-            WHERE l.endpoint_id = due.endpoint_id AND l.status = 'pending'
-              AND l.lease_token IS NOT NULL AND l.lease_expires_at > :now
-          ) < CASE WHEN e.breaker_state = 'closed' THEN :max_in_flight ELSE 1 END
-        ORDER BY due.due_at
-        LIMIT :limit
-      SQL
-
-      IN_FLIGHT_SQL = <<~SQL
-        SELECT count(*) AS n FROM webhook_deliveries
-        WHERE endpoint_id = :endpoint_id AND status = 'pending'
-          AND lease_token IS NOT NULL AND lease_expires_at > :now
-      SQL
-
-      LEASE_SQL = <<~SQL.freeze
-        WITH next AS (
-          SELECT d.id
-          FROM webhook_deliveries d
-          WHERE d.endpoint_id = :endpoint_id AND #{Queue::CLAIMABLE}
-          ORDER BY d.next_attempt_at, d.id
-          LIMIT 1
-          FOR UPDATE SKIP LOCKED
-        )
-        UPDATE webhook_deliveries d SET #{Queue::LEASE}
-        FROM next
-        WHERE d.id = next.id
-        RETURNING d.*
+      # One round trip: the claim runs inside Postgres, in webhook_claim_isolated (see
+      # db/migrations/20260924140000_webhook_claim_function.rb for the steps).
+      CLAIM_SQL = <<~SQL
+        SELECT * FROM webhook_claim_isolated(:now, :lease_seconds, :token, :max_in_flight, :candidates)
       SQL
 
       sig { returns(Integer) }
@@ -185,40 +147,9 @@ module Clearinghouse
 
       sig { override.params(db: Sequel::Database, now: Time, lease_seconds: Numeric, token: String).returns(T.nilable(Claim)) }
       def claim(db, now:, lease_seconds:, token:)
-        candidates = db.fetch(CANDIDATES_SQL, now: now, max_in_flight: @max_in_flight, limit: @candidates)
-                       .map { |row| row[:endpoint_id] }
-        candidates.each do |endpoint_id|
-          claim = claim_from_endpoint(db, endpoint_id, now: now, lease_seconds: lease_seconds, token: token)
-          return claim if claim
-        end
-        nil
-      end
-
-      # One short transaction: lock the endpoint (or skip it if another worker holds
-      # it), check the breaker and the cap, lease one delivery.
-      sig do
-        params(db: Sequel::Database, endpoint_id: String, now: Time, lease_seconds: Numeric, token: String)
-          .returns(T.nilable(Claim))
-      end
-      def claim_from_endpoint(db, endpoint_id, now:, lease_seconds:, token:)
-        db.transaction do
-          endpoint = db[:webhook_endpoints].where(id: endpoint_id, status: 'enabled', deleted_at: nil)
-                                           .for_update.skip_locked.first
-          next nil unless endpoint
-
-          admitted = @breaker.admit(Breakers.state_of(endpoint), now: now)
-          next nil unless admitted
-
-          in_flight = db.fetch(IN_FLIGHT_SQL, endpoint_id: endpoint_id, now: now).first[:n]
-          next nil if in_flight >= @breaker.in_flight_limit(admitted, @max_in_flight)
-
-          row = db.fetch(LEASE_SQL, endpoint_id: endpoint_id, now: now, lease_seconds: lease_seconds.to_f,
-                                    token: token).first
-          next nil unless row
-
-          Breakers.store(db, endpoint_id, admitted) if admitted.state != endpoint[:breaker_state]
-          Queue.claim_from(row)
-        end
+        row = db.fetch(CLAIM_SQL, now: now, lease_seconds: lease_seconds.to_f, token: token,
+                                  max_in_flight: @max_in_flight, candidates: @candidates).first
+        row ? Queue.claim_from(row) : nil
       end
     end
   end

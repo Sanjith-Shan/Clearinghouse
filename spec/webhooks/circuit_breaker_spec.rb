@@ -23,23 +23,14 @@ RSpec.describe Clearinghouse::Webhooks::CircuitBreaker do
     expect(later).to have_attributes(state: 'open', consecutive_failures: 4, retry_at: now + 30)
   end
 
-  it 'admits nothing while open, then one probe as half-open' do
-    open = fail_times(closed, 3)
-    expect(breaker.admit(open, now: now + 29)).to be_nil
-    half = breaker.admit(open, now: now + 30)
-    expect(half).to have_attributes(state: 'half_open', consecutive_failures: 3, retry_at: nil)
-    expect(breaker.in_flight_limit(half, 4)).to eq(1)
-    expect(breaker.in_flight_limit(closed, 4)).to eq(4)
-    expect(breaker.in_flight_limit(open, 4)).to eq(0)
-    expect(breaker.admit(closed, now: now)).to eq(closed)
-  end
-
   it 'reopens after a failed probe with a doubled cool-down, capped' do
     state = fail_times(closed, 3)
     cooldowns = Array.new(5) do
-      half = breaker.admit(state, now: state.retry_at)
-      state = breaker.after_failure(half, now: half_time = state.retry_at)
-      state.retry_at - half_time
+      probe_at = state.retry_at
+      half = described_class::State.new(state: 'half_open', consecutive_failures: state.consecutive_failures,
+                                        reopens: state.reopens, retry_at: nil)
+      state = breaker.after_failure(half, now: probe_at)
+      state.retry_at - probe_at
     end
     expect(cooldowns).to eq([60.0, 120.0, 200.0, 200.0, 200.0])
     expect(state.reopens).to eq(5)

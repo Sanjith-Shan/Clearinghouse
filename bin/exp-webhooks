@@ -1,0 +1,97 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 6: webhook delivery under hostile endpoints. Runs the same workload
+# against the FIFO baseline and against per-endpoint isolation (with and without
+# kill -9 of worker processes), and writes results/exp6-webhooks/summary.json and
+# table.md. Raw logs go to results/raw/exp6-webhooks/ (not committed).
+#
+#   bin/exp-webhooks                                  # all runs, defaults below
+#   bin/exp-webhooks --runs fifo,isolated --duration 20
+#
+# Needs the Postgres from docker-compose. Creates the database named by --database if
+# it does not exist and empties its tables before each run; never point it at a
+# database you care about.
+require 'bundler/setup'
+require 'optparse'
+require 'etc'
+require_relative '../exp/webhooks/driver'
+require_relative '../exp/webhooks/analysis'
+
+PLANS = {
+  'fifo' => { mode: 'fifo' },
+  'isolated' => { mode: 'isolated' },
+  'isolated-kills' => { mode: 'isolated', kills: true },
+  'isolated-cap4' => { mode: 'isolated', max_in_flight: 4 }
+}.freeze
+
+root = File.expand_path('..', __dir__)
+command = ['bin/exp-webhooks', *ARGV].join(' ')
+options = { runs: PLANS.keys, out: File.join(root, 'results/exp6-webhooks') }
+overrides = {}
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/exp-webhooks [options]'
+  opts.on('--runs LIST', Array, "comma-separated, from #{PLANS.keys.join(', ')}") { |v| options[:runs] = v }
+  opts.on('--rate N', Float, 'events per second (default 25)') { |v| overrides[:rate] = v }
+  opts.on('--duration SECONDS', Float, 'how long to emit events (default 60)') { |v| overrides[:duration] = v }
+  opts.on('--processes N', Integer, 'worker processes (default 4)') { |v| overrides[:processes] = v }
+  opts.on('--threads N', Integer, 'threads per worker process (default 8)') { |v| overrides[:threads] = v }
+  opts.on('--max-in-flight N', Integer, 'per endpoint, isolated runs (default 2)') { |v| overrides[:max_in_flight] = v }
+  opts.on('--seed N', Integer, 'default 6') { |v| overrides[:seed] = v }
+  opts.on('--max-drain SECONDS', Float, 'give up draining after this long (default 600)') do |v|
+    overrides[:max_drain] = v
+  end
+  opts.on('--database NAME', 'default clearinghouse_exp_webhooks') { |v| overrides[:database] = v }
+  opts.on('--out DIR', 'where summary.json and table.md go') { |v| options[:out] = v }
+end.parse!
+unknown = options[:runs] - PLANS.keys
+abort "unknown runs: #{unknown.join(', ')}" unless unknown.empty?
+
+raw_dir = File.join(root, 'results/raw/exp6-webhooks')
+FileUtils.mkdir_p([raw_dir, options[:out]])
+settings = Experiments::Webhooks::Driver::Settings.new(raw_dir: raw_dir, **overrides)
+driver = Experiments::Webhooks::Driver.new(settings)
+
+def capture(shell)
+  `#{shell} 2>/dev/null`.strip
+rescue SystemCallError
+  ''
+end
+
+db = Clearinghouse::DB.connect(role: :owner, database: 'postgres', max_connections: 1)
+machine = {
+  'cpu' => capture('sysctl -n machdep.cpu.brand_string'), 'cores' => Etc.nprocessors,
+  'memory_gb' => (capture('sysctl -n hw.memsize').to_i / (1024.0**3)).round,
+  'os' => capture('uname -sr'), 'ruby' => RUBY_VERSION,
+  'postgres' => db.fetch('SELECT version() AS v').first[:v], 'postgres_in' => 'Docker (docker compose, db service)'
+}
+db.disconnect
+
+results = options[:runs].map do |name|
+  plan = Experiments::Webhooks::Driver::Plan.new(name: name, **PLANS.fetch(name))
+  summary = driver.run(plan)
+  puts JSON.pretty_generate(summary.slice('run', 'ttd_s', 'missing', 'duplicates', 'duplicate_rate',
+                                          'worker_kills', 'drained'))
+  summary
+end
+
+report = { 'command' => command,
+           'machine' => machine, 'settings' => settings.serialize.except('raw_dir'), 'runs' => results }
+File.write(File.join(options[:out], 'summary.json'), "#{JSON.pretty_generate(report)}\n")
+
+rows = results.map do |r|
+  t = r['ttd_s']
+  kinds = r['requests_by_kind']
+  "| #{r['run']} | #{r['max_in_flight'] || '-'} | #{r['worker_kills']} | #{t['p50']} | #{t['p90']} | #{t['p99']} | " \
+    "#{t['max']} | #{r['healthy_pairs_received']}/#{r['healthy_pairs_expected']} | #{r['duplicates']} " \
+    "(#{(r['duplicate_rate'].to_f * 100).round(3)}%) | #{kinds['hang'] || 0} | #{r['signature_failures']} |"
+end
+table = <<~MD
+  | run | cap | kills | p50 s | p90 s | p99 s | max s | healthy received | duplicates | hung-endpoint requests | bad signatures |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  #{rows.join("\n")}
+MD
+File.write(File.join(options[:out], 'table.md'), table)
+puts table
+failed = results.select { |r| r['missing'].positive? }
+abort "MISSING DELIVERIES in #{failed.map { |r| r['run'] }.join(', ')}" unless failed.empty?
