@@ -63,13 +63,14 @@ module Clearinghouse
         code = row[:response_code]
         return nil if code.nil?
 
-        headers = parse(row[:response_headers] || '{}').transform_values(&:to_s)
+        headers = parse(row.fetch(:response_headers)).transform_values(&:to_s)
         Response.new(status: code, body: row.fetch(:response_body), headers: headers)
       end
 
+      # json columns come back as text (the pg_json extension is not loaded).
       sig { params(value: T.untyped).returns(T::Hash[String, T.untyped]) }
       def self.parse(value)
-        value.is_a?(String) ? JSON.parse(value) : value.to_h
+        JSON.parse(String(value))
       end
     end
 
@@ -84,12 +85,6 @@ module Clearinghouse
       sig { params(db: Sequel::Database, merchant_id: String, key: String).returns(T.nilable(Record)) }
       def self.find_for_update(db, merchant_id, key)
         row = db[TABLE].where(merchant_id: merchant_id, key: key).for_update.first
-        row ? Record.from_row(row) : nil
-      end
-
-      sig { params(db: Sequel::Database, id: Integer).returns(T.nilable(Record)) }
-      def self.find(db, id)
-        row = db[TABLE].where(id: id).first
         row ? Record.from_row(row) : nil
       end
 

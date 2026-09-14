@@ -124,6 +124,44 @@ RSpec.describe Clearinghouse::Idempotency::Runner, :db do
     end
   end
 
+  describe 'races on the key itself' do
+    it 'looks again when another request inserts the same new key first' do
+      calls = 0
+      allow(idem::Store).to receive(:insert).and_wrap_original do |original, *args|
+        calls += 1
+        raise Sequel::UniqueConstraintViolation, 'duplicate key value' if calls == 1
+
+        original.call(*args)
+      end
+      expect(run_toy.response.status).to eq(200)
+      expect(calls).to eq(2)
+    end
+
+    it 'gives up if the key keeps colliding' do
+      allow(idem::Store).to receive(:insert).and_raise(Sequel::UniqueConstraintViolation, 'duplicate key value')
+      expect { run_toy }.to raise_error(Sequel::UniqueConstraintViolation)
+      expect(idem::Store).to have_received(:insert).exactly(3).times
+    end
+
+    it 'cannot store even a final error once another runner has the lease' do
+      flow.before_atomic = lambda { |step, run|
+        next unless step == 'called'
+
+        Thread.new { app_db[:idempotency_keys].where(id: run.key_id).update(lock_token: 'someone-else') }.join
+        raise ToyFlow::FinalError, 'no'
+      }
+      expect { run_toy }.to raise_error(idem::LockLostError)
+      expect(key_row).to include(recovery_point: 'written', response_code: nil)
+    end
+  end
+
+  it 'compares responses by value' do
+    response = idem::Response.new(status: 200, body: '{}', headers: { 'a' => 'b' })
+    expect(response).to eq(idem::Response.new(status: 200, body: '{}', headers: { 'a' => 'b' }))
+    expect(response).not_to eq(idem::Response.new(status: 200, body: '{}'))
+    expect(response).not_to eq('{}')
+  end
+
   describe 'errors' do
     it 'stores a final error as the response, releases what the flow holds, and replays it' do
       flow.fail_in['called'] = ToyFlow::FinalError.new('no')
