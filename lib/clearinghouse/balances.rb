@@ -1,0 +1,13 @@
+# typed: strict
+# frozen_string_literal: true
+
+module Clearinghouse
+  # A merchant's money between capture and payout: when it becomes available
+  # (Availability), and when it is held back for risk review (Holds). The ledger
+  # holds the balances themselves; this area decides when money moves between the
+  # merchant's pending, held and available accounts. See docs/design/payouts.md.
+  module Balances
+  end
+end
+
+require_relative 'balances/availability'

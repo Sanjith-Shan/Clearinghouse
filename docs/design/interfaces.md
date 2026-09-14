@@ -193,3 +193,14 @@ Risk::Holds#open_hold!(db, merchant_id:, payment_intent_id:, amount:, reason: "r
   or `{decision: "risk_unavailable", reason}`.
 - The integration steps for confirm are in `risk-integration.md`, "Where the step sits in confirm".
 
+## Balances and payouts (`lib/clearinghouse/balances/`)
+
+See `docs/design/payouts.md`.
+
+```ruby
+Balances::Availability.available_on_for(db, merchant_id:, captured_at:) -> Time   # start of UTC day + payout_delay_days
+Balances::Availability.schedule!(db, flow_id:, merchant_id:, net:, available_on:, clock:) -> Scheduled | nil
+  # Call inside the capture's transaction. Idempotent on flow_id; ConflictError on different terms.
+  # nil (nothing scheduled) for a zero net.
+Balances::Availability.release_due!(db, clock:) -> ReleaseReport   # the sweep; safe to run concurrently
+```
