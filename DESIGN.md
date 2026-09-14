@@ -37,6 +37,7 @@ The design is built from public engineering writing, credited here.
 - [Client library](docs/design/client.md): the Ruby client, and why it reuses one idempotency key across every retry of a call.
 - [bin/explain](docs/design/explain.md): a readable trace of every ledger entry behind a payment, refund, dispute or payout.
 - [Load generator](docs/design/loadgen.md): open-loop load at fixed rates, latency from the intended send time (coordinated omission), scenarios and rate sweeps.
+- [Experiment 2, crash matrix](docs/design/crash-matrix.md): killing the server at every recovery point of every registered flow, recovering, and checking the outcome against an uninterrupted request.
 - [RiskGate integration](docs/design/risk-integration.md): the deadline, keep-alive pool and circuit breaker, fail-open and what it costs, review holds on payouts, and where the risk step sits in confirm.
 - [Isolation](docs/design/isolation.md): experiment 3, READ COMMITTED read-then-write against `FOR UPDATE` against SERIALIZABLE with retry, the anomalies each allows, and what ships where.
 - [Model-based testing](docs/design/model-testing.md): experiment 4. A reference model of the domain, random operation sequences checked against the ledger and the API after every step, shrinking to a replay script, and a planted-bug demo.

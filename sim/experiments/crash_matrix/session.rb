@@ -90,6 +90,7 @@ module Experiments
         db.disconnect
         { 'experiment' => 'exp2-crash-matrix', 'command' => command, 'machine' => MACHINE,
           'postgres' => "PostgreSQL #{postgres}", 'recovery_mode' => @settings.recovery,
+          'api_process' => { 'puma_threads' => Processes::PUMA_THREADS, 'db_pool' => Processes::DB_POOL },
           'lock_timeout_s' => @settings.lock_timeout, 'database' => @settings.db_name,
           'started_at' => started_at.iso8601, 'duration_s' => (CrashMatrix.monotonic - started).round(1),
           'load_average' => { 'before' => load_before, 'after' => CrashMatrix.load_average },

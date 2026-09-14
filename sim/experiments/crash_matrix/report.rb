@@ -15,7 +15,10 @@ module Experiments
       counter) become <prefix#n> numbered by first appearance, so references must still line up; and the value of every key named `created`
       (the Unix second the object was created). Status, every amount, state, error code, and key order
       must match exactly. The second retry of the crashed request is compared with the recovered response
-      byte for byte, with no normalisation at all.
+      byte for byte, with no normalisation at all. The outcome (intent, refunds, events with their payloads,
+      ledger, acquirer operations) is compared with the control's under the same id rule; in retry mode that
+      includes which request's Idempotency-Key each event carries. In completer mode it does not, because the
+      completer writes events as background work with no request (Api::Context.background).
     TEXT
 
     # 1, 5 and 15 minute load averages.
@@ -69,8 +72,10 @@ module Experiments
     def self.header_lines(report)
       load = report.fetch('load_average')
       missing = Array(report['flows_without_scenario'])
+      api = report['api_process'] || {}
       ["- Command: `#{report['command']}`",
        "- Machine: #{report['machine']} (server #{report['postgres']})",
+       "- API process: Puma single mode, threads #{api['puma_threads']}, database pool #{api['db_pool']}",
        "- Load average (1/5/15 min): before #{load['before'].join(' / ')}, after #{load['after'].join(' / ')}",
        "- Started #{report['started_at']}, took #{report['duration_s']} s; lease (lock timeout) " \
        "#{report['lock_timeout_s']} s",

@@ -104,10 +104,12 @@ module Experiments
       # its refunds, every event about it, its charge or its refunds, its ledger
       # transactions with amounts, and the simulator's authorizations and
       # operations for it. Normalised, so the crashed run's facts can be compared
-      # with the control's. `keys` maps Idempotency-Keys to a role name.
+      # with the control's. `keys` maps Idempotency-Keys to a role name, so each
+      # event says which request caused it; `keys: nil` leaves that out (the
+      # completer writes its events as background work, with no request).
       sig do
         params(intent_id: String, acquirer: T::Hash[String, T.untyped],
-               keys: T::Hash[String, String]).returns(T::Hash[String, T.untyped])
+               keys: T.nilable(T::Hash[String, String])).returns(T::Hash[String, T.untyped])
       end
       def facts(intent_id, acquirer, keys: {})
         Normalize.call(raw_facts(intent_id, acquirer, keys))
@@ -115,7 +117,7 @@ module Experiments
 
       sig do
         params(intent_id: String, acquirer: T::Hash[String, T.untyped],
-               keys: T::Hash[String, String]).returns(T::Hash[String, T.untyped])
+               keys: T.nilable(T::Hash[String, String])).returns(T::Hash[String, T.untyped])
       end
       def raw_facts(intent_id, acquirer, keys)
         intent = @db[:payment_intents].where(id: intent_id).first || {}
@@ -172,12 +174,15 @@ module Experiments
           'cancellation_reason' => row[:cancellation_reason], 'risk' => risk }
       end
 
-      sig { params(objects: T::Array[String], keys: T::Hash[String, String]).returns(T::Array[T.untyped]) }
+      sig do
+        params(objects: T::Array[String], keys: T.nilable(T::Hash[String, String])).returns(T::Array[T.untyped])
+      end
       def events(objects, keys)
         @db[:events].where(object_id: objects).order(:seq).map do |e|
-          { 'type' => e[:type], 'object' => e[:object_id],
-            'idempotency_key' => e[:idempotency_key] && keys.fetch(e[:idempotency_key], 'other'),
-            'data' => Clearinghouse::DB.from_json(e[:data]) }
+          event = { 'type' => e[:type], 'object' => e[:object_id], 'data' => Clearinghouse::DB.from_json(e[:data]) }
+          next event if keys.nil?
+
+          event.merge('idempotency_key' => e[:idempotency_key] && keys.fetch(e[:idempotency_key], 'other'))
         end
       end
 

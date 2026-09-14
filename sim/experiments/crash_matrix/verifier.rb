@@ -10,9 +10,10 @@ module Experiments
     class Verifier
       extend T::Sig
 
-      sig { params(inspector: Inspector).void }
-      def initialize(inspector:)
+      sig { params(inspector: Inspector, recovery: String).void }
+      def initialize(inspector:, recovery:)
         @inspector = inspector
+        @recovery = recovery
       end
 
       # Right after the crash, the key row is at the last committed point.
@@ -34,8 +35,9 @@ module Experiments
         control_intent = work.scenario.intent_id(control_state, control)
         raise "no PaymentIntent to check (reply #{final})" unless intent && control_intent
 
-        facts = @inspector.facts(intent, books, keys: key_roles(work))
-        control_facts = @inspector.facts(control_intent, books, keys: key_roles(work))
+        roles = @recovery == RecoveryMode::COMPLETER ? nil : key_roles(work)
+        facts = @inspector.facts(intent, books, keys: roles)
+        control_facts = @inspector.facts(control_intent, books, keys: roles)
         record(result, 'resting_state', work.scenario.resting_problems(facts))
         record(result, 'ledger_invariants', @inspector.ledger_problems)
         record(result, 'acquirer_equals_ledger', @inspector.money_problems(work.merchant_id, books))
@@ -93,14 +95,29 @@ module Experiments
       end
 
       # Retry mode: every attempt before the answer was a 409 while the dead
-      # process's lease ran; nothing else went wrong on the way. The ambiguous
-      # variant has its own path (check_ambiguous).
+      # process's lease ran; nothing else went wrong on the way. Completer mode:
+      # the completer finished the key, so the client's retry was a replay. The
+      # ambiguous variant also has its own path (check_ambiguous).
       sig { params(result: CaseResult).void }
       def check_recovery_path(result)
-        return check_ambiguous(result) if result.kase.variant == CaseRunner::DROP
+        check_ambiguous(result) if result.kase.variant == CaseRunner::DROP
+        return check_completer(result) if @recovery == RecoveryMode::COMPLETER
+        return if result.kase.variant == CaseRunner::DROP
 
         detours = result.recovery[0..-2].to_a.reject { |line| line.include?('409 idempotency_key_in_use') }
         result.check('recovered_without_detours', detours.empty?, detours.join('; '))
+      end
+
+      # A crash that left a key row leaves it for the completer, and the client
+      # then only reads the stored answer. A crash that left none (the insert
+      # rolled back) leaves the completer nothing, and the retry runs afresh.
+      sig { params(result: CaseResult).void }
+      def check_completer(result)
+        left_a_key = !result.kase.expected_point_after_crash.nil?
+        retry_line = result.recovery.last.to_s
+        ok = left_a_key == retry_line.end_with?('(replayed)')
+        result.check('completer_finished_it', ok,
+                     "key left at the crash: #{left_a_key}; #{result.recovery.join('; ')}")
       end
 
       # The ambiguous acquirer: after the crash at authorization_requested, the

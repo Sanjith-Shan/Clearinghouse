@@ -1,0 +1,4283 @@
+{
+  "experiment": "exp2-crash-matrix",
+  "command": "bin/crash-matrix",
+  "machine": "Apple M3 Pro, 12 cores, 18 GB, Postgres 16 in Docker",
+  "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2)",
+  "recovery_mode": "retry",
+  "lock_timeout_s": 1.0,
+  "database": "clearinghouse_exp2",
+  "started_at": "2026-09-24T01:01:11Z",
+  "duration_s": 819.6,
+  "load_average": {
+    "before": [
+      44.22,
+      44.55,
+      45.55
+    ],
+    "after": [
+      44.55,
+      57.05,
+      56.4
+    ]
+  },
+  "full_matrix": true,
+  "registry_flows": [
+    "payment_intent.create",
+    "payment_intent.confirm",
+    "payment_intent.capture",
+    "payment_intent.cancel",
+    "refund.create"
+  ],
+  "registry_crash_points": 48,
+  "headline": "crashed at 48 points across 5 flows, recovered at all 48",
+  "normalisation": "The recovered response is compared with an uninterrupted control request (same scenario, another Idempotency-Key, same server, same database) after rewriting exactly two things: generated ids (prefix_ plus 24 alphanumerics, the simulator's acq_ plus 24 hex, and the fake RiskGate's asm_ counter) become <prefix#n> numbered by first appearance, so references must still line up; and the value of every key named `created` (the Unix second the object was created). Status, every amount, state, error code, and key order must match exactly. The second retry of the crashed request is compared with the recovered response byte for byte, with no normalisation at all.",
+  "passed": 49,
+  "failed": 0,
+  "cases": [
+    {
+      "name": "payment_intent.create:started",
+      "flow": "payment_intent.create",
+      "point": "started",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.697,
+        "setup_s": 0.003,
+        "crash_s": 0.138,
+        "boot_clean_s": 6.679,
+        "recover_s": 0.176,
+        "verify_s": 0.181,
+        "total_s": 16.021
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\"], control [\"payment_intent.created\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_nACALqeEh7pqXXqkEttDWGzT\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_ vs control 200 {\"id\":\"pi_lEY52vk1dxsF4bGUfJ9R8x4w\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 requires_confirmation, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 requires_confirmation"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.create:started:before_commit",
+      "flow": "payment_intent.create",
+      "point": "started",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 7.918,
+        "setup_s": 0.001,
+        "crash_s": 0.182,
+        "boot_clean_s": 10.273,
+        "recover_s": 0.53,
+        "verify_s": 0.206,
+        "total_s": 21.928
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at nil, expected nil"
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\"], control [\"payment_intent.created\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_19sasjfrBOn0ILXbDi1iLy4V\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_ vs control 200 {\"id\":\"pi_eNjdkNItDPeLMwoCNa2qktae\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 requires_confirmation, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from the state before the request: {\"key\"=>nil, \"payment_intents\"=>[], \"refunds\"=>[], \"events\"=>[], \"ledger\"=>[]} vs {\"key\"=>nil, \"payment_intents\"=>[], \"refunds\"=>[], \"events\"=>[], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 requires_confirmation"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.create:finished",
+      "flow": "payment_intent.create",
+      "point": "finished",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 3.175,
+        "setup_s": 0.01,
+        "crash_s": 4.762,
+        "boot_clean_s": 4.007,
+        "recover_s": 0.466,
+        "verify_s": 0.252,
+        "total_s": 17.99
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"finished\", expected \"finished\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\"], control [\"payment_intent.created\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_FuHQbDyPO2zXmzOeVvFWtM9W\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_ vs control 200 {\"id\":\"pi_t20ZybT279wnHde6Df5czfXU\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 requires_confirmation, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 requires_confirmation (replayed)"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.create:finished:before_commit",
+      "flow": "payment_intent.create",
+      "point": "finished",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.931,
+        "setup_s": 0.002,
+        "crash_s": 0.756,
+        "boot_clean_s": 7.53,
+        "recover_s": 0.314,
+        "verify_s": 0.174,
+        "total_s": 17.923
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\"], control [\"payment_intent.created\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_5Vth8viooz4cFvYvUgFdntEp\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_ vs control 200 {\"id\":\"pi_aAUGNz9AlQ2lkvUi0DZRIdXA\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"requires_confirmation\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":null,\"last_payment_"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 requires_confirmation, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.create:started: {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[], \"refunds\"=>[], \"events\"=>[], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[], \"refunds\"=>[], \"events\"=>[], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 requires_confirmation"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.confirm:started",
+      "flow": "payment_intent.confirm",
+      "point": "started",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.965,
+        "setup_s": 0.209,
+        "crash_s": 0.049,
+        "boot_clean_s": 5.566,
+        "recover_s": 1.053,
+        "verify_s": 0.122,
+        "total_s": 15.48
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_WS8qkfteNqcy9kb2ekCYVY39\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_9wfjtwnylQ1KVrlHlSySEQgl vs control 200 {\"id\":\"pi_BlKlElKlEq3PEZFBVxKILYTl\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_QJPT5dr1Ye7DUaHjtylqaFnf"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /authorize [pi_WS8qkfteNqcy9kb2ekCYVY39:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:started:before_commit",
+      "flow": "payment_intent.confirm",
+      "point": "started",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.23,
+        "setup_s": 0.286,
+        "crash_s": 0.042,
+        "boot_clean_s": 4.752,
+        "recover_s": 1.224,
+        "verify_s": 0.269,
+        "total_s": 13.675
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at nil, expected nil"
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_xiO40vws69bYfRhicfDxJ54F\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_B6FXhIcHjei0JOQtO92c4sXp vs control 200 {\"id\":\"pi_mzDY5O311X58igJC0PEh34hB\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_wOsyaZ052GH1Eh4Dxh8nIJkJ"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from the state before the request: {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"requires_confirmation\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>0, \"owned\"=>false, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>nil}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]} vs {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"requires_confirmation\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>0, \"owned\"=>false, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>nil}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /authorize [pi_xiO40vws69bYfRhicfDxJ54F:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:intent_locked",
+      "flow": "payment_intent.confirm",
+      "point": "intent_locked",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.567,
+        "setup_s": 0.242,
+        "crash_s": 0.141,
+        "boot_clean_s": 7.326,
+        "recover_s": 1.293,
+        "verify_s": 0.55,
+        "total_s": 16.727
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"intent_locked\", expected \"intent_locked\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_vbqeQHkYtrNrgNUucS9YH6WI\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_1WXipnXMv6D3v3pzb1wGajZD vs control 200 {\"id\":\"pi_hSR1JwRbL77Tklr2bWhH4dHx\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_TYkWxNiiJIq4DFCnbaXvdE8R"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /authorize [pi_vbqeQHkYtrNrgNUucS9YH6WI:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:intent_locked:before_commit",
+      "flow": "payment_intent.confirm",
+      "point": "intent_locked",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.081,
+        "setup_s": 0.264,
+        "crash_s": 0.172,
+        "boot_clean_s": 5.275,
+        "recover_s": 0.991,
+        "verify_s": 0.169,
+        "total_s": 16.147
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_Qj2xFA8P7qwsIUKR3Yk8VBlN\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ehdyjkHIYuqRbe83KlX2XLv2 vs control 200 {\"id\":\"pi_1g3BCakuUFBwqhZTbamtW8Ec\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_FPotkg9c4ICRpnJClOaUHzOK"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.confirm:started: {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"requires_confirmation\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>0, \"owned\"=>false, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>nil}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"requires_confirmation\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>0, \"owned\"=>false, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>nil}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /authorize [pi_Qj2xFA8P7qwsIUKR3Yk8VBlN:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:risk_assessed",
+      "flow": "payment_intent.confirm",
+      "point": "risk_assessed",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.614,
+        "setup_s": 0.666,
+        "crash_s": 0.546,
+        "boot_clean_s": 6.565,
+        "recover_s": 0.877,
+        "verify_s": 0.215,
+        "total_s": 18.724
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"risk_assessed\", expected \"risk_assessed\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_RNiLUv55EstWXM0E29FZqc8a\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_2KMpl0KfC1WIJksEisut8K55 vs control 200 {\"id\":\"pi_i6umviyLlrgyiDM3XRPckVyc\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_iqq7tMsLfGIxFz6anX0kDgxT"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /authorize [pi_RNiLUv55EstWXM0E29FZqc8a:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:risk_assessed:before_commit",
+      "flow": "payment_intent.confirm",
+      "point": "risk_assessed",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.978,
+        "setup_s": 0.459,
+        "crash_s": 0.13,
+        "boot_clean_s": 6.794,
+        "recover_s": 1.138,
+        "verify_s": 0.138,
+        "total_s": 15.799
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"intent_locked\", expected \"intent_locked\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_ZY9yJRqlhVAtscnPZ3U4Crhb\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_2NKacFjeeHNg4iDrNL48uxcY vs control 200 {\"id\":\"pi_fhvipMF2WuANixdEKLXTWi0T\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_RLCOVwMmJEFmVTaSsNWUj1uF"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.confirm:intent_locked: {\"key\"=>{\"recovery_point\"=>\"intent_locked\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>nil}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"intent_locked\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>nil}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /authorize [pi_ZY9yJRqlhVAtscnPZ3U4Crhb:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:authorization_requested",
+      "flow": "payment_intent.confirm",
+      "point": "authorization_requested",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 2.003,
+        "setup_s": 0.149,
+        "crash_s": 0.133,
+        "boot_clean_s": 3.633,
+        "recover_s": 0.787,
+        "verify_s": 0.112,
+        "total_s": 8.919
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"authorization_requested\", expected \"authorization_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_5qA6RSt1LjCQjP63yzV6AWGI\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_Mi3Mcbej6HhkQIZs0UQjIMqM vs control 200 {\"id\":\"pi_8Q8kzctBrAaH89uxkPkgM1C9\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_eS6IZgMUbzZFBLGkWMo6Qyny"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "GET /operations/pi_5qA6RSt1LjCQjP63yzV6AWGI%3Aauthorize%3A1 -> 404",
+          "POST /authorize [pi_5qA6RSt1LjCQjP63yzV6AWGI:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:authorization_requested:before_commit",
+      "flow": "payment_intent.confirm",
+      "point": "authorization_requested",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.754,
+        "setup_s": 0.167,
+        "crash_s": 0.165,
+        "boot_clean_s": 5.329,
+        "recover_s": 0.801,
+        "verify_s": 0.279,
+        "total_s": 15.065
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"risk_assessed\", expected \"risk_assessed\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_BPMcpi48cJHiClF3CWve3npq\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_FrgciKKxhsdqrrQecKmYATC1 vs control 200 {\"id\":\"pi_SEnLJVBFTi4YWjW65q3mUELf\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_Jll0ATSQTebPuhdVeE9yFX8j"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.confirm:risk_assessed: {\"key\"=>{\"recovery_point\"=>\"risk_assessed\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"risk_assessed\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /authorize [pi_BPMcpi48cJHiClF3CWve3npq:authorize:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:authorization_recorded",
+      "flow": "payment_intent.confirm",
+      "point": "authorization_recorded",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.66,
+        "setup_s": 0.243,
+        "crash_s": 0.525,
+        "boot_clean_s": 8.144,
+        "recover_s": 0.698,
+        "verify_s": 0.128,
+        "total_s": 18.671
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"authorization_recorded\", expected \"authorization_recorded\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_lZTWebkerTtEL4RRYE9zgukD\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_1aLtV0hhuaDFLLsyAg4o23tw vs control 200 {\"id\":\"pi_SvSTUwTlqIQmX8Q8yvjXUZjT\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_elndx9k3mfQLkS7dXjcMrQy7"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /authorize [pi_lZTWebkerTtEL4RRYE9zgukD:authorize:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.confirm:authorization_recorded:before_commit",
+      "flow": "payment_intent.confirm",
+      "point": "authorization_recorded",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 7.799,
+        "setup_s": 0.356,
+        "crash_s": 0.55,
+        "boot_clean_s": 8.527,
+        "recover_s": 0.973,
+        "verify_s": 0.196,
+        "total_s": 20.049
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"authorization_requested\", expected \"authorization_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_1ITpEvRsjv89xdrNtT3YPnz2\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_NgbyMWREBiA8AovlnQo8v9lJ vs control 200 {\"id\":\"pi_AHjOHQi86FWyG3U4p4tXUtSM\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_TWaLHExhRxdgh4B3qLUEdYZI"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.confirm:authorization_requested: {\"key\"=>{\"recovery_point\"=>\"authorization_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"authorization_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>false, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /authorize [pi_1ITpEvRsjv89xdrNtT3YPnz2:authorize:1] -> 200"
+        ],
+        "retry_1": [
+          "GET /operations/pi_1ITpEvRsjv89xdrNtT3YPnz2%3Aauthorize%3A1 -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.confirm:ledger_posted",
+      "flow": "payment_intent.confirm",
+      "point": "ledger_posted",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 8.02,
+        "setup_s": 0.392,
+        "crash_s": 1.099,
+        "boot_clean_s": 5.936,
+        "recover_s": 0.279,
+        "verify_s": 0.124,
+        "total_s": 18.671
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"ledger_posted\", expected \"ledger_posted\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_2dZvLP3388JAKWIIxoVdHNgJ\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_El01m9LC0zcKoowmhQdpHPK4 vs control 200 {\"id\":\"pi_dHDgWpjvTGTNATKya7oKx6Vm\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_vRrQKJcZRieSk4g2Trmsy1Fw"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /authorize [pi_2dZvLP3388JAKWIIxoVdHNgJ:authorize:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.confirm:ledger_posted:before_commit",
+      "flow": "payment_intent.confirm",
+      "point": "ledger_posted",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.618,
+        "setup_s": 0.376,
+        "crash_s": 0.748,
+        "boot_clean_s": 5.571,
+        "recover_s": 0.776,
+        "verify_s": 0.353,
+        "total_s": 17.79
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"authorization_recorded\", expected \"authorization_recorded\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_XlKi5gdnj6iFFtlEk4ay84sb\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_5CgUp9wnPomyYGOh5amOBUcN vs control 200 {\"id\":\"pi_Tk7WzpaeOtunmVGiEfAlTo2Y\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_rEtVpjLb2Ejk5WBJVeg6GLCh"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.confirm:authorization_recorded: {\"key\"=>{\"recovery_point\"=>\"authorization_recorded\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"authorization_recorded\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"processing\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /authorize [pi_XlKi5gdnj6iFFtlEk4ay84sb:authorize:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.confirm:finished",
+      "flow": "payment_intent.confirm",
+      "point": "finished",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 7.131,
+        "setup_s": 0.359,
+        "crash_s": 0.912,
+        "boot_clean_s": 7.9,
+        "recover_s": 0.091,
+        "verify_s": 0.235,
+        "total_s": 19.78
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"finished\", expected \"finished\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_sECoLOoiZk0zHPyvsVb40MS9\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ZeDaC9FTTC3ZrDamAe3xAmqT vs control 200 {\"id\":\"pi_IRrxbZyjhehfcSMp1Cd30HHh\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ytwXZ16xwMFFP4bjpzrqHnST"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded (replayed)"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /authorize [pi_sECoLOoiZk0zHPyvsVb40MS9:authorize:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.confirm:finished:before_commit",
+      "flow": "payment_intent.confirm",
+      "point": "finished",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 2.898,
+        "setup_s": 0.163,
+        "crash_s": 0.407,
+        "boot_clean_s": 3.566,
+        "recover_s": 0.136,
+        "verify_s": 0.458,
+        "total_s": 9.595
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"ledger_posted\", expected \"ledger_posted\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_bU06MmeLUQ7ko32wOYAuMqhb\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_hs9U2bzUSxyfuTuy01XvRYff vs control 200 {\"id\":\"pi_g89aFQ4osshLbgb9mYF11NXP\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_oTx2pq0k1jhDRJl9mx7ZcDeq"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.confirm:ledger_posted: {\"key\"=>{\"recovery_point\"=>\"ledger_posted\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]} vs {\"key\"=>{\"recovery_point\"=>\"ledger_posted\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /authorize [pi_bU06MmeLUQ7ko32wOYAuMqhb:authorize:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.capture:started",
+      "flow": "payment_intent.capture",
+      "point": "started",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.316,
+        "setup_s": 0.36,
+        "crash_s": 0.066,
+        "boot_clean_s": 5.918,
+        "recover_s": 0.595,
+        "verify_s": 0.268,
+        "total_s": 17.831
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_bv6y8kxdpUILsKjhALuheHUl\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ibxg0k2o6Yl8bnlunThGkMsc\",\" vs control 200 {\"id\":\"pi_5vGiHoMpAkAKnFmlx4WIYgh2\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ce2pnvxPzNX0Gz2U5gbmdiWT\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /capture [pi_bv6y8kxdpUILsKjhALuheHUl:capture:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.capture:started:before_commit",
+      "flow": "payment_intent.capture",
+      "point": "started",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.999,
+        "setup_s": 0.428,
+        "crash_s": 0.155,
+        "boot_clean_s": 4.6,
+        "recover_s": 0.489,
+        "verify_s": 0.066,
+        "total_s": 12.827
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at nil, expected nil"
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_Pqze9unnKKuUckvgVgeVHS0h\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_3B9vrCYoDJsExkqppx4UOgys\",\" vs control 200 {\"id\":\"pi_OJFG8WtAAllyMCIqyk8UFNw7\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_VC50KWHUUCiCM9IEjhpllCf1\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from the state before the request: {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /capture [pi_Pqze9unnKKuUckvgVgeVHS0h:capture:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.capture:intent_locked",
+      "flow": "payment_intent.capture",
+      "point": "intent_locked",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.825,
+        "setup_s": 0.597,
+        "crash_s": 0.099,
+        "boot_clean_s": 4.777,
+        "recover_s": 0.381,
+        "verify_s": 0.085,
+        "total_s": 11.829
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"intent_locked\", expected \"intent_locked\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_ab9fEBJr8jnkpQs7HAckim3D\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_kwEerV5krb8J12r7wZmJdOj8\",\" vs control 200 {\"id\":\"pi_KQVR7UFqVonNPftJ8y09wV0u\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_tmypMFdHN2cy9Rx14CfQdsOi\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /capture [pi_ab9fEBJr8jnkpQs7HAckim3D:capture:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.capture:intent_locked:before_commit",
+      "flow": "payment_intent.capture",
+      "point": "intent_locked",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.037,
+        "setup_s": 0.829,
+        "crash_s": 0.156,
+        "boot_clean_s": 3.471,
+        "recover_s": 0.655,
+        "verify_s": 0.235,
+        "total_s": 12.952
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_rANkhsklOFGxJGElGKDK2Aqp\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_N7j9q13DgWGgkkQ9kBpet3eu\",\" vs control 200 {\"id\":\"pi_wPEiYdfF7EzEB2uqPMDaeyGE\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_1XX7QmwDcjflJJZ8v1zuNloM\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.capture:started: {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /capture [pi_rANkhsklOFGxJGElGKDK2Aqp:capture:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.capture:capture_requested",
+      "flow": "payment_intent.capture",
+      "point": "capture_requested",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 10.088,
+        "setup_s": 0.949,
+        "crash_s": 0.099,
+        "boot_clean_s": 5.451,
+        "recover_s": 0.606,
+        "verify_s": 0.127,
+        "total_s": 19.082
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"capture_requested\", expected \"capture_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_gFpojuh56crx9uP4HFxAU4On\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_XwlLBcqtKUse9jdiojr87QC6\",\" vs control 200 {\"id\":\"pi_WW4avaai95owolspvGnD92yc\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_G2tcDFbscJoT83HY8mb7k6Tx\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "GET /operations/pi_gFpojuh56crx9uP4HFxAU4On%3Acapture%3A1 -> 404",
+          "POST /capture [pi_gFpojuh56crx9uP4HFxAU4On:capture:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.capture:capture_requested:before_commit",
+      "flow": "payment_intent.capture",
+      "point": "capture_requested",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 9.12,
+        "setup_s": 1.85,
+        "crash_s": 0.116,
+        "boot_clean_s": 5.14,
+        "recover_s": 0.428,
+        "verify_s": 0.161,
+        "total_s": 18.565
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"intent_locked\", expected \"intent_locked\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_FFer4I9WKPGogA7sIhVvwExd\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_6mvLGQnyJxVS0NZAbVTZjigc\",\" vs control 200 {\"id\":\"pi_FLFVwR09IoCAnp1YsNoefcpB\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ZpLTrvBL7mBBJj8Rc27LYTEh\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.capture:intent_locked: {\"key\"=>{\"recovery_point\"=>\"intent_locked\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"amount\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"intent_locked\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"amount\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /capture [pi_FFer4I9WKPGogA7sIhVvwExd:capture:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.capture:capture_recorded",
+      "flow": "payment_intent.capture",
+      "point": "capture_recorded",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.234,
+        "setup_s": 0.751,
+        "crash_s": 0.314,
+        "boot_clean_s": 6.424,
+        "recover_s": 0.256,
+        "verify_s": 0.628,
+        "total_s": 17.436
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"capture_recorded\", expected \"capture_recorded\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_4XPpRP7iJXsHfPOkPt8EZRxY\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_CDUoAYgXdjDkfE4G0j4BZUtK\",\" vs control 200 {\"id\":\"pi_s4USM92hSJBl6y24SHipUsJN\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ojSAO3FPctxTzkAXu57qhTiy\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /capture [pi_4XPpRP7iJXsHfPOkPt8EZRxY:capture:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.capture:capture_recorded:before_commit",
+      "flow": "payment_intent.capture",
+      "point": "capture_recorded",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 9.107,
+        "setup_s": 0.726,
+        "crash_s": 0.596,
+        "boot_clean_s": 5.022,
+        "recover_s": 0.72,
+        "verify_s": 0.09,
+        "total_s": 18.537
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"capture_requested\", expected \"capture_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_ILNDKEe8S6J7hIqd90bbnQkL\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_WaPPRMTNFaeZBfPMMXAd82iw\",\" vs control 200 {\"id\":\"pi_WrhCyZlhEXucueIpXoLOZy6n\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_tcfqh9yscwURibSq0GMdiob7\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.capture:capture_requested: {\"key\"=>{\"recovery_point\"=>\"capture_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"amount\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"capture_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"amount\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /capture [pi_ILNDKEe8S6J7hIqd90bbnQkL:capture:1] -> 200"
+        ],
+        "retry_1": [
+          "GET /operations/pi_ILNDKEe8S6J7hIqd90bbnQkL%3Acapture%3A1 -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.capture:finished",
+      "flow": "payment_intent.capture",
+      "point": "finished",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 7.393,
+        "setup_s": 0.556,
+        "crash_s": 0.897,
+        "boot_clean_s": 6.625,
+        "recover_s": 0.066,
+        "verify_s": 0.069,
+        "total_s": 17.159
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"finished\", expected \"finished\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_1GbeHu6yygoftlKDkKeCPeLC\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_rfsxHy57xxMXutXIX1RyrLrR\",\" vs control 200 {\"id\":\"pi_45QcX2zogVBq0Ea5QyBWBFmc\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_wzwPnuaOIbgetUuwepp608tJ\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded (replayed)"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /capture [pi_1GbeHu6yygoftlKDkKeCPeLC:capture:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.capture:finished:before_commit",
+      "flow": "payment_intent.capture",
+      "point": "finished",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.272,
+        "setup_s": 0.593,
+        "crash_s": 0.36,
+        "boot_clean_s": 5.528,
+        "recover_s": 0.156,
+        "verify_s": 0.201,
+        "total_s": 15.028
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"capture_recorded\", expected \"capture_recorded\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_GH7ykr5scYNwi5rlU6HtwPJ3\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_lzzudSAUwyRzPu3kGDsPfEHk\",\" vs control 200 {\"id\":\"pi_GahmHrZGoRuBSxCgfZ05oviq\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":1500,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_TG1g3YufQ3nFI8tVvYp8YU9f\",\""
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.capture:capture_recorded: {\"key\"=>{\"recovery_point\"=>\"capture_recorded\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"amount\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>1500, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]} vs {\"key\"=>{\"recovery_point\"=>\"capture_recorded\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"amount\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>1500, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /capture [pi_GH7ykr5scYNwi5rlU6HtwPJ3:capture:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.cancel:started",
+      "flow": "payment_intent.cancel",
+      "point": "started",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 9.602,
+        "setup_s": 0.98,
+        "crash_s": 0.052,
+        "boot_clean_s": 5.951,
+        "recover_s": 0.313,
+        "verify_s": 0.206,
+        "total_s": 18.351
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_XD9DrLhi7bO0ynlFebgDGL6X\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_rv3c25zaRcozZrJOGQfSWzMG\",\"last vs control 200 {\"id\":\"pi_KJSm9zR60ujQBNsvFhlkdtAw\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ruTwAWvoZZeM7dzr3Vq5JP51\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /void [pi_XD9DrLhi7bO0ynlFebgDGL6X:void:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.cancel:started:before_commit",
+      "flow": "payment_intent.cancel",
+      "point": "started",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.508,
+        "setup_s": 0.779,
+        "crash_s": 0.044,
+        "boot_clean_s": 4.348,
+        "recover_s": 0.273,
+        "verify_s": 0.05,
+        "total_s": 13.246
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at nil, expected nil"
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_qq8UNONmCkYnCPL3vZL9WbVw\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_kqzyBdU8YUq34nRW1BDSJ4i6\",\"last vs control 200 {\"id\":\"pi_NUCliWIqJ8LMKYJVQ7SjYli1\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_EqVyO0xVfZ6Epv9cCsofVREt\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from the state before the request: {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /void [pi_qq8UNONmCkYnCPL3vZL9WbVw:void:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.cancel:intent_locked",
+      "flow": "payment_intent.cancel",
+      "point": "intent_locked",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.568,
+        "setup_s": 0.507,
+        "crash_s": 0.074,
+        "boot_clean_s": 4.978,
+        "recover_s": 0.338,
+        "verify_s": 0.116,
+        "total_s": 12.611
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"intent_locked\", expected \"intent_locked\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_Gxw1WIWvKEZrCpTFDSx5MXQ4\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_e2PJY80tRaYM19TJhRXcdKsy\",\"last vs control 200 {\"id\":\"pi_lsHgyTfSj8BLZXZFjz9ve49k\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_HYwUjhyrdYoWggWWt29GwOQa\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /void [pi_Gxw1WIWvKEZrCpTFDSx5MXQ4:void:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.cancel:intent_locked:before_commit",
+      "flow": "payment_intent.cancel",
+      "point": "intent_locked",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.146,
+        "setup_s": 0.665,
+        "crash_s": 0.149,
+        "boot_clean_s": 5.134,
+        "recover_s": 0.274,
+        "verify_s": 0.086,
+        "total_s": 12.426
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_UGfe1Jjl5oE2GlGtesMB2DJh\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_F15kCkhTo8cAQIcp2WGpgxzv\",\"last vs control 200 {\"id\":\"pi_npGT8Ydl9VnQmxJV0N5ZNtLO\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_1Jdzty19wGrIDsJdlvlvpm68\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.cancel:started: {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /void [pi_UGfe1Jjl5oE2GlGtesMB2DJh:void:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.cancel:void_requested",
+      "flow": "payment_intent.cancel",
+      "point": "void_requested",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 3.747,
+        "setup_s": 0.329,
+        "crash_s": 0.099,
+        "boot_clean_s": 4.707,
+        "recover_s": 0.354,
+        "verify_s": 0.137,
+        "total_s": 11.066
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"void_requested\", expected \"void_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_cR2jTjh1l8voBF1iI1Tzlzqf\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_eshcovH8NNhiNSrWTfZylfDy\",\"last vs control 200 {\"id\":\"pi_AY6nD9pNJAz2ie7G35LESoQa\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_CbVEJYU0iEtNyLhKKbzBssmX\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "GET /operations/pi_cR2jTjh1l8voBF1iI1Tzlzqf%3Avoid%3A1 -> 404",
+          "POST /void [pi_cR2jTjh1l8voBF1iI1Tzlzqf:void:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.cancel:void_requested:before_commit",
+      "flow": "payment_intent.cancel",
+      "point": "void_requested",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.625,
+        "setup_s": 0.866,
+        "crash_s": 0.175,
+        "boot_clean_s": 4.627,
+        "recover_s": 0.378,
+        "verify_s": 0.318,
+        "total_s": 13.179
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"intent_locked\", expected \"intent_locked\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_9xk7d8DRTCGvkt9NNJ4QElFX\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_4r0GymgsSOJZYqjwHer2z38T\",\"last vs control 200 {\"id\":\"pi_NvJnJoy6pvW0VdrrfJuesXPo\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_Qs0C6V07G38fMmxj7OfZ1Sv5\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.cancel:intent_locked: {\"key\"=>{\"recovery_point\"=>\"intent_locked\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"void\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"intent_locked\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"void\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /void [pi_9xk7d8DRTCGvkt9NNJ4QElFX:void:1] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.cancel:canceled",
+      "flow": "payment_intent.cancel",
+      "point": "canceled",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.623,
+        "setup_s": 2.579,
+        "crash_s": 0.333,
+        "boot_clean_s": 7.424,
+        "recover_s": 0.363,
+        "verify_s": 0.445,
+        "total_s": 20.239
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"canceled\", expected \"canceled\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_yIJuNB0Erb2DrLLqRSEFfSpN\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_xcJlqzKCs9c2aMLDcGq6mfpg\",\"last vs control 200 {\"id\":\"pi_ESOqlpqWTa7xgPbMTtMtsIiy\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_xIFQYKgXS9txbCB2hoe0tQ7C\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /void [pi_yIJuNB0Erb2DrLLqRSEFfSpN:void:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.cancel:canceled:before_commit",
+      "flow": "payment_intent.cancel",
+      "point": "canceled",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 8.022,
+        "setup_s": 0.941,
+        "crash_s": 0.42,
+        "boot_clean_s": 5.864,
+        "recover_s": 0.536,
+        "verify_s": 1.961,
+        "total_s": 23.156
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"void_requested\", expected \"void_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_Gm9lu6mlVRHIFQMJ0yeNpx9T\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_E4jZnhmbE999xPWLTFsQIibJ\",\"last vs control 200 {\"id\":\"pi_R0SHBIBkZsGmEpKPBMeuB5Zl\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_jShs5uaVS4MAkuONgrhf7xbD\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.cancel:void_requested: {\"key\"=>{\"recovery_point\"=>\"void_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"void\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"void_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"void\"]}, \"payment_intents\"=>[{\"status\"=>\"requires_capture\", \"amount\"=>2000, \"amount_capturable\"=>2000, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /void [pi_Gm9lu6mlVRHIFQMJ0yeNpx9T:void:1] -> 200"
+        ],
+        "retry_1": [
+          "GET /operations/pi_Gm9lu6mlVRHIFQMJ0yeNpx9T%3Avoid%3A1 -> 200"
+        ]
+      }
+    },
+    {
+      "name": "payment_intent.cancel:finished",
+      "flow": "payment_intent.cancel",
+      "point": "finished",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 9.951,
+        "setup_s": 0.77,
+        "crash_s": 0.183,
+        "boot_clean_s": 6.41,
+        "recover_s": 0.119,
+        "verify_s": 0.104,
+        "total_s": 20.72
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"finished\", expected \"finished\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_0wPca6skIxtBYrDfqU4EklBo\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_4naeMDaavursXHvpDHMZHc4w\",\"last vs control 200 {\"id\":\"pi_dwxJfpG2sD0FweIOztROd86y\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_wyeBXvkat5SFERXryQ4liDuc\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled (replayed)"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /void [pi_0wPca6skIxtBYrDfqU4EklBo:void:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.cancel:finished:before_commit",
+      "flow": "payment_intent.cancel",
+      "point": "finished",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.619,
+        "setup_s": 1.134,
+        "crash_s": 0.32,
+        "boot_clean_s": 5.557,
+        "recover_s": 0.349,
+        "verify_s": 0.351,
+        "total_s": 15.502
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"canceled\", expected \"canceled\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], control [\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_6YoqFn4gVXJ4tTajg4grimFn\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_FqChUjF1ECzlJCfNWrf0USSp\",\"last vs control 200 {\"id\":\"pi_htpOmk6vVqx8rhBjijpzwOSE\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":0,\"currency\":\"usd\",\"status\":\"canceled\",\"capture_method\":\"manual\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_FIkg3pHnNL5ptbNhARavF29n\",\"last"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 canceled, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from payment_intent.cancel:canceled: {\"key\"=>{\"recovery_point\"=>\"canceled\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"void\"]}, \"payment_intents\"=>[{\"status\"=>\"canceled\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], \"ledger\"=>[]} vs {\"key\"=>{\"recovery_point\"=>\"canceled\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"void\"]}, \"payment_intents\"=>[{\"status\"=>\"canceled\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>0, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>true, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.amount_capturable_updated\", \"payment_intent.canceled\"], \"ledger\"=>[]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 canceled"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /void [pi_6YoqFn4gVXJ4tTajg4grimFn:void:1] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "refund.create:started",
+      "flow": "refund.create",
+      "point": "started",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.489,
+        "setup_s": 1.759,
+        "crash_s": 0.714,
+        "boot_clean_s": 5.187,
+        "recover_s": 0.672,
+        "verify_s": 0.651,
+        "total_s": 18.244
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_suvv2mr9Xs5AgXKNLpPBTIpC\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_oCzfGFA0OQi1ZuOs44fFupwt\",\"charge\":\"ch_H9z9ltDfyOHHPEskf2nN6Vrh\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212313} vs control 200 {\"id\":\"re_k6Inwy2fBQI9eWU2Wq3tWUSi\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_I1GjPBE7WXZntyOW5NcToTan\",\"charge\":\"ch_6yfwOwipjLNk6QaZtBlwETUh\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212314}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /refund [re_suvv2mr9Xs5AgXKNLpPBTIpC] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "refund.create:started:before_commit",
+      "flow": "refund.create",
+      "point": "started",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 6.223,
+        "setup_s": 1.885,
+        "crash_s": 0.093,
+        "boot_clean_s": 2.388,
+        "recover_s": 0.891,
+        "verify_s": 0.177,
+        "total_s": 16.523
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at nil, expected nil"
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_rFuJzGcL0p38LG8WpJg6V9eA\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_WkgycweM65Dm2Zh6k3bztRhC\",\"charge\":\"ch_04ULrBhHGDLTAf6eVKuTf3xn\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212329} vs control 200 {\"id\":\"re_cevfJAHJ6tglmkLe5mPo4oTl\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_9zJQrTmdvCwuT7krcVQLIE0Y\",\"charge\":\"ch_CTevpLPOvl5d2COWwHnND9VY\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212331}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from the state before the request: {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]} vs {\"key\"=>nil, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /refund [re_rFuJzGcL0p38LG8WpJg6V9eA] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "refund.create:refund_created",
+      "flow": "refund.create",
+      "point": "refund_created",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 9.208,
+        "setup_s": 1.375,
+        "crash_s": 0.397,
+        "boot_clean_s": 9.055,
+        "recover_s": 0.323,
+        "verify_s": 0.246,
+        "total_s": 24.519
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"refund_created\", expected \"refund_created\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_PuRzOAoBE8yVmCOJiqoG3MN2\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_pjjEtTroUXLi9RnHQvTQwRfU\",\"charge\":\"ch_8oVpPAqey8oVrvU8IooQbss6\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212345} vs control 200 {\"id\":\"re_rcCElTt18nfyzWOtJFrpWHoW\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_HIm7Ie2a0iF5oDa8OGOe8IWr\",\"charge\":\"ch_TO1svhZohNHSW9bDt7oE7Aor\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212355}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /refund [re_PuRzOAoBE8yVmCOJiqoG3MN2] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "refund.create:refund_created:before_commit",
+      "flow": "refund.create",
+      "point": "refund_created",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 10.689,
+        "setup_s": 1.181,
+        "crash_s": 0.062,
+        "boot_clean_s": 4.643,
+        "recover_s": 0.361,
+        "verify_s": 0.086,
+        "total_s": 19.355
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"started\", expected \"started\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_fvBQKVtnCDT1n6EwInMw6l5L\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_wLnmCpV6aP8tkWJPRLLqzWl9\",\"charge\":\"ch_q3QRNpusZ7yZm4mg38ZKcumd\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212374} vs control 200 {\"id\":\"re_saQLK5PO1G5bP4xJeo7toJN5\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_HndV1xTtbTD88Dg9OZFAnLsO\",\"charge\":\"ch_f300bsvyuMZ6tW4w8CPpGAsC\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212375}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from refund.create:started: {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]} vs {\"key\"=>{\"recovery_point\"=>\"started\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>0, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /refund [re_fvBQKVtnCDT1n6EwInMw6l5L] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "refund.create:refund_requested",
+      "flow": "refund.create",
+      "point": "refund_requested",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.062,
+        "setup_s": 1.008,
+        "crash_s": 0.513,
+        "boot_clean_s": 7.504,
+        "recover_s": 0.46,
+        "verify_s": 0.081,
+        "total_s": 15.98
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"refund_requested\", expected \"refund_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_iuZJ3HsNACh8qs20AOjAQo4c\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_AkRxXpizfjzTZafdIWyuS9Ci\",\"charge\":\"ch_sF6fNC393EJHZLWsHa3TQJLx\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212383} vs control 200 {\"id\":\"re_stD847gMAdux5gln4yzmUR4C\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_JFJr4wArmgWFI0ApksQBpvP5\",\"charge\":\"ch_CVtHtENvsR3Gvc2dK0YxypG6\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212391}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "GET /operations/re_iuZJ3HsNACh8qs20AOjAQo4c -> 404",
+          "POST /refund [re_iuZJ3HsNACh8qs20AOjAQo4c] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "refund.create:refund_requested:before_commit",
+      "flow": "refund.create",
+      "point": "refund_requested",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.592,
+        "setup_s": 0.325,
+        "crash_s": 0.108,
+        "boot_clean_s": 5.484,
+        "recover_s": 0.254,
+        "verify_s": 0.051,
+        "total_s": 13.027
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"refund_created\", expected \"refund_created\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_N3BsfnnlxU6Jx33Vw7wRC4Mi\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_1hKU09Dl3hAGomiyHgVyRs1u\",\"charge\":\"ch_C5HQhMEFNYdKCET2g9L5ePog\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212398} vs control 200 {\"id\":\"re_WI2oDKpczs1dtmzWZQLYsLVn\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_mCVkan9ffvBhNKd3keGKCuai\",\"charge\":\"ch_J6DdtoL1VqqWa9fzy3qAf1fA\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212404}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from refund.create:refund_created: {\"key\"=>{\"recovery_point\"=>\"refund_created\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"refund_id\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>500, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[{\"status\"=>\"pending\", \"amount\"=>500}], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]} vs {\"key\"=>{\"recovery_point\"=>\"refund_created\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"refund_id\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>500, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[{\"status\"=>\"pending\", \"amount\"=>500}], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "POST /refund [re_N3BsfnnlxU6Jx33Vw7wRC4Mi] -> 200"
+        ]
+      }
+    },
+    {
+      "name": "refund.create:refund_recorded",
+      "flow": "refund.create",
+      "point": "refund_recorded",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 4.284,
+        "setup_s": 0.85,
+        "crash_s": 0.327,
+        "boot_clean_s": 5.597,
+        "recover_s": 0.281,
+        "verify_s": 0.346,
+        "total_s": 14.057
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"refund_recorded\", expected \"refund_recorded\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_LDAYVRL8E035ICF5IYnitMym\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_Cv7DplB0AOC0qsZM8jKJsdVN\",\"charge\":\"ch_ndhKP4RWWAMjuMPP7jtc5Aru\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212410} vs control 200 {\"id\":\"re_ujUUPAwpMK3xjVFBwWg71kyo\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_iO6uhH5XiEfNqZBtvTJ3rgjk\",\"charge\":\"ch_iDl139kluiWbHdU3idxVXIE6\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212418}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /refund [re_LDAYVRL8E035ICF5IYnitMym] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "refund.create:refund_recorded:before_commit",
+      "flow": "refund.create",
+      "point": "refund_recorded",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 7.521,
+        "setup_s": 1.095,
+        "crash_s": 0.314,
+        "boot_clean_s": 4.72,
+        "recover_s": 0.262,
+        "verify_s": 0.205,
+        "total_s": 18.934
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"refund_requested\", expected \"refund_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_T96059mwmYkAiVHvNZ9czZLB\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_YUKs1iyvOYrK6AcAFFZDnLBS\",\"charge\":\"ch_tCIO8cmYG39fMd8dsmlQcvxu\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212431} vs control 200 {\"id\":\"re_XwiRx67LY4eO3I7Jcv5v2FCX\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_yzNsvOEspRTsl4Utfi8Ew1f7\",\"charge\":\"ch_oM2TX86cXL8vKjliZvOq1hd6\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212437}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from refund.create:refund_requested: {\"key\"=>{\"recovery_point\"=>\"refund_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"refund_id\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>500, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[{\"status\"=>\"pending\", \"amount\"=>500}], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]} vs {\"key\"=>{\"recovery_point\"=>\"refund_requested\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"refund_id\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>500, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[{\"status\"=>\"pending\", \"amount\"=>500}], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\"], \"ledger\"=>[[\"payment\", \"capture\"]]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /refund [re_T96059mwmYkAiVHvNZ9czZLB] -> 200"
+        ],
+        "retry_1": [
+          "GET /operations/re_T96059mwmYkAiVHvNZ9czZLB -> 200"
+        ]
+      }
+    },
+    {
+      "name": "refund.create:finished",
+      "flow": "refund.create",
+      "point": "finished",
+      "moment": "after_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 3.374,
+        "setup_s": 0.948,
+        "crash_s": 0.215,
+        "boot_clean_s": 4.654,
+        "recover_s": 0.111,
+        "verify_s": 0.461,
+        "total_s": 12.589
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"finished\", expected \"finished\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_NGRaJdAcWuaPpT3nsFLURLSU\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_XZxKqjG2NwE3iw3KZoc3SwKR\",\"charge\":\"ch_xoG6Fak0uIr6qN0rbN1bw1lM\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212443} vs control 200 {\"id\":\"re_9EVg4zqxgIG6PsFyEiaZ8kwe\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_VAxq5fvR28peuok0VYv1ooIs\",\"charge\":\"ch_pPQpHsedX8zFI8F9UOHR5gsF\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212449}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded (replayed)"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /refund [re_NGRaJdAcWuaPpT3nsFLURLSU] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "refund.create:finished:before_commit",
+      "flow": "refund.create",
+      "point": "finished",
+      "moment": "before_commit",
+      "variant": null,
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 5.85,
+        "setup_s": 0.779,
+        "crash_s": 0.459,
+        "boot_clean_s": 7.371,
+        "recover_s": 0.471,
+        "verify_s": 0.472,
+        "total_s": 18.291
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"refund_recorded\", expected \"refund_recorded\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"re_N03s8NXQAgTB8pVVckXyJEE6\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_LrL12HOXc7Cvnne6ZAloLqJi\",\"charge\":\"ch_xunLaNPkEWrRqCvzzII5e1JG\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212458} vs control 200 {\"id\":\"re_wtTnMeiYf2F6U2zc7FEgybxK\",\"object\":\"refund\",\"amount\":500,\"currency\":\"usd\",\"payment_intent\":\"pi_MLOSsvF5BuOj1u4vWmNd0C6J\",\"charge\":\"ch_ppiC0SssDs4FMEd5yAcwiYs4\",\"status\":\"succeeded\",\"reason\":null,\"failure_reason\":null,\"metadata\":{},\"created\":1790212467}"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "recovered_without_detours",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "rolled_back_phase_invisible",
+          "ok": true,
+          "detail": "state at the crash differs from refund.create:refund_recorded: {\"key\"=>{\"recovery_point\"=>\"refund_recorded\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"refund_id\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>500, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[{\"status\"=>\"succeeded\", \"amount\"=>500}], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], \"ledger\"=>[[\"payment\", \"capture\"], [\"refund\", \"refund <re#1> of <pi#1>\"]]} vs {\"key\"=>{\"recovery_point\"=>\"refund_recorded\", \"leased\"=>true, \"response_code\"=>nil, \"flow_state\"=>[\"refund_id\"]}, \"payment_intents\"=>[{\"status\"=>\"succeeded\", \"amount\"=>2000, \"amount_capturable\"=>0, \"amount_received\"=>2000, \"amount_refunded\"=>500, \"attempt\"=>1, \"owned\"=>false, \"charged\"=>true, \"cancellation_reason\"=>nil, \"risk\"=>{\"decision\"=>\"allow\", \"score\"=>5, \"reasons\"=>[], \"assessment_id\"=>\"<asm#1>\", \"ruleset_version\"=>\"fake-1\"}}], \"refunds\"=>[{\"status\"=>\"succeeded\", \"amount\"=>500}], \"events\"=>[\"payment_intent.created\", \"payment_intent.succeeded\", \"charge.refunded\"], \"ledger\"=>[[\"payment\", \"capture\"], [\"refund\", \"refund <re#1> of <pi#1>\"]]}"
+        }
+      ],
+      "recovery": [
+        "retry 1: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [
+          "POST /refund [re_N03s8NXQAgTB8pVVckXyJEE6] -> 200"
+        ],
+        "retry_1": []
+      }
+    },
+    {
+      "name": "payment_intent.confirm:authorization_requested+acquirer_drop",
+      "flow": "payment_intent.confirm",
+      "point": "authorization_requested",
+      "moment": "after_commit",
+      "variant": "acquirer_drop",
+      "passed": true,
+      "error": null,
+      "timings": {
+        "boot_armed_s": 8.509,
+        "setup_s": 0.681,
+        "crash_s": 0.605,
+        "boot_clean_s": 6.612,
+        "recover_s": 1.375,
+        "verify_s": 0.12,
+        "total_s": 21.102
+      },
+      "checks": [
+        {
+          "name": "crashed",
+          "ok": true,
+          "detail": "client saw dropped (EOFError), process exit status 86"
+        },
+        {
+          "name": "key_at_crash",
+          "ok": true,
+          "detail": "key row at \"authorization_requested\", expected \"authorization_requested\""
+        },
+        {
+          "name": "resting_state",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ledger_invariants",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "acquirer_equals_ledger",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "one_event_per_change",
+          "ok": true,
+          "detail": "events [\"payment_intent.created\", \"payment_intent.succeeded\"], control [\"payment_intent.created\", \"payment_intent.succeeded\"], duplicated []"
+        },
+        {
+          "name": "same_response_as_control",
+          "ok": true,
+          "detail": "recovered 200 {\"id\":\"pi_h6EIBT69wR0WnueYmwacwxuC\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_SKlMfbadse6eOOmvC1br0qVm vs control 200 {\"id\":\"pi_uM02nSSvZimpQuMYmagqvrIt\",\"object\":\"payment_intent\",\"amount\":2000,\"amount_capturable\":0,\"amount_received\":2000,\"currency\":\"usd\",\"status\":\"succeeded\",\"capture_method\":\"automatic\",\"payment_method\":\"pm_card_visa\",\"customer_email\":null,\"metadata\":{},\"latest_charge\":\"ch_ZTLUdeZXIPs9O45qU2JYOnrQ"
+        },
+        {
+          "name": "retry_replays_it",
+          "ok": true,
+          "detail": "second retry 200 succeeded, replayed=true"
+        },
+        {
+          "name": "same_outcome_as_control",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "nothing_left_locked",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "name": "ambiguous_answer_resolved_by_asking",
+          "ok": true,
+          "detail": "acquirer exchanges during recovery: [\"GET /operations/pi_h6EIBT69wR0WnueYmwacwxuC%3Aauthorize%3A1 -> 404\", \"POST /authorize [pi_h6EIBT69wR0WnueYmwacwxuC:authorize:1] -> dropped\", \"GET /operations/pi_h6EIBT69wR0WnueYmwacwxuC%3Aauthorize%3A1 -> 200\"]"
+        }
+      ],
+      "recovery": [
+        "retry 1: 503 acquirer_unavailable",
+        "retry 2: 200 succeeded"
+      ],
+      "acquirer_exchanges": {
+        "crashed_request": [],
+        "retry_1": [
+          "GET /operations/pi_h6EIBT69wR0WnueYmwacwxuC%3Aauthorize%3A1 -> 404",
+          "POST /authorize [pi_h6EIBT69wR0WnueYmwacwxuC:authorize:1] -> dropped"
+        ],
+        "retry_2": [
+          "GET /operations/pi_h6EIBT69wR0WnueYmwacwxuC%3Aauthorize%3A1 -> 200"
+        ]
+      }
+    }
+  ]
+}
