@@ -267,6 +267,28 @@ reaper pass, and prints one JSON line with what each did. `--once` does a single
 `--interval`, `--grace` and `--limit` tune it. It is configured like the server
 (`Dependencies.from_env`).
 
+## Fault injection
+
+The runner calls `Dependencies#crash_hook` at every recovery point, twice: just before the
+phase's transaction commits and right after. `CrashHook.from_env` arms it from
+`CLEARINGHOUSE_CRASH_AT=<flow>:<point>[:before_commit]`, for example
+`payment_intent.confirm:authorization_requested`, and it then calls `Process.exit!(86)` at
+that one point. `exit!` skips ensure blocks and at_exit handlers, which is as close to a
+power cut as a process can do to itself. A crash inside the transaction dies with the
+connection, and Postgres rolls the phase back.
+
+It can't fire in production. `from_env` returns the frozen `DISARMED` hook unless
+`CLEARINGHOUSE_ENV` is `test` or `experiment`, and `Armed` refuses to be built outside those,
+so a stray `CLEARINGHOUSE_CRASH_AT` does nothing. The environment is read once, when the
+dependencies are built at boot. Nothing can arm the hook in a running process.
+
+The names are exactly `Registry#crash_points`: every recovery point of every registered flow,
+at both moments. Today that's 23 points across 5 flows, 46 crash points. A harness that
+iterates over the registry covers a new flow or point without being told about it.
+`spec/idempotency/crash_hook_spec.rb` does this in process for a toy flow: it crashes at each
+point, resumes, and checks the result is identical to a clean run and every phase ran exactly
+once. Experiment 2 does it with real processes for the payments flows.
+
 ## What goes beyond rocket-rides
 
 - **The ambiguous call is resolved by asking, not by trusting the remote replay**, with
