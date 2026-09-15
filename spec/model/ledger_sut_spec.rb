@@ -41,6 +41,17 @@ RSpec.describe Clearinghouse::Testing::Model::LedgerSut, :db, :model do
                                      'dispute debited', 'dispute won', 'dispute funds returned')
   end
 
+  # docs/bugs/model-settlement-fee-over-gross.md: the sequence the harness shrank it to.
+  it 'settles a 1 fils payment, whose acquirer fee is larger than the payment' do
+    session = ModelTesting::Session.new(ledger_sut)
+    [merchant_cmd, intent_cmd('pi_5', 1, currency: 'kwd'),
+     cmd(:confirm, intent: 'pi_5', payment_method: 'pm_card_visa'),
+     cmd(:advance_clock, hours: 48), cmd(:settle)].each do |c|
+      expect(session.step(c).violation).to be_nil, c.to_ruby
+    end
+    expect(Clearinghouse::Ledger.balance(app_db, 'platform:cash', 'kwd').amount).to eq(-9)
+  end
+
   it 'reports the same balances Ledger.balance does' do
     sut = ledger_sut
     session = ModelTesting::Session.new(sut)

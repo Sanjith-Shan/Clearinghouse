@@ -65,4 +65,16 @@ RSpec.describe Clearinghouse::Ledger::Flows do
     expect(lines(described_class.hold_released(merchant_id: 'm1', amount: usd[9680])))
       .to eq([['Dr', 'merchant:m1:held', 9680], ['Cr', 'merchant:m1:available', 9680]])
   end
+
+  # docs/bugs/model-settlement-fee-over-gross.md
+  it 'settles a capture smaller than the acquirer fee by crediting cash for the difference' do
+    kwd = Clearinghouse::Money.of(1, 'kwd')
+    settlement = described_class.settlement(gross: kwd, acquirer_fee: Clearinghouse::Money.of(10, 'kwd'))
+    expect(lines(settlement)).to eq([['Cr', 'platform:cash', 9],
+                                     ['Dr', 'platform:processing_expense', 10],
+                                     ['Cr', 'platform:processor_receivable', 1]])
+    expect(settlement.sum(&:signed_amount)).to eq(0)
+    exact = described_class.settlement(gross: usd[10], acquirer_fee: usd[10])
+    expect(lines(exact)).to eq([['Dr', 'platform:processing_expense', 10], ['Cr', 'platform:processor_receivable', 10]])
+  end
 end
