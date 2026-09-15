@@ -1,0 +1,157 @@
+{
+  "label": "smoke",
+  "command": "bin/storm --impl all --intents 20 --concurrency 8 --drop-rate 0.2 --seed 1 --db clearinghouse_exp1 --label smoke --baseline-on-unknown hold",
+  "machine": "Apple M3 Pro, 12 cores, 18 GB, Postgres 16 in Docker",
+  "started_at": "2026-09-24T01:12:04Z",
+  "load_before": "18:12  up 1 day,  3:38, 9 users, load averages: 51.11 64.77 58.45",
+  "plan": {
+    "intents": 20,
+    "concurrency": 8,
+    "drop_rate": 0.2,
+    "seed": 1,
+    "parallel": 4,
+    "max_retries": 10,
+    "amount": 2000,
+    "acquirer_latency_ms": [
+      0,
+      0
+    ]
+  },
+  "server": {
+    "threads": 16,
+    "db_pool": 16,
+    "sim_threads": 32,
+    "baseline_on_unknown": "hold",
+    "database": "clearinghouse_exp1"
+  },
+  "results": [
+    {
+      "impl": "none",
+      "intents": 20,
+      "concurrency": 8,
+      "drop_rate": 0.2,
+      "double_charges": 0,
+      "extra_charges": 0,
+      "charged_not_recorded": 5,
+      "recorded_not_charged": 0,
+      "never_charged": 0,
+      "stuck_processing": 5,
+      "acquirer_captures_per_intent": {
+        "1": 20
+      },
+      "ledger_captures_per_intent": {
+        "0": 5,
+        "1": 15
+      },
+      "confirm_attempts_per_intent": {
+        "1": 20
+      },
+      "final_status": {
+        "processing": 5,
+        "succeeded": 15
+      },
+      "requests": 160,
+      "http_attempts": 165,
+      "attempts_per_request": {
+        "1": 155,
+        "2": 5
+      },
+      "answers_by_http_status": {
+        "200": 15,
+        "400": 145
+      },
+      "identical_body_intents": 5,
+      "identical_body_rate": 0.25,
+      "truthful_answers": 15,
+      "truthful_answer_rate": 0.0938,
+      "ledger_invariants": "hold",
+      "wall_seconds": 6.471
+    },
+    {
+      "impl": "naive",
+      "intents": 20,
+      "concurrency": 8,
+      "drop_rate": 0.2,
+      "double_charges": 0,
+      "extra_charges": 0,
+      "charged_not_recorded": 5,
+      "recorded_not_charged": 0,
+      "never_charged": 0,
+      "stuck_processing": 5,
+      "acquirer_captures_per_intent": {
+        "1": 20
+      },
+      "ledger_captures_per_intent": {
+        "0": 5,
+        "1": 15
+      },
+      "confirm_attempts_per_intent": {
+        "1": 20
+      },
+      "final_status": {
+        "processing": 5,
+        "succeeded": 15
+      },
+      "requests": 160,
+      "http_attempts": 165,
+      "attempts_per_request": {
+        "1": 155,
+        "2": 5
+      },
+      "answers_by_http_status": {
+        "200": 15,
+        "400": 145
+      },
+      "identical_body_intents": 5,
+      "identical_body_rate": 0.25,
+      "truthful_answers": 15,
+      "truthful_answer_rate": 0.0938,
+      "ledger_invariants": "hold",
+      "wall_seconds": 5.982
+    },
+    {
+      "impl": "clearinghouse",
+      "intents": 20,
+      "concurrency": 8,
+      "drop_rate": 0.2,
+      "double_charges": 0,
+      "extra_charges": 0,
+      "charged_not_recorded": 0,
+      "recorded_not_charged": 0,
+      "never_charged": 0,
+      "stuck_processing": 0,
+      "acquirer_captures_per_intent": {
+        "1": 20
+      },
+      "ledger_captures_per_intent": {
+        "1": 20
+      },
+      "confirm_attempts_per_intent": {
+        "1": 20
+      },
+      "final_status": {
+        "succeeded": 20
+      },
+      "requests": 160,
+      "http_attempts": 636,
+      "attempts_per_request": {
+        "1": 15,
+        "2": 5,
+        "3": 24,
+        "4": 57,
+        "5": 43,
+        "6": 16
+      },
+      "answers_by_http_status": {
+        "200": 160
+      },
+      "identical_body_intents": 20,
+      "identical_body_rate": 1.0,
+      "truthful_answers": 160,
+      "truthful_answer_rate": 1.0,
+      "ledger_invariants": "hold",
+      "wall_seconds": 29.408
+    }
+  ],
+  "load_after": "18:12  up 1 day,  3:39, 9 users, load averages: 49.61 62.15 57.83"
+}
