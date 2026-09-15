@@ -45,7 +45,7 @@ command = "bin/model-test --sut #{options[:sut]} " \
 run_name = [options[:sut], options[:plant], "seed#{options[:seed]}", "n#{options[:sequences]}",
             "l#{options[:max_length]}"].compact.join('-')
 
-def machine
+def machine(sut)
   cpu = `sysctl -n machdep.cpu.brand_string 2>/dev/null`.strip
   cpu = RbConfig::CONFIG['host_cpu'] if cpu.empty?
   postgres = begin
@@ -55,7 +55,8 @@ def machine
     "unavailable (#{e.class})"
   end
   { 'cpu' => cpu, 'os' => `uname -sr`.strip, 'ruby' => RUBY_VERSION, 'postgres' => postgres,
-    'database' => ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_test'), 'pool_size' => 2 }
+    'database' => ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_test'),
+    'pool_size' => { 'model' => 0, 'ledger' => 2, 'api' => 4 }.fetch(sut) }
 end
 
 started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -85,7 +86,7 @@ else
 end
 
 FileUtils.mkdir_p(options[:out])
-info = machine
+info = machine(options[:sut])
 summary = {
   'command' => command, 'machine' => info, 'elapsed_seconds' => elapsed.round(1),
   'sequences' => stats.sequences, 'operations' => stats.operations, 'passed' => failure.nil?,

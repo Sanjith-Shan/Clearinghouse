@@ -31,6 +31,11 @@ module Clearinghouse
           T.unsafe(LedgerSut).new(db: DB.connect(role: :app, max_connections: 2),
                                   owner_db: DB.connect(role: :owner, max_connections: 1),
                                   **(plant ? PlantedBugs.ledger_sut_args(plant) : {}))
+        when 'api'
+          sim = SimProcess.new
+          ApiSut.new(db: DB.connect(role: :app, max_connections: 4),
+                     owner_db: DB.connect(role: :owner, max_connections: 1),
+                     acquirer_url: sim.url, reset_acquirer: -> { sim.simulator.reset! })
         else raise UnknownSutError, "unknown system under test #{name.inspect}"
         end
       end
@@ -50,3 +55,4 @@ require_relative 'model/runner'
 require_relative 'model/script'
 require_relative 'model/ledger_sut'
 require_relative 'model/planted_bugs'
+require_relative 'model/api_sut'

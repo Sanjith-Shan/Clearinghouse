@@ -1,0 +1,48 @@
+{
+  "command": "bin/model-test --sut api --sequences 150 --max-length 60 --seed 1",
+  "machine": {
+    "cpu": "Apple M3 Pro",
+    "os": "Darwin 25.5.0",
+    "ruby": "3.3.12",
+    "postgres": "PostgreSQL 16.15",
+    "database": "clearinghouse_test_model",
+    "pool_size": 4
+  },
+  "elapsed_seconds": 668.5,
+  "sequences": 150,
+  "operations": 6714,
+  "passed": true,
+  "by_operation": {
+    "advance_clock": 1141,
+    "cancel": 352,
+    "capture": 406,
+    "confirm": 1571,
+    "create_intent": 1976,
+    "create_merchant": 306,
+    "refund": 962
+  },
+  "by_outcome": {
+    "advance_clock ok": 1141,
+    "cancel ok": 198,
+    "cancel payment_intent_unexpected_state": 154,
+    "capture amount_too_small": 6,
+    "capture ok": 216,
+    "capture parameter_invalid": 28,
+    "capture payment_intent_unexpected_state": 156,
+    "confirm card_declined": 260,
+    "confirm expired_card": 110,
+    "confirm ok": 839,
+    "confirm payment_intent_unexpected_state": 151,
+    "confirm resource_missing": 211,
+    "create_intent amount_too_small": 45,
+    "create_intent ok": 1931,
+    "create_merchant ok": 306,
+    "refund charge_already_refunded": 241,
+    "refund ok": 622,
+    "refund parameter_invalid": 99
+  },
+  "money_events": {
+    "capture": 744,
+    "refund": 622
+  }
+}

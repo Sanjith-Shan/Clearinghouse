@@ -33,7 +33,7 @@ RSpec.describe Clearinghouse::Testing::Model::Runner, :model do
 
   it 'reaches the illegal paths, not only the happy ones' do
     outcomes = runner(-> { ModelTesting::ReferenceModel.new }, sequences: 30).run.stats.by_outcome.keys
-    expect(outcomes).to include('confirm card_declined', 'capture amount_too_large', 'refund amount_too_large',
+    expect(outcomes).to include('confirm card_declined', 'capture parameter_invalid', 'refund parameter_invalid',
                                 'refund charge_already_refunded', 'payout balance_insufficient',
                                 'confirm payment_intent_unexpected_state', 'confirm resource_missing',
                                 'create_intent amount_too_small')

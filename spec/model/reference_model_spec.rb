@@ -71,10 +71,10 @@ RSpec.describe Clearinghouse::Testing::Model::ReferenceModel, :model do
 
   it 'does not return the fee on a refund, and refunds from available even into the negative' do
     pay('pi_1', 10_000)
-    expect(model.refund(refund: 're_1', intent: 'pi_1', amount: 4000)).to eq(success(amount: 4000))
+    expect(model.refund(refund: 're_1', intent: 'pi_1', amount: 4000)).to eq(success(amount: 4000, status: 'succeeded'))
     expect(bal('merchant:m1:available')).to eq(-4000)
     expect(bal('platform:fee_revenue')).to eq(320)
-    expect(model.refund(refund: 're_2', intent: 'pi_1').fields).to eq('amount' => 6000)
+    expect(model.refund(refund: 're_2', intent: 'pi_1').fields).to eq('amount' => 6000, 'status' => 'succeeded')
     expect(model.refund(refund: 're_3', intent: 'pi_1').code).to eq('charge_already_refunded')
   end
 
@@ -82,7 +82,7 @@ RSpec.describe Clearinghouse::Testing::Model::ReferenceModel, :model do
     pay('pi_1', 10_000, capture_method: 'manual')
     expect(model.refund(refund: 're_1', intent: 'pi_1').code).to eq('payment_intent_unexpected_state')
     model.capture(intent: 'pi_1', amount: 6000)
-    expect(model.refund(refund: 're_1', intent: 'pi_1', amount: 6001).code).to eq('amount_too_large')
+    expect(model.refund(refund: 're_1', intent: 'pi_1', amount: 6001).code).to eq('parameter_invalid')
     expect(model.intents.fetch('pi_1').refunded).to eq(0)
   end
 
@@ -157,12 +157,12 @@ RSpec.describe Clearinghouse::Testing::Model::ReferenceModel, :model do
     expect(bal('platform:cash')).to eq(9840 - 10_000)
   end
 
-  it 'captures partially, releasing the rest, and refuses captures past the authorization or below the minimum' do
+  it 'captures partially, releasing the rest, and refuses captures past the authorization or below the fee' do
     model.apply(intent_cmd('pi_1', 10_000, capture_method: 'manual'))
     expect(model.confirm(intent: 'pi_1', payment_method: 'pm_card_visa').fields)
       .to eq('status' => 'requires_capture', 'amount_received' => 0)
-    expect(model.capture(intent: 'pi_1', amount: 10_001).code).to eq('amount_too_large')
-    expect(model.capture(intent: 'pi_1', amount: 49).code).to eq('amount_too_small')
+    expect(model.capture(intent: 'pi_1', amount: 10_001).code).to eq('parameter_invalid')
+    expect(model.capture(intent: 'pi_1', amount: 30).code).to eq('amount_too_small')
     expect(model.capture(intent: 'pi_1', amount: 2500).fields).to eq('status' => 'succeeded', 'amount_received' => 2500)
     expect(model.capture(intent: 'pi_1').code).to eq('payment_intent_unexpected_state')
     expect(bal('platform:processor_receivable')).to eq(2500)
@@ -205,5 +205,30 @@ RSpec.describe Clearinghouse::Testing::Model::ReferenceModel, :model do
     expect(model.next_name(:intent)).to eq('pi_1')
     model.apply(intent_cmd('pi_1', 100))
     expect([model.next_name(:intent), model.next_name(:merchant)]).to eq(%w[pi_2 m2])
+  end
+
+  context 'with the policies payments shipped' do
+    it 'refuses an amount smaller than its fee, and accepts one that exactly covers it' do
+      expect(model.apply(intent_cmd('pi_1', 30)).code).to eq('amount_too_small')
+      expect(model.apply(intent_cmd('pi_1', 31))).to be_ok # fee 31: the merchant gets nothing
+      expect(model.apply(intent_cmd('pi_2', 1, currency: 'jpy'))).to be_ok # no fixed fee in JPY
+    end
+
+    it 'gives an expired card its own error code' do
+      model.apply(intent_cmd('pi_1', 1000))
+      expect(model.confirm(intent: 'pi_1', payment_method: 'pm_card_expired'))
+        .to eq(error('expired_card', decline_code: 'expired_card'))
+    end
+
+    it 'cancels an authorization that waited 7 days for capture, and moves no money' do
+      model.apply(intent_cmd('pi_1', 1000, capture_method: 'manual'))
+      model.confirm(intent: 'pi_1', payment_method: 'pm_card_visa')
+      model.advance_clock(hours: (7 * 24) - 1)
+      expect(model.intents.fetch('pi_1').status).to eq('requires_capture')
+      model.advance_clock(hours: 1)
+      expect(model.intents.fetch('pi_1').status).to eq('canceled')
+      expect(model.capture(intent: 'pi_1').code).to eq('payment_intent_unexpected_state')
+      expect(model.snapshot.balances).to eq({})
+    end
   end
 end

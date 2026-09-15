@@ -79,6 +79,18 @@ module Clearinghouse
         sig { abstract.returns(Outcome) }
         def availability_sweep; end
 
+        # Operations this system cannot run yet; the generator leaves them out.
+        sig { returns(T::Array[Symbol]) }
+        def unsupported_operations
+          []
+        end
+
+        # Test cards whose behaviour this system cannot reproduce yet.
+        sig { returns(T::Array[String]) }
+        def unsupported_payment_methods
+          []
+        end
+
         sig { params(command: Command).returns(Outcome) }
         def apply(command)
           Kernel.raise ArgumentError, "unknown operation #{command.op}" unless OPERATIONS.include?(command.op)

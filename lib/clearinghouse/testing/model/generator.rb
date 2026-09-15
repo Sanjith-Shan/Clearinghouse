@@ -40,16 +40,29 @@ module Clearinghouse
 
         HOURS = [1, 6, 12, 24, 24, 48, 72].freeze
 
-        sig { params(rng: Random).void }
-        def initialize(rng)
+        # How often confirm uses each card.
+        CONFIRM_CARDS = T.let({
+          'pm_card_visa' => 5, 'pm_card_mastercard' => 1, 'pm_card_disputeFraudulent' => 3, 'pm_card_timeout' => 1,
+          'pm_card_chargeDeclined' => 1, 'pm_card_insufficientFunds' => 1, 'pm_card_expired' => 1
+        }.freeze, T::Hash[String, Integer])
+
+        # `exclude_operations` and `exclude_cards` leave out what a system under test
+        # cannot run yet (Sut#unsupported_operations, Sut#unsupported_payment_methods).
+        sig do
+          params(rng: Random, exclude_operations: T::Array[Symbol], exclude_cards: T::Array[String]).void
+        end
+        def initialize(rng, exclude_operations: [], exclude_cards: [])
           @rng = rng
+          @exclude_operations = exclude_operations
+          @exclude_cards = exclude_cards
         end
 
         sig { params(model: ReferenceModel).returns(Command) }
         def next_command(model)
           return create_merchant(model) if model.merchants.empty?
 
-          T.cast(G.frequency(choices(model)).call(size: 10, rng: @rng), Command)
+          T.cast(G.frequency(choices(model)).where { |c| !@exclude_operations.include?(c.op) }
+                  .call(size: 10, rng: @rng), Command)
         end
 
         private
@@ -131,24 +144,23 @@ module Clearinghouse
             command(:create_intent, intent: const(name), merchant: pick(model.merchants.keys), amount: amount(cur),
                                     currency: const(cur), capture_method: G.frequency([[3, const('automatic')],
                                                                                        [2, const('manual')]]),
-                                    payment_method: G.frequency([[4, const(nil)], [1, pick(CARDS)]]))
+                                    payment_method: G.frequency([[4, const(nil)], [1, pick(CARDS - @exclude_cards)]]))
           end
         end
 
         # Mostly ordinary amounts, often round ones (where half-even rounding of a
-        # fee is decided), sometimes below the minimum charge.
+        # fee is decided), sometimes tiny ones, around and below the smallest amount
+        # that covers the fee (31 cents at the default rate).
         sig { params(currency: String).returns(PropCheck::Generator) }
         def amount(currency)
-          min = Policy::MIN_CHARGE.fetch(currency)
-          G.frequency([[5, G.choose(min..MAX_AMOUNT.fetch(currency))], [4, pick(ROUND_AMOUNTS.fetch(currency))],
-                       [1, G.choose(1..(min - 1))]])
+          G.frequency([[5, G.choose(50..MAX_AMOUNT.fetch(currency))], [4, pick(ROUND_AMOUNTS.fetch(currency))],
+                       [1, G.choose(1..60)]])
         end
 
         sig { params(names: T::Array[String]).returns(PropCheck::Generator) }
         def confirm(names)
-          card = G.frequency([[5, const('pm_card_visa')], [1, const('pm_card_mastercard')],
-                              [3, const('pm_card_disputeFraudulent')], [1, const('pm_card_timeout')],
-                              [2, pick(Policy::DECLINING_CARDS.keys)]])
+          weighted = T.unsafe(CONFIRM_CARDS).except(*@exclude_cards)
+          card = G.frequency(weighted.map { |name, weight| [weight, const(name)] })
           command(:confirm, intent: pick(names), payment_method: card)
         end
 
@@ -156,9 +168,7 @@ module Clearinghouse
         def capture(intents)
           pick(intents).bind do |pi|
             full = pi.capturable
-            min = Policy::MIN_CHARGE.fetch(pi.currency)
-            amounts = [[4, const(nil)], [1, const(full + 1)]]
-            amounts << [3, G.choose(min..full)] if full >= min
+            amounts = [[4, const(nil)], [1, const(full + 1)], [3, G.choose(1..full)]]
             command(:capture, intent: const(pi.name), amount: G.frequency(amounts))
           end
         end
