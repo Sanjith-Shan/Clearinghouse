@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative '../../clearinghouse'
+require_relative '../db'
 
 module Clearinghouse
   module Testing
@@ -19,15 +20,17 @@ module Clearinghouse
 
       # Systems under test by name, for bin/model-test and reproduction scripts.
       # `plant` names a deliberately planted bug (PlantedBugs), for demonstrations.
+      # The database ones connect to CLEARINGHOUSE_DB.
       sig { params(name: String, plant: T.nilable(String)).returns(Sut) }
       def self.build_sut(name, plant: nil)
-        if plant && name == 'model'
-          raise UnknownSutError,
-                "the model has no planted bugs; plant #{plant} needs --sut ledger"
-        end
+        raise UnknownSutError, "planted bugs need --sut ledger, not #{name}" if plant && name != 'ledger'
 
         case name
         when 'model' then ReferenceModel.new
+        when 'ledger'
+          T.unsafe(LedgerSut).new(db: DB.connect(role: :app, max_connections: 2),
+                                  owner_db: DB.connect(role: :owner, max_connections: 1),
+                                  **(plant ? PlantedBugs.ledger_sut_args(plant) : {}))
         else raise UnknownSutError, "unknown system under test #{name.inspect}"
         end
       end
@@ -45,3 +48,5 @@ require_relative 'model/session'
 require_relative 'model/shrinker'
 require_relative 'model/runner'
 require_relative 'model/script'
+require_relative 'model/ledger_sut'
+require_relative 'model/planted_bugs'

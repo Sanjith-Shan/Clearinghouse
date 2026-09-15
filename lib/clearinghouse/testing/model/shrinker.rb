@@ -12,7 +12,10 @@ module Clearinghouse
       #    commands. Dropping a command that created an object leaves later commands
       #    naming something that does not exist; those just fail with
       #    resource_missing on both sides, so every candidate is still runnable.
-      # 3. Shrink the numbers that are left (amounts, hours) toward small, round
+      # 3. Replace what is left with the plainest values that still fail: a visa
+      #    card, automatic capture, USD. A failure that survives that did not need
+      #    the disputing card.
+      # 4. Shrink the numbers that are left (amounts, hours) toward small, round
       #    values, one at a time.
       #
       # A candidate counts only if it fails the *same* check (and, for an exception,
@@ -21,6 +24,8 @@ module Clearinghouse
         extend T::Sig
 
         NUMERIC = %i[amount hours].freeze
+        PLAIN = T.let({ payment_method: 'pm_card_visa', capture_method: 'automatic', currency: 'usd' }.freeze,
+                      T::Hash[Symbol, String])
 
         sig { returns(Integer) }
         attr_reader :attempts
@@ -43,6 +48,7 @@ module Clearinghouse
           loop do
             before = current
             current = ddmin(current)
+            current = simplify(current)
             current = shrink_numbers(current)
             break if current == before || exhausted?
           end
@@ -96,6 +102,21 @@ module Clearinghouse
               break if parts >= commands.length
 
               parts = [parts * 2, commands.length].min
+            end
+          end
+          commands
+        end
+
+        sig { params(commands: T::Array[Command]).returns(T::Array[Command]) }
+        def simplify(commands)
+          commands.each_index do |i|
+            PLAIN.each do |key, plain|
+              command = T.must(commands[i])
+              next unless command.args.key?(key) && command.args[key] != plain
+
+              trial = commands.dup
+              trial[i] = command.with_args(command.args.merge(key => plain))
+              commands = trial if fails?(trial)
             end
           end
           commands
