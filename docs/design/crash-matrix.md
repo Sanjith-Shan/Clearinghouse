@@ -204,13 +204,20 @@ list for every stage of every case, which also shows, for example, that a resume
 
 ## Results
 
-`results/exp2-crash-matrix/20260924T010111Z-retry/`: **crashed at 48 points across 5 flows,
-recovered at all 48**, plus the ambiguous variant. All 24 before_commit cases passed the rollback
-comparison. The run took 820 s with a 1/5/15-minute load average of about 44 before and 45 to
-57 after, on a machine shared with other jobs. Cases took 9 to 25 s each (median 17 s), mostly
-the two API boots. The report lists each case's checks, stage timings and acquirer exchanges.
-That run predates the `api_process` field, so its report doesn't list pool size. It used Puma
-threads 1:4 and the default database pool of 10, which is what the harness now sets explicitly.
+Both recovery modes, on a machine shared with other jobs (load average 38 to 57 on 12 cores):
+
+| Run | Mode | Commit | Headline | Wall time | Per case (min / median / max) |
+|---|---|---|---|---|---|
+| `20260924T010111Z-retry` | retry | bc17356 base, harness uncommitted | **crashed at 48 points across 5 flows, recovered at all 48** | 820 s | 8.9 / 17.2 / 24.5 s |
+| `20260924T014550Z-completer` | completer | 96880c6 | **crashed at 48 points across 5 flows, recovered at all 48** | 743 s | 5.2 / 14.4 / 27.6 s |
+
+The ambiguous variant passed in both runs, and so did all 24 before_commit rollback comparisons
+in each. In completer mode, 10 cases needed no completer pass: the five `started:before_commit`
+cases (no key row survived, so the client's retry ran afresh) and the five `finished` cases (the
+response was already stored). 38 cases needed one pass, and the variant needed two. Most of the
+time per case goes into the two API boots. The retry-mode report predates the `git` and
+`api_process` fields. That run used Puma threads 1:4 and the default database pool of 10,
+which the harness now sets explicitly.
 
 ## Cost and running it
 
