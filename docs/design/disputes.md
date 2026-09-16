@@ -10,9 +10,9 @@ Everything the acquirer tells us after the fact (a dispute opened or closed, a p
 or failed) arrives on one feed, `GET /notifications?after=<cursor>`, visible once the
 request's `Sim-Time` reaches the notification's due time (`docs/design/sim.md`).
 `Acquirer::NotificationPoller` reads it and hands each notification to the handler
-registered for its type. Disputes register `dispute.opened` and `dispute.closed`; payouts
-register `payout.paid` and `payout.failed` (`Settlement.notification_handlers` is where
-`bin/poller` collects them).
+registered for its type: `dispute.opened` and `dispute.closed` to disputes, `payout.paid` and
+`payout.failed` to `Payouts.handle_notification`. `Settlement.notification_handlers` is where
+`bin/poller` collects them.
 
 ### Exactly once, from two at-least-once parts
 
@@ -152,7 +152,6 @@ dispute row, one posting per step, one event per state change, and the ledger in
   (`charge.dispute.created`, `charge.dispute.closed`) were already in `Events::TYPES`. The
   merchant's accept carries the API request id on its event; the notification handlers run
   outside a request and carry none.
-- The specs make payments with the real payments operations (`Payments::Operations.create`
-  and `confirm`, a background context, the simulator on a real port), so the dispute sees the
-  same intent row and capture posting production would.
+- The specs make payments and refunds through the API (in process, against the simulator on
+  a real port), so a dispute sees the same intent row and capture posting production would.
 - `disputes.payment_intent` is a foreign key to `payment_intents`.

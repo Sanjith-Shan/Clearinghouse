@@ -51,40 +51,45 @@ end
 module DisputeHelpers
   def self.included(base)
     base.let(:service) { Clearinghouse::Disputes::Service.new(clock: clock) }
-    base.let(:merchant) do
-      Clearinghouse::Merchants.create(app_db, clock: clock, name: 'Rocket Rides', api_version: '2026-09-01').first
+    base.let(:merchant_and_key) do
+      Clearinghouse::Merchants.create(app_db, clock: clock, name: 'Rocket Rides', api_version: '2026-09-01')
     end
+    base.let(:merchant) { merchant_and_key.first }
+    base.let(:merchant_key) { merchant_and_key.last }
   end
 
   def available(currency = 'usd')
     balance_of("merchant:#{merchant.id}:available", currency)
   end
 
-  def payments_context(at_clock = clock)
+  # The API, in process (no socket), wired to the simulator with `at_clock`, and a
+  # request as the merchant. Payments and refunds in these specs go through it, so
+  # they run the same idempotent flows and postings as production.
+  def api_request(method, path, params = {}, at_clock: clock)
     acquirer = at_clock.equal?(clock) ? client : Clearinghouse::Acquirer::Client.new(clock: at_clock, base_url: sim.url)
     deps = Clearinghouse::Api::Dependencies.new(db: app_db, clock: at_clock, acquirer: acquirer)
-    Clearinghouse::Api::Context.background(deps, merchant)
+    response = Rack::MockRequest.new(Clearinghouse::Api.rack_app(deps)).request(
+      method.to_s.upcase, path,
+      input: Rack::Utils.build_nested_query(params), 'CONTENT_TYPE' => 'application/x-www-form-urlencoded',
+      'HTTP_AUTHORIZATION' => "Bearer #{merchant_key}", 'HTTP_IDEMPOTENCY_KEY' => SecureRandom.uuid
+    )
+    body = JSON.parse(response.body)
+    raise "#{method} #{path} failed: #{response.status} #{response.body}" unless response.status == 200
+
+    body
   end
 
-  # Creates and confirms an automatic-capture PaymentIntent, then makes its net
-  # available, the posting the payouts work's availability job will make after the
-  # settlement delay. Returns [payment_intent id, acquirer reference]. `at_clock`
-  # makes the payment with another clock (a lagging one, say).
+  # Creates and confirms an automatic-capture PaymentIntent through the API, then
+  # releases its net to available with the payouts work's availability job, as if
+  # the payout delay had passed. Returns [payment_intent id, acquirer reference].
+  # `at_clock` makes the payment with another clock (a lagging one, say).
   def captured_payment(amount: 10_000, currency: 'usd', payment_method: 'pm_card_disputeFraudulent', at_clock: clock)
-    payments = Clearinghouse::Payments
-    ctx = payments_context(at_clock)
-    intent = payments::Operations.create(ctx, payments::Create::Input.new(
-                                                amount: amount, currency: currency, payment_method: payment_method,
-                                                capture_method: 'automatic', customer_email: nil, metadata: {},
-                                                risk_fields: {}
-                                              ))
-    done = payments::Operations.confirm(ctx, payments::Confirm::Input.new(intent_id: intent.id, payment_method: nil))
-    net = merchant.fee_schedule.split(Clearinghouse::Money.of(amount, currency)).first
-    Clearinghouse::Ledger.post!(app_db, flow_type: 'payment', flow_id: done.id, description: 'funds available',
-                                        effective_at: at_clock.now,
-                                        entries: Clearinghouse::Ledger::Flows.funds_available(merchant_id: merchant.id,
-                                                                                              net: net))
-    [done.id, T.must(done.acquirer_reference)]
+    intent = api_request(:post, '/v1/payment_intents', { amount: amount, currency: currency,
+                                                         payment_method: payment_method }, at_clock: at_clock)
+    api_request(:post, "/v1/payment_intents/#{intent.fetch('id')}/confirm", {}, at_clock: at_clock)
+    later = Clearinghouse::Clock::Test.new(start: at_clock.now + (30 * SettlementHelpers::DAY))
+    Clearinghouse::Balances::Availability.release_due!(app_db, clock: later)
+    [intent.fetch('id'), app_db[:payment_intents].where(id: intent.fetch('id')).get(:acquirer_reference)]
   end
 
   def poller(hook: nil, handlers: service.register(Clearinghouse::Acquirer::NotificationPoller::Handlers.new))

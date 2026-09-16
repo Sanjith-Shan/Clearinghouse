@@ -44,10 +44,7 @@ RSpec.describe Clearinghouse::Disputes::Service, :db do
 
     it 'disputes the full captured amount even after a partial refund, as the network does' do
       pi, = captured_payment
-      Clearinghouse::Payments::Operations.refund(payments_context, Clearinghouse::Payments::Refunds::Input.new(
-                                                                     payment_intent_id: pi, amount: 4_000,
-                                                                     reason: nil, metadata: {}
-                                                                   ))
+      api_request(:post, '/v1/refunds', { payment_intent: pi, amount: 4_000 })
       clock.advance(7 * day)
       poller.poll
       expect(the_dispute.amount).to eq(usd(10_000))
