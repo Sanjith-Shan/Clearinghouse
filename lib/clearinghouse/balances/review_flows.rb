@@ -68,6 +68,11 @@ module Clearinghouse
                            hold = close!(run, db, :reject, refunds: PaymentsRefundRequester.new(ctx(run)))
                            run.state['refund_id'] = T.must(hold.refund_id)
                            nil
+                         },
+                         # The refund reserves on the intent, like any refund of it.
+                         queue_on: lambda { |run|
+                           hold = Holds.find(ctx(run).db, id: review_id(run), merchant_id: ctx(run).merchant!.id)
+                           Payments::Flows.intent_queue(hold&.flow_id || review_id(run))
                          }),
             *refund_phases,
             I::Phase.new(from: 'refund_recorded', to: I::FINISHED, atomic: ->(run, db, _) { render_review(run, db) })

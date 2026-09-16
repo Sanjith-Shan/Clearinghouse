@@ -77,18 +77,72 @@ RSpec.describe Clearinghouse::Api::Routes::Refunds, :db do
       expect(json_body_of(refund(payment_intent: id, amount: 1600))['error']).to include('param' => 'amount')
     end
 
+    # `count` refunds of `amount` at once, released together. Each client does
+    # what the SDK does with a 409 that says Clearinghouse-Should-Retry: true: it
+    # retries, under the same Idempotency-Key. Returns every status each client
+    # saw, in order.
+    def refund_concurrently(id, count, amount)
+      gate = Queue.new
+      threads = Array.new(count) do |i|
+        Thread.new do
+          gate.pop
+          seen = []
+          5.times do
+            response = Rack::MockRequest.new(app).post(
+              '/v1/refunds', input: "payment_intent=#{id}&amount=#{amount}",
+                             'CONTENT_TYPE' => 'application/x-www-form-urlencoded',
+                             'HTTP_AUTHORIZATION' => "Bearer #{secret_key}", 'HTTP_IDEMPOTENCY_KEY' => "c#{i}"
+            )
+            seen << response.status
+            break unless response.status == 409 && response.headers['clearinghouse-should-retry'] == 'true'
+          end
+          seen
+        end
+      end
+      count.times { gate << :go }
+      threads.map(&:value)
+    end
+
     it 'never refunds more than was captured under concurrent refunds' do
       id = paid_intent
-      statuses = Array.new(10) do
-        Thread.new do
-          Rack::MockRequest.new(app).post('/v1/refunds', input: "payment_intent=#{id}&amount=300",
-                                                         'CONTENT_TYPE' => 'application/x-www-form-urlencoded',
-                                                         'HTTP_AUTHORIZATION' => "Bearer #{secret_key}").status
-        end
-      end.map(&:value)
-      expect(statuses.tally).to eq(200 => 6, 400 => 4)
+      seen = refund_concurrently(id, 10, 300)
+      expect(seen.map(&:last).tally).to eq(200 => 6, 400 => 4)
+      expect(seen.flatten.uniq - [200, 400, 409]).to eq([])
       expect(intent_row(id)[:amount_refunded]).to eq(1800)
       expect(acquirer_charges(id).first.refunded).to eq(1800)
+    end
+
+    # Every one of these refunds writes the same intent row in two phases. Under
+    # SERIALIZABLE alone the last in line could lose to each of the others until
+    # it ran out of retries, a 500 (docs/bugs/payments-concurrent-refunds-exhausted.md).
+    # The phases now take turns on the intent, and running out of retries
+    # anywhere is a retryable 409, so every client ends with its refund.
+    it 'answers 16 concurrent refunds of one payment with 16 refunds and never a 500' do
+      id = paid_intent(amount: 1600)
+      seen = refund_concurrently(id, 16, 100)
+      expect(seen.map(&:last)).to eq([200] * 16)
+      expect(seen.flatten.uniq - [200, 409]).to eq([])
+      expect(intent_row(id)[:amount_refunded]).to eq(1600)
+      expect(acquirer_charges(id).first.refunded).to eq(1600)
+      expect(ApiSpecHelpers.db[:refunds].where(payment_intent_id: id, status: 'succeeded').count).to eq(16)
+    end
+
+    it 'answers contention that outlasts the retry budget with a retryable 409, never a 500' do
+      id = paid_intent
+      calls = 0
+      serializable = Clearinghouse::Idempotency::Serializable
+      allow(serializable).to receive(:transaction).and_wrap_original do |original, *a, **k, &b|
+        # The key's insert commits; the refund's first phase then keeps losing.
+        calls += 1
+        raise Clearinghouse::Idempotency::Serializable::ExhaustedError.new(8, 'could not serialize') if calls > 1
+
+        original.call(*a, **k, &b)
+      end
+      response = refund(payment_intent: id, amount: 500)
+      expect(response.status).to eq(409)
+      expect(json_body_of(response)['error']).to include('type' => 'invalid_request_error', 'code' => 'lock_timeout')
+      expect(response.headers['clearinghouse-should-retry']).to eq('true')
+      expect(ApiSpecHelpers.db[:refunds].count).to eq(0)
     end
 
     Clearinghouse::Payments::StateMachine::Status.each_value do |state|

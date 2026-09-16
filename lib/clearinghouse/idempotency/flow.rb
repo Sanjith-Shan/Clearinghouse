@@ -111,11 +111,17 @@ module Clearinghouse
     # it must only touch the database. `foreign` runs once per attempt at the
     # phase, and again if the request is resumed at `from`, so the call it makes
     # must be idempotent on the other side, or asked about first (Run#resumed).
+    #
+    # `queue_on`, if present, names the hot object the atomic step writes (a
+    # PaymentIntent that concurrent refunds all update). Phases with the same name
+    # take turns before their transactions begin (Turnstile), so they queue
+    # instead of aborting each other with serialization failures.
     class Phase < T::Struct
       const :from, String
       const :to, String
       const :foreign, T.nilable(T.proc.params(run: Run).returns(T.untyped)), default: nil
       const :atomic, T.proc.params(run: Run, db: Sequel::Database, foreign: T.untyped).returns(T.nilable(Response))
+      const :queue_on, T.nilable(T.proc.params(run: Run).returns(String)), default: nil
     end
 
     # An operation as a chain of phases from `started` to `finished`. Subclasses

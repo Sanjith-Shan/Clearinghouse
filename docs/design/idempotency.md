@@ -99,6 +99,26 @@ isolation level and a retry would redo only half the work. A spec produces real 
 between two threads and checks that SERIALIZABLE plus the retry keeps the limit. Experiment 3
 (M4) measures what SERIALIZABLE costs.
 
+**Running out of retries is a 409, not a 500.** When the conflict outlasts all 8 attempts,
+`Serializable::ExhaustedError` reaches `App#run_flow`, which answers `409 lock_timeout` with
+`Clearinghouse-Should-Retry: true`. Nothing of the losing phase committed and the lease was
+given back, so the retry resumes where the request stopped. Before this, the error fell
+through to the generic handler as a 500 (`docs/bugs/payments-concurrent-refunds-exhausted.md`).
+
+**Hot rows take turns before the snapshot.** A `FOR UPDATE` inside a SERIALIZABLE
+transaction queues writers on a row, but the waiter still aborts when it gets the lock,
+because its snapshot predates the winner's commit (`isolation.md`). Sixteen refunds of one
+payment all write the intent's `amount_refunded`, twice each, so the last in line could lose
+more than 8 times in a row. A phase can name the object it writes (`Phase#queue_on`), and
+the runner then takes a session-level advisory lock on that name, on the phase's own
+connection, *before* `BEGIN` (`Idempotency::Turnstile`). Each such phase starts after the
+previous one committed and does not conflict with it at all. The refund phases that reserve
+and record queue on `payment_intent:<id>`. The lock covers only the atomic step, which
+touches nothing but the database, and it dies with the connection if the process does.
+The retries that remain in that workload are SSI's page-level conflicts between concurrent
+inserts of different idempotency keys (the key's own first transaction). They are cheap and
+spread out, and the 409 covers the rare request that exhausts them.
+
 ## Confirm, point by point
 
 ```
@@ -153,6 +173,7 @@ Capture, cancel and refund follow the same rules with fewer points:
 | `payment_intent.capture` | started, intent_locked, capture_requested, capture_recorded, finished |
 | `payment_intent.cancel` | started, intent_locked, void_requested, canceled, finished |
 | `refund.create` | started, refund_created, refund_requested, refund_recorded, finished |
+| `review.reject` | started, refund_created, refund_requested, refund_recorded, finished (the refund's phases, after closing the review) |
 
 Every acquirer call happens in a phase that starts at a point named `*_requested`, and that
 point is committed before the call (a registry spec checks it). The only other foreign call
@@ -283,7 +304,7 @@ so a stray `CLEARINGHOUSE_CRASH_AT` does nothing. The environment is read once, 
 dependencies are built at boot. Nothing can arm the hook in a running process.
 
 The names are exactly `Registry#crash_points`: every recovery point of every registered flow,
-at both moments. Today that's 23 points across 5 flows, 46 crash points. A harness that
+at both moments. Today that's 28 points across 6 flows, 56 crash points. A harness that
 iterates over the registry covers a new flow or point without being told about it.
 `spec/idempotency/crash_hook_spec.rb` does this in process for a toy flow: it crashes at each
 point, resumes, and checks the result is identical to a clean run and every phase ran exactly
