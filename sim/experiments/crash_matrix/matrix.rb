@@ -14,16 +14,18 @@ module Experiments
 
     # Every case to run, in registry order: one per Registry#crash_points entry,
     # then the variants. Enumerated from the registry and nothing else, so a new
-    # flow or a new phase is in the matrix the moment it is registered. `only`
+    # flow or a new phase is in the matrix the moment it is registered, with no
+    # change here. A flow nobody has written a scenario for is still planned:
+    # its cases fail with MissingScenarioError when run, so they count against
+    # the headline instead of disappearing from it. `only`
     # narrows it for development (substring match on the case name); a narrowed
     # run is reported as partial and makes no headline claim.
     sig do
       params(registry: Clearinghouse::Idempotency::Registry, only: T.nilable(T::Array[String]),
-             variants: T::Boolean, scenarios: T::Hash[String, Scenario]).returns(T::Array[Case])
+             variants: T::Boolean).returns(T::Array[Case])
     end
-    def self.plan(registry, only: nil, variants: true, scenarios: SCENARIOS)
+    def self.plan(registry, only: nil, variants: true)
       points = registry.flows.to_h { |f| [f.name, f.recovery_points] }
-      points.each_key { |flow| scenario_for(flow, scenarios) }
       cases = registry.crash_points.map { |cp| case_for(points, cp.flow, cp.point, cp.moment) }
       if variants
         cases += VARIANTS.map do |v|
@@ -35,6 +37,15 @@ module Experiments
         end
       end
       only ? cases.select { |c| only.any? { |o| c.name.include?(o) } } : cases
+    end
+
+    # Registered flows the harness cannot set up yet.
+    sig do
+      params(registry: Clearinghouse::Idempotency::Registry, scenarios: T::Hash[String, Scenario])
+        .returns(T::Array[String])
+    end
+    def self.flows_without_scenario(registry, scenarios = SCENARIOS)
+      registry.flows.map(&:name).reject { |name| scenarios.key?(name) }
     end
 
     sig do

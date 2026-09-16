@@ -68,13 +68,15 @@ module Experiments
     sig { params(report: T::Hash[String, T.untyped]).returns(T::Array[String]) }
     def self.header_lines(report)
       load = report.fetch('load_average')
+      missing = Array(report['flows_without_scenario'])
       ["- Command: `#{report['command']}`",
        "- Machine: #{report['machine']} (server #{report['postgres']})",
        "- Load average (1/5/15 min): before #{load['before'].join(' / ')}, after #{load['after'].join(' / ')}",
        "- Started #{report['started_at']}, took #{report['duration_s']} s; lease (lock timeout) " \
        "#{report['lock_timeout_s']} s",
        "- Registry: #{report['registry_crash_points']} crash points in #{report['registry_flows'].length} flows " \
-       "(#{report['registry_flows'].join(', ')})"]
+       "(#{report['registry_flows'].join(', ')})",
+       "- Flows with no scenario yet (their cases fail): #{missing.empty? ? 'none' : missing.join(', ')}"]
     end
 
     sig { params(report: T::Hash[String, T.untyped]).returns(T::Array[String]) }

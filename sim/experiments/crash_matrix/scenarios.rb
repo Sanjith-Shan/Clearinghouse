@@ -5,9 +5,9 @@ module Experiments
   # Experiment 2 (sim/experiments/crash_matrix.rb): the request per flow.
   module CrashMatrix
     # The request a case crashes, with the preconditions its flow needs. There is
-    # one scenario per flow in the registry, looked up by the flow's name; a flow
-    # registered without one stops the matrix (MissingScenarioError) instead of
-    # being skipped, which is how a new flow cannot go untested.
+    # one scenario per flow in the registry, looked up by the flow's name. A flow
+    # registered without one is still in the matrix: each of its cases fails with
+    # MissingScenarioError, so a new flow can be untested only loudly.
     #
     # A scenario's setup only ever uses *other* flows (confirm is set up with a
     # create, capture with a create and a confirm), so it can run on the armed

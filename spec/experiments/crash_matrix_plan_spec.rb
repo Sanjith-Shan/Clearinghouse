@@ -1,6 +1,7 @@
 # typed: false
 # frozen_string_literal: true
 
+require 'tmpdir'
 require_relative '../../sim/experiments/crash_matrix'
 
 # The matrix is the registry: every crash point, nothing hand-listed, and a flow
@@ -35,21 +36,32 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
     expect(registry.flows.map(&:name)).to all(satisfy { |name| cm.scenario_for(name).flow == name })
   end
 
-  it 'refuses to run a registry holding a flow with no scenario' do
+  it 'plans a flow with no scenario like any other, and its cases fail instead of vanishing' do
     extended = Clearinghouse::Idempotency::Registry.new([*registry.flows, flow_named('payout.create', 'paid')])
-    expect { cm.plan(extended) }.to raise_error(cm::MissingScenarioError, /payout\.create/)
+    plan = cm.plan(extended, variants: false)
+    expect(plan.map(&:crash_name)).to eq(extended.crash_points.map(&:to_s))
+    expect(plan.last(6).map(&:crash_name)).to all(start_with('payout.create:'))
+    expect(cm.flows_without_scenario(extended)).to eq(['payout.create'])
+
+    proxy = cm::RecordingProxy.new(upstream_port: 1)
+    runner = cm::CaseRunner.new(settings: cm::Settings.new(db_name: 'unused', log_dir: Dir.tmpdir),
+                                sim_url: 'http://127.0.0.1:1', proxy: proxy, riskgate_url: 'http://127.0.0.1:1',
+                                db: Sequel.mock, owner_db: Sequel.mock)
+    result = runner.run(plan.last, 1)
+    proxy.stop
+    expect([result.passed?, result.error]).to match([false, /MissingScenarioError: flow payout\.create/])
+    expect(cm.headline([result], full: true)).to eq('crashed at 1 point across 1 flow, recovered at 0 of 1')
   end
 
   it 'picks up a new recovery point with no change to the harness' do
-    scenario = cm::CreateScenario.new
     toy = Clearinghouse::Idempotency::Registry.new([flow_named('toy.flow', 'a', 'b')])
-    plan = cm.plan(toy, variants: false, scenarios: { 'toy.flow' => scenario })
+    plan = cm.plan(toy, variants: false)
     expect(plan.map(&:crash_name)).to eq(%w[started a b finished].flat_map do |p|
       ["toy.flow:#{p}", "toy.flow:#{p}:before_commit"]
     end)
 
     grown = Clearinghouse::Idempotency::Registry.new([flow_named('toy.flow', 'a', 'a2', 'b')])
-    names = cm.plan(grown, variants: false, scenarios: { 'toy.flow' => scenario }).map(&:crash_name)
+    names = cm.plan(grown, variants: false).map(&:crash_name)
     expect(names).to include('toy.flow:a2', 'toy.flow:a2:before_commit')
   end
 

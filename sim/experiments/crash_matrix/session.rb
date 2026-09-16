@@ -94,6 +94,7 @@ module Experiments
           'started_at' => started_at.iso8601, 'duration_s' => (CrashMatrix.monotonic - started).round(1),
           'load_average' => { 'before' => load_before, 'after' => CrashMatrix.load_average },
           'full_matrix' => @full, 'registry_flows' => registry.flows.map(&:name),
+          'flows_without_scenario' => CrashMatrix.flows_without_scenario(registry),
           'registry_crash_points' => registry.crash_points.length }
       end
     end
