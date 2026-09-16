@@ -26,32 +26,30 @@
     "note": "Postgres in Docker (docker compose, container clearinghouse-db-1)",
     "db_pool": 8
   },
-  "wall_seconds": 48.6,
-  "stand_ins": [
-    "funds availability and payouts: the experiment posts funds_available after the payout delay and sends payouts through the acquirer itself, until the payouts work lands"
-  ],
+  "wall_seconds": 111.9,
   "workload": {
-    "captured": 122,
+    "payouts_skipped": 35,
+    "captured": 119,
+    "payouts_sent": 28,
     "lagging_captures": 3,
     "refunds": 19,
     "declined": 1,
     "disputes_lost_at_acquirer": 4,
     "disputes_won_at_acquirer": 3,
-    "payouts_sent": 36,
-    "payouts_paid": 35,
-    "payouts_failed": 1,
-    "payments_planned": 120,
-    "payment_intents_succeeded": 122,
-    "disputes_opened": 7,
-    "disputes_won": 3,
+    "payouts_paid": 28,
     "disputes_lost": 4,
-    "disputes_accepted_by_merchant": 2,
-    "settlement_files": 24,
-    "settlement_lines": 150,
+    "disputes_won": 3,
+    "disputes_closed_by_merchant": 2,
+    "disputes_closed_by_acquirer": 5,
     "lines_mismatch": 7,
     "lines_cleared": 140,
     "lines_late": 2,
-    "lines_unknown": 1
+    "lines_unknown": 1,
+    "payments_planned": 120,
+    "payment_intents_succeeded": 122,
+    "disputes_opened": 7,
+    "settlement_files": 24,
+    "settlement_lines": 150
   },
   "score": {
     "injected": {
@@ -90,10 +88,10 @@
       "flow_type": "dispute",
       "currency": "jpy",
       "flows": 5,
-      "explained_flows": 4,
+      "explained_flows": 5,
       "volume": 153470,
-      "explained_volume": 108764,
-      "share": 0.708699
+      "explained_volume": 153470,
+      "share": 1.0
     },
     {
       "flow_type": "dispute",
@@ -108,54 +106,54 @@
       "flow_type": "payment",
       "currency": "jpy",
       "flows": 49,
-      "explained_flows": 47,
+      "explained_flows": 46,
       "volume": 1253712,
-      "explained_volume": 1195824,
-      "share": 0.953827
+      "explained_volume": 1154176,
+      "share": 0.920607
     },
     {
       "flow_type": "payment",
       "currency": "kwd",
       "flows": 34,
-      "explained_flows": 30,
+      "explained_flows": 31,
       "volume": 948327,
-      "explained_volume": 835865,
-      "share": 0.88141
+      "explained_volume": 877278,
+      "share": 0.92508
     },
     {
       "flow_type": "payment",
       "currency": "usd",
       "flows": 39,
-      "explained_flows": 38,
+      "explained_flows": 37,
       "volume": 832713,
-      "explained_volume": 820696,
-      "share": 0.985569
+      "explained_volume": 802549,
+      "share": 0.963776
     },
     {
       "flow_type": "payout",
       "currency": "jpy",
-      "flows": 14,
-      "explained_flows": 14,
-      "volume": 921425,
-      "explained_volume": 921425,
+      "flows": 10,
+      "explained_flows": 10,
+      "volume": 980299,
+      "explained_volume": 980299,
       "share": 1.0
     },
     {
       "flow_type": "payout",
       "currency": "kwd",
-      "flows": 14,
-      "explained_flows": 14,
-      "volume": 760386,
-      "explained_volume": 760386,
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 778951,
+      "explained_volume": 778951,
       "share": 1.0
     },
     {
       "flow_type": "payout",
       "currency": "usd",
-      "flows": 8,
-      "explained_flows": 8,
-      "volume": 720355,
-      "explained_volume": 720355,
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 671256,
+      "explained_volume": 671256,
       "share": 1.0
     },
     {
@@ -173,8 +171,8 @@
       "flows": 5,
       "explained_flows": 4,
       "volume": 160439,
-      "explained_volume": 143744,
-      "share": 0.895942
+      "explained_volume": 146955,
+      "share": 0.915956
     },
     {
       "flow_type": "refund",
@@ -239,28 +237,28 @@
     {
       "flow_type": "payout",
       "currency": "jpy",
-      "flows": 14,
-      "explained_flows": 14,
-      "volume": 921425,
-      "explained_volume": 921425,
+      "flows": 10,
+      "explained_flows": 10,
+      "volume": 980299,
+      "explained_volume": 980299,
       "share": 1.0
     },
     {
       "flow_type": "payout",
       "currency": "kwd",
-      "flows": 14,
-      "explained_flows": 14,
-      "volume": 760386,
-      "explained_volume": 760386,
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 778951,
+      "explained_volume": 778951,
       "share": 1.0
     },
     {
       "flow_type": "payout",
       "currency": "usd",
-      "flows": 8,
-      "explained_flows": 8,
-      "volume": 720355,
-      "explained_volume": 720355,
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 671256,
+      "explained_volume": 671256,
       "share": 1.0
     },
     {

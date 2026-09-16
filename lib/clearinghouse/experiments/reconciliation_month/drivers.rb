@@ -13,8 +13,10 @@ module Clearinghouse
         const :currency, String
       end
 
-      # How the month's traffic reaches Clearinghouse. The runner does not care which;
-      # the published numbers use ApiDriver.
+      # How the month's traffic reaches Clearinghouse. ApiDriver is the one there is:
+      # HTTP to a running API with the Ruby client library. The interface is what the
+      # runner depends on, so another way in (a load generator, the Go client) is
+      # another implementation.
       module Driver
         extend T::Sig
         extend T::Helpers
@@ -38,6 +40,11 @@ module Clearinghouse
 
         sig { abstract.params(handle: MerchantHandle, dispute: String).void }
         def accept_dispute(handle, dispute:); end
+
+        # Pays out the whole available balance. False when there is nothing to pay
+        # (the balance is zero, or negative after a dispute).
+        sig { abstract.params(handle: MerchantHandle).returns(T::Boolean) }
+        def payout(handle); end
 
         # As the operator.
         sig { abstract.params(id: String, action: String, note: String).void }
@@ -83,6 +90,16 @@ module Clearinghouse
           for_merchant(handle).request(:post, "/v1/disputes/#{dispute}/close")
         end
 
+        sig { override.params(handle: MerchantHandle).returns(T::Boolean) }
+        def payout(handle)
+          for_merchant(handle).payouts.create(currency: handle.currency)
+          true
+        rescue ClearinghouseClient::InvalidRequestError => e
+          raise unless e.code == 'balance_insufficient'
+
+          false
+        end
+
         sig { override.params(id: String, action: String, note: String).void }
         def resolve_exception(id, action:, note:)
           @operator.request(:post, "/v1/reconciliation_exceptions/#{id}/resolve",
@@ -99,63 +116,6 @@ module Clearinghouse
         sig { params(key: String).returns(ClearinghouseClient::Client) }
         def client(key)
           ClearinghouseClient::Client.new(api_key: key, base_url: @api_url, max_network_retries: 2)
-        end
-      end
-
-      # The same payments, refunds and dispute code, called in process without HTTP.
-      # Used for payments made with a lagging clock (the API runs on the experiment's
-      # one clock), and as a fallback driver.
-      class ServiceDriver
-        extend T::Sig
-        include Driver
-
-        sig { params(db: Sequel::Database, clock: Clock, acquirer: Acquirer::Client).void }
-        def initialize(db:, clock:, acquirer:)
-          @deps = T.let(Api::Dependencies.new(db: db, clock: clock, acquirer: acquirer), Api::Dependencies)
-        end
-
-        sig { override.returns(String) }
-        def name = 'service'
-
-        sig do
-          override.params(handle: MerchantHandle, amount: Integer, payment_method: String).returns(T.nilable(String))
-        end
-        def pay(handle, amount:, payment_method:)
-          ctx = context(handle)
-          intent = Payments::Operations.create(ctx, Payments::Create::Input.new(
-                                                      amount: amount, currency: handle.currency,
-                                                      payment_method: payment_method, capture_method: 'automatic',
-                                                      customer_email: nil, metadata: {}, risk_fields: {}
-                                                    ))
-          Payments::Operations.confirm(ctx, Payments::Confirm::Input.new(intent_id: intent.id, payment_method: nil)).id
-        rescue Api::Errors::CardError
-          nil
-        end
-
-        sig do
-          override.params(handle: MerchantHandle, payment_intent: String, amount: Integer).returns(String)
-        end
-        def refund(handle, payment_intent:, amount:)
-          input = Payments::Refunds::Input.new(payment_intent_id: payment_intent, amount: amount, reason: nil,
-                                               metadata: {})
-          Payments::Operations.refund(context(handle), input).status
-        end
-
-        sig { override.params(handle: MerchantHandle, dispute: String).void }
-        def accept_dispute(handle, dispute:)
-          Disputes::Service.new(clock: @deps.clock).accept(@deps.db, merchant_id: handle.merchant.id, id: dispute)
-        end
-
-        sig { override.params(id: String, action: String, note: String).void }
-        def resolve_exception(id, action:, note:)
-          Reconciliation::Exceptions.resolve!(@deps.db, id, action: action, note: note, clock: @deps.clock)
-        end
-
-        private
-
-        sig { params(handle: MerchantHandle).returns(Api::Context) }
-        def context(handle)
-          Api::Context.background(@deps, handle.merchant)
         end
       end
     end

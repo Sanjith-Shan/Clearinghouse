@@ -12,8 +12,9 @@ module Clearinghouse
       #
       # Every simulated day: at 00:30 the notification poller runs (disputes and
       # payouts), the day's settlement file is fetched and reconciled, pending lines
-      # are retried and the SLA job raises missing lines; at 01:00 matured captures
-      # become available and merchants are paid out; then the day's traffic
+      # are retried and the SLA job raises missing lines; at 01:00 the availability
+      # job releases matured captures and every merchant is paid out through the
+      # API; then the day's traffic
       # (payments, refunds, dispute accepts and rulings) runs in time order. After
       # the traffic days, a tail of quiet days lets the last settlements, disputes
       # and payouts finish.
@@ -33,24 +34,23 @@ module Clearinghouse
 
         sig do
           params(config: Config, db: Sequel::Database, clock: Clock::Test, sim_url: String, driver: Driver,
-                 acquirer: Acquirer::Client).void
+                 acquirer: Acquirer::Client, lagging: Lagging).void
         end
-        def initialize(config:, db:, clock:, sim_url:, driver:, acquirer:)
+        def initialize(config:, db:, clock:, sim_url:, driver:, acquirer:, lagging:)
           @config = config
           @db = db
           @clock = clock
           @sim_url = sim_url
           @driver = driver
-          @acquirer = acquirer
+          @lagging = lagging
           @rng = T.let(Random.new(config.seed), Random)
           @events = T.let([], T::Array[Event])
           @seq = T.let(0, Integer)
           @merchants = T.let([], T::Array[MerchantHandle])
-          @payouts = T.let(PayoutsStandIn.new(db: db, clock: clock, acquirer: acquirer), PayoutsStandIn)
           @counts = T.let({}, T::Hash[String, Integer])
           @followed = T.let({}, T::Hash[String, T::Boolean])
-          handlers = @payouts.register(Settlement.notification_handlers(clock: clock))
-          @poller = T.let(Acquirer::NotificationPoller.new(db: db, client: acquirer, clock: clock, handlers: handlers),
+          @poller = T.let(Acquirer::NotificationPoller.new(db: db, client: acquirer, clock: clock,
+                                                           handlers: Settlement.notification_handlers(clock: clock)),
                           Acquirer::NotificationPoller)
           @ingestor = T.let(Reconciliation::Ingestor.new(db: db, client: acquirer, clock: clock),
                             Reconciliation::Ingestor)
@@ -116,7 +116,7 @@ module Clearinghouse
           id = @driver.pay(handle, amount: amount, payment_method: card)
           return bump('declined') unless id
 
-          captured(handle, id, amount)
+          bump('captured')
           return unless refund
 
           delay, refund_amount = refund
@@ -124,12 +124,6 @@ module Clearinghouse
             status = @driver.refund(handle, payment_intent: id, amount: refund_amount)
             bump(status == 'succeeded' ? 'refunds' : 'refunds_refused')
           end
-        end
-
-        sig { params(handle: MerchantHandle, id: String, amount: Integer, at: Time).void }
-        def captured(handle, id, amount, at: @clock.now)
-          bump('captured')
-          @payouts.captured(flow_id: id, merchant: handle.merchant, gross: Money.of(amount, handle.currency), at: at)
         end
 
         sig { params(day: Integer, total_days: Integer).void }
@@ -142,8 +136,10 @@ module Clearinghouse
           @ingestor.match_pending
           @detector.run
           @clock.advance_to(day_time(day, 1))
-          @payouts.make_available!
-          @merchants.each { |m| @payouts.pay_out!(m) } if day <= total_days - 3
+          Balances::Availability.release_due!(@db, clock: @clock)
+          if day <= total_days - 3
+            @merchants.each { |m| bump(@driver.payout(m) ? 'payouts_sent' : 'payouts_skipped') }
+          end
           lagging_capture(day) if lagging_day?(day)
           run_events_until(day_time(day + 1, 0))
         end
@@ -168,21 +164,16 @@ module Clearinghouse
           every.positive? && day >= 3 && day <= @config.days && (day % every).zero?
         end
 
-        # A payment made with a clock two days behind, after today's file was built.
-        # Its line is due in today's file, so the acquirer carries it into tomorrow's:
-        # a line that settles after its due date without anything being wrong.
+        # A payment made through a second API whose clock is two days behind, after
+        # today's file was built. Its line is due in today's file, so the acquirer
+        # carries it into tomorrow's: a line that settles after its due date without
+        # anything being wrong.
         sig { params(day: Integer).void }
         def lagging_capture(day)
-          lagging = Clock::Test.new(start: day_time(day - 2, 12))
-          acquirer = Acquirer::Client.new(clock: lagging, base_url: @sim_url)
-          driver = ServiceDriver.new(db: @db, clock: lagging, acquirer: acquirer)
+          @lagging.clock.advance_to(day_time(day - 2, 12))
           handle = T.must(@merchants[@rng.rand(@merchants.length)])
-          amount = @rng.rand(500..50_000)
-          id = driver.pay(handle, amount: amount, payment_method: 'pm_card_visa')
-          return unless id
-
-          bump('lagging_captures')
-          captured(handle, id, amount, at: lagging.now)
+          id = @lagging.driver.pay(handle, amount: @rng.rand(500..50_000), payment_method: 'pm_card_visa')
+          bump('lagging_captures') if id
         end
 
         # Each dispute gets, from the day it is first seen: the merchant accepting the
@@ -289,18 +280,19 @@ module Clearinghouse
         sig { returns(T::Hash[String, Integer]) }
         def workload
           lines = @db[:settlement_lines].group_and_count(:outcome).to_h { |r| [r.fetch(:outcome), r.fetch(:count)] }
-          disputes = @db[:disputes].group_and_count(:status, :closed_by).all
-          @counts.merge(@payouts.counts).merge(
-            'payments_planned' => @config.payments,
-            'payment_intents_succeeded' => @db[:payment_intents].where(status: 'succeeded').count,
-            'disputes_opened' => @db[:disputes].count,
-            'disputes_won' => disputes.select { |d| d.fetch(:status) == 'won' }.sum { |d| d.fetch(:count) },
-            'disputes_lost' => disputes.select { |d| d.fetch(:status) == 'lost' }.sum { |d| d.fetch(:count) },
-            'disputes_accepted_by_merchant' => disputes.select { |d| d[:closed_by] == 'merchant' }
-                                                       .sum { |d| d.fetch(:count) },
-            'settlement_files' => @db[:settlement_files].count,
-            'settlement_lines' => lines.values.sum
-          ).merge(lines.transform_keys { |k| "lines_#{k}" })
+          @counts.merge(counted(:payouts, :status, 'payouts'), counted(:disputes, :status, 'disputes'),
+                        counted(:disputes, :closed_by, 'disputes_closed_by'), lines.transform_keys { |k| "lines_#{k}" })
+                 .merge('payments_planned' => @config.payments,
+                        'payment_intents_succeeded' => @db[:payment_intents].where(status: 'succeeded').count,
+                        'disputes_opened' => @db[:disputes].count, 'settlement_files' => @db[:settlement_files].count,
+                        'settlement_lines' => lines.values.sum)
+        end
+
+        # {"<prefix>_<value>" => rows} for one column of one table, nulls left out.
+        sig { params(table: Symbol, column: Symbol, prefix: String).returns(T::Hash[String, Integer]) }
+        def counted(table, column, prefix)
+          @db[table].exclude(column => nil).group_and_count(column)
+                    .to_h { |r| ["#{prefix}_#{r.fetch(column)}", r.fetch(:count)] }
         end
 
         sig { params(date: Date).returns(T::Hash[String, T.untyped]) }

@@ -3,6 +3,12 @@
 
 require 'date'
 require 'json'
+require 'securerandom'
+require_relative '../../../sim/lib/acquirer_sim'
+require_relative 'local_server'
+require_relative 'reconciliation_month/drivers'
+require_relative 'reconciliation_month/scorer'
+require_relative 'reconciliation_month/runner'
 
 module Clearinghouse
   module Experiments
@@ -32,6 +38,57 @@ module Clearinghouse
         const :lagging_every_days, Integer, default: 3
       end
 
+      # The second API the lagging payments go through, and its clock.
+      class Lagging < T::Struct
+        const :clock, Clock::Test
+        const :driver, Driver
+      end
+
+      # Everything a run needs, started in this process: the acquirer simulator, the
+      # API on the experiment's clock, and a second API on a lagging clock. `run`
+      # runs the month; `stop` shuts the servers down.
+      class Harness
+        extend T::Sig
+
+        sig { params(db: Sequel::Database, config: Config).void }
+        def initialize(db:, config:)
+          @db = db
+          @config = config
+          start = Time.utc(config.start.year, config.start.month, config.start.day)
+          @clock = T.let(Clock::Test.new(start: start), Clock::Test)
+          simulator = AcquirerSim::Simulator.new
+          simulator.configure('seed' => config.seed)
+          @sim = T.let(LocalServer.new(AcquirerSim::App.new(simulator: simulator)), LocalServer)
+          @acquirer = T.let(Acquirer::Client.new(clock: @clock, base_url: @sim.url, read_timeout: 30), Acquirer::Client)
+          @admin_token = T.let(SecureRandom.hex(16), String)
+          @api, @driver = api(@clock)
+          lagging_clock = Clock::Test.new(start: start)
+          @lagging_api, lagging_driver = api(lagging_clock)
+          @lagging = T.let(Lagging.new(clock: lagging_clock, driver: lagging_driver), Lagging)
+        end
+
+        sig { returns(T::Hash[String, T.untyped]) }
+        def run
+          Runner.new(config: @config, db: @db, clock: @clock, sim_url: @sim.url, driver: @driver,
+                     acquirer: @acquirer, lagging: @lagging).run
+        end
+
+        sig { void }
+        def stop
+          [@api, @lagging_api, @sim].each(&:stop)
+        end
+
+        private
+
+        sig { params(clock: Clock).returns([LocalServer, ApiDriver]) }
+        def api(clock)
+          acquirer = Acquirer::Client.new(clock: clock, base_url: @sim.url, read_timeout: 30)
+          deps = Api::Dependencies.new(db: @db, clock: clock, acquirer: acquirer, admin_token: @admin_token)
+          server = LocalServer.new(Api.rack_app(deps))
+          [server, ApiDriver.new(api_url: server.url, admin_token: @admin_token)]
+        end
+      end
+
       # Empties every table in the experiment's database, as the owner role, the way
       # the spec helper does. Refuses any database whose name does not say it is
       # for tests or experiments.
@@ -51,9 +108,3 @@ module Clearinghouse
     end
   end
 end
-
-require_relative 'local_server'
-require_relative 'reconciliation_month/drivers'
-require_relative 'reconciliation_month/payouts_stand_in'
-require_relative 'reconciliation_month/scorer'
-require_relative 'reconciliation_month/runner'

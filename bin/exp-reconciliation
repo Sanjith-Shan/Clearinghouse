@@ -21,10 +21,9 @@ require 'optparse'
 require 'securerandom'
 require_relative '../lib/clearinghouse'
 require_relative '../lib/clearinghouse/experiments/reconciliation_month'
-require_relative '../sim/lib/acquirer_sim'
 
 command = "bin/exp-reconciliation #{ARGV.join(' ')}".strip
-options = { seed: 1, payments: 1_500, discrepancies: 60, days: 30, tail: 14, driver: 'api', reset: false,
+options = { seed: 1, payments: 1_500, discrepancies: 60, days: 30, tail: 14, reset: false,
             label: 'full', out: File.expand_path('../results/exp5-reconciliation', __dir__),
             machine_note: 'Postgres in Docker (docker compose, container clearinghouse-db-1)' }
 OptionParser.new do |opts|
@@ -33,7 +32,6 @@ OptionParser.new do |opts|
   opts.on('--discrepancies N', Integer) { |v| options[:discrepancies] = v }
   opts.on('--days N', Integer) { |v| options[:days] = v }
   opts.on('--tail N', Integer) { |v| options[:tail] = v }
-  opts.on('--driver NAME', %w[api service]) { |v| options[:driver] = v }
   opts.on('--reset') { options[:reset] = true }
   opts.on('--smoke') { options.merge!(payments: 120, discrepancies: 12, days: 10, label: 'smoke') }
   opts.on('--out DIR') { |v| options[:out] = v }
@@ -57,41 +55,25 @@ owner.disconnect
 
 pool = 8
 db = DB.connect(role: :app, max_connections: pool)
-clock = Clock::Test.new(start: Time.utc(config.start.year, config.start.month, config.start.day))
-simulator = AcquirerSim::Simulator.new
-simulator.configure('seed' => config.seed)
-sim = Experiments::LocalServer.new(AcquirerSim::App.new(simulator: simulator))
-acquirer = Acquirer::Client.new(clock: clock, base_url: sim.url, read_timeout: 30)
-api = nil
-driver =
-  if options[:driver] == 'api'
-    admin_token = SecureRandom.hex(16)
-    deps = Api::Dependencies.new(db: db, clock: clock, acquirer: acquirer, admin_token: admin_token)
-    api = Experiments::LocalServer.new(Api.rack_app(deps))
-    month::ApiDriver.new(api_url: api.url, admin_token: admin_token)
-  else
-    month::ServiceDriver.new(db: db, clock: clock, acquirer: acquirer)
-  end
-
+harness = month::Harness.new(db: db, config: config)
 started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-result = month::Runner.new(config: config, db: db, clock: clock, sim_url: sim.url, driver: driver,
-                           acquirer: acquirer).run
+begin
+  result = harness.run
+ensure
+  harness.stop
+end
 elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
-api&.stop
-sim.stop
 
 sysctl = ->(key) { `sysctl -n #{key} 2>/dev/null`.strip }
 memory = sysctl.call('hw.memsize')
 record = {
   'experiment' => 'exp5-reconciliation', 'label' => options[:label], 'command' => command,
-  'seed' => config.seed, 'driver' => driver.name, 'config' => config.serialize,
+  'seed' => config.seed, 'driver' => 'api', 'config' => config.serialize,
   'machine' => { 'cpu' => sysctl.call('machdep.cpu.brand_string'), 'cores' => sysctl.call('hw.ncpu'),
                  'memory_gb' => memory.empty? ? nil : (Integer(memory) / (1024**3)),
                  'postgres' => db.fetch('SHOW server_version').single_value, 'note' => options[:machine_note],
                  'db_pool' => pool },
-  'wall_seconds' => elapsed.round(1),
-  'stand_ins' => ['funds availability and payouts: the experiment posts funds_available after the payout ' \
-                  'delay and sends payouts through the acquirer itself, until the payouts work lands']
+  'wall_seconds' => elapsed.round(1)
 }.merge(result)
 
 FileUtils.mkdir_p(options[:out])
@@ -100,7 +82,7 @@ File.write(path, "#{JSON.pretty_generate(record)}\n")
 
 score = result.fetch('score')
 puts "exp5 #{options[:label]} seed #{config.seed}: #{config.payments} payments over #{config.days} days " \
-     "(+#{config.tail_days} quiet), #{config.discrepancies} discrepancies requested, driver #{driver.name}"
+     "(+#{config.tail_days} quiet), #{config.discrepancies} discrepancies requested"
 puts "#{'type'.ljust(16)}#{'injected'.rjust(10)}#{'detected'.rjust(10)}"
 score.fetch('injected').each do |type, count|
   puts "#{type.ljust(16)}#{count.to_s.rjust(10)}#{score.fetch('detected').fetch(type).to_s.rjust(10)}"

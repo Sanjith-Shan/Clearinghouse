@@ -87,28 +87,16 @@ RSpec.describe Clearinghouse::Experiments::ReconciliationMonth do
   # A small month end to end: the acquirer simulator and the API on real ports, traffic
   # through the Ruby client library, and every injected discrepancy scored.
   describe 'a small month through the API', :db do
-    let(:clock) { Clearinghouse::Clock::Test.new(start: Time.utc(2026, 1, 1)) }
-    let(:simulator) { AcquirerSim::Simulator.new.tap { |s| s.configure('seed' => 7) } }
-    let(:sim) { Clearinghouse::Experiments::LocalServer.new(AcquirerSim::App.new(simulator: simulator)) }
-    let(:acquirer) { Clearinghouse::Acquirer::Client.new(clock: clock, base_url: sim.url) }
-    let(:api) do
-      deps = Clearinghouse::Api::Dependencies.new(db: app_db, clock: clock, acquirer: acquirer, admin_token: 'exp5')
-      Clearinghouse::Experiments::LocalServer.new(Clearinghouse::Api.rack_app(deps))
-    end
     let(:config) do
       month::Config.new(seed: 7, payments: 40, discrepancies: 9, merchants: 2, days: 6, tail_days: 12,
                         dispute_rate: 0.1, refund_rate: 0.3)
     end
+    let(:harness) { month::Harness.new(db: app_db, config: config) }
 
-    after do
-      api.stop
-      sim.stop
-    end
+    after { harness.stop }
 
     it 'detects every injected discrepancy with no false exceptions and explains every flow once resolved' do
-      driver = month::ApiDriver.new(api_url: api.url, admin_token: 'exp5')
-      result = month::Runner.new(config: config, db: app_db, clock: clock, sim_url: sim.url, driver: driver,
-                                 acquirer: acquirer).run
+      result = harness.run
       score = result.fetch('score')
 
       expect(score['injected'].values.sum).to eq(9)
@@ -118,7 +106,8 @@ RSpec.describe Clearinghouse::Experiments::ReconciliationMonth do
       expect(score['carried_over_flagged_late']).to eq(0)
       expect(result['explainability_after_resolving'].map { |e| e['share'] }).to all(eq(1.0))
       expect(result.values_at('invariant_violations', 'balance_drifts')).to eq([{ 'before' => 0, 'after' => 0 }, 0])
-      expect(result['workload']).to include('captured' => be_positive, 'lagging_captures' => be_positive)
+      expect(result['workload']).to include('captured' => be_positive, 'lagging_captures' => be_positive,
+                                            'payouts_paid' => be_positive)
     end
   end
 end

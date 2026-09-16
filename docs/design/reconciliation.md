@@ -221,21 +221,19 @@ with a clock two days behind, after that day's file was built, which makes the s
 carry its line into the next file: a line that settles after its due date with nothing
 wrong, the case the reconciler must not flag.
 
-**Traffic goes through the API.** Payments (create, confirm), refunds, and dispute accepts
-use the Ruby client library against the running API, and the operator resolves exceptions
-through `POST /v1/reconciliation_exceptions/:id/resolve`. The lagging-clock payments go
-through the same payments operations without HTTP, because the API runs on the experiment's
-one clock. `--driver service` runs everything that way, as a fallback.
-
-**Stand-ins.** Funds availability and payouts belong to the payouts work, which is not on
-main. Until it is, the experiment moves each capture's net to available after the payout
-delay and pays merchants out through the acquirer itself, posting the money-flow table's own
-entries and handling `payout.paid` and `payout.failed` on the same poller. The reconciler
-never reads any of it.
+**Everything goes through the API.** Payments (create, confirm), refunds, payouts and
+dispute accepts use the Ruby client library against the running API, and the operator
+resolves exceptions through `POST /v1/reconciliation_exceptions/:id/resolve`. The lagging
+payments go through a second API instance whose clock runs two days behind, sharing the
+database and the simulator. Funds become available through the payouts work's availability
+job, and payout notifications are applied by `Payouts.handle_notification` on the same
+poller as disputes. The runner depends on a `Driver` interface, so another way in (the load
+generator, a Go client) would be another implementation.
 
 **Each day:** at 00:30 the poller runs, the day's file is fetched and reconciled, pending
-lines are retried and the SLA job runs; at 01:00 availability and payouts; then the day's
-traffic in time order. K discrepancies of all six types are injected with the simulator's
+lines are retried and the SLA job runs; at 01:00 the availability job runs and every
+merchant with a positive available balance is paid out; then the day's traffic in time
+order. K discrepancies of all six types are injected with the simulator's
 `{random: n, seed}` into the files of days 3 to 30 (the first two have nothing due). A quiet
 tail of 14 days lets disputes opened late in the month (seven days after capture), their
 rulings and the last lines finish.

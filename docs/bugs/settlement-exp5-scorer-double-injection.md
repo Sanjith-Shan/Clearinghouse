@@ -20,7 +20,8 @@ two, and a loop over the same month found the case above on its second run.
 exception that closed itself because the line arrived late is counted as
 `missing_then_arrived` rather than false, and a `late` whose line was then dropped is
 `not_observable`. Each rule has its own scorer spec. The fix landed with the experiment's
-first commit, 6370ce9. (Thinking through the same double-injection case while writing the
+first commit, "Experiment 5: a simulated month of reconciliation with injected
+discrepancies". (Thinking through the same double-injection case while writing the
 scorer, before any run, is also how I found that the reconciler reported a line that was
 both late and wrong only as wrong; that one was fixed in the reconciler, in "Reconciler:
 report lateness independently of a wrong amount or fee", and was not caught by a test.)
