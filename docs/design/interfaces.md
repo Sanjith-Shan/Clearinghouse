@@ -182,7 +182,10 @@ Risk::Step.call(intent_attrs, attempt:, clock:) -> Outcome(verdict, result, elap
   # DB transaction, between intent_locked and authorization_requested.
 Risk::Step.hold_on_capture!(db, risk:, merchant_id:, payment_intent_id:, amount_captured:, clock:)
   # Inside the capture transaction. Opens a hold through Risk.holds when risk is review.
-Risk::Holds#open_hold!(db, merchant_id:, payment_intent_id:, amount:, reason: "risk_review", clock:)
+Risk::Holds#open_hold!(db, merchant_id:, payment_intent_id:, amount:, reason:, clock:)
+  # amount: what was captured. reason: RiskGate's reasons, or "risk_review". The API wires
+  # Api::Dependencies#risk_holds = Risk::Holds::Delegate.new(Balances::Holds), which forwards
+  # as Balances::Holds.open_hold!(db, flow_id: payment_intent_id, ...).
 ```
 
 - `created` is the intent's `created_at` in unix seconds, so a retry under the same key sends

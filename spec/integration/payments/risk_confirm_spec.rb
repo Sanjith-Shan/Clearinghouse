@@ -14,15 +14,6 @@ RSpec.describe 'RiskGate during confirm', :db do
     Clearinghouse::Api::Dependencies.new(db: ApiSpecHelpers.db, clock: clock, log: log, admin_token: 'admin_spec_token',
                                          acquirer: acquirer, risk_client: risk_client)
   end
-  let(:holds) { RiskHoldsStandIn.new }
-
-  around do |example|
-    previous = Clearinghouse::Risk.holds
-    Clearinghouse::Risk.holds = holds
-    example.run
-  ensure
-    Clearinghouse::Risk.holds = previous
-  end
 
   def decide(decision, score: 50)
     reconfigure_fake('default' => { 'decision' => decision, 'score' => score, 'reasons' => ["spec #{decision}"] })
@@ -53,16 +44,18 @@ RSpec.describe 'RiskGate during confirm', :db do
     body = JSON.parse(confirm(id).body)
     expect(body).to include('status' => 'succeeded')
     expect(body['risk']).to include('decision' => 'allow', 'score' => 3, 'reasons' => ['spec allow'])
-    expect(holds.holds).to be_empty
+    expect(ApiSpecHelpers.db[:risk_holds].count).to eq(0)
   end
 
   it 'lets a review through and holds the payout of what was captured' do
     decide('review', score: 71)
     id = create_intent(amount: 5000, capture_method: 'manual')['id']
     confirm(id)
+    expect(ApiSpecHelpers.db[:risk_holds].count).to eq(0) # nothing to hold until money moves
     capture(id, amount_to_capture: 3000)
-    expect(holds.holds.map { |h| [h.payment_intent_id, h.amount.amount, h.reason] })
-      .to eq([[id, 3000, 'risk_review']])
+    hold = Clearinghouse::Balances::Holds.find(ApiSpecHelpers.db, flow_id: id)
+    expect([hold.merchant_id, hold.amount.amount, hold.reason, hold.open?])
+      .to eq([merchant.id, 3000, 'spec review', true])
   end
 
   it 'fails open when RiskGate errors, and says so on the intent' do

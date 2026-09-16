@@ -1,8 +1,9 @@
 # typed: false
 # frozen_string_literal: true
 
-# Stands in for the payouts area's Balances::Holds until it lands on main: records
-# every hold it is asked to open. Replace with the real one then.
+# Records every hold it is asked to open, for unit specs of the Risk::Holds seam.
+# Everything that runs the API uses the real Balances::Holds
+# (Api::Dependencies#risk_holds).
 class RiskHoldsStandIn
   include Clearinghouse::Risk::Holds
 

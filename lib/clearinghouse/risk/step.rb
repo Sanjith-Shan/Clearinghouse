@@ -60,10 +60,10 @@ module Clearinghouse
       end
 
       # Opens the payout hold for a payment RiskGate sent to review, for the amount
-      # actually captured (a partial capture holds only what moved), and returns the
-      # amount held. Does nothing and returns nil for any other decision. Call it
-      # inside the capture's transaction, so the funds never become payable without
-      # the hold.
+      # actually captured (a partial capture holds only what moved), and returns
+      # that amount. The money held is the merchant's net of it (see Holds). Does
+      # nothing and returns nil for any other decision. Call it inside the
+      # capture's transaction, so the funds never become payable without the hold.
       sig do
         params(db: T.untyped, risk: T.nilable(T::Hash[String, T.untyped]), merchant_id: String,
                payment_intent_id: String, amount_captured: Money, clock: Clock, holds: Holds)
@@ -71,11 +71,19 @@ module Clearinghouse
       end
       def self.hold_on_capture!(db, risk:, merchant_id:, payment_intent_id:, amount_captured:, clock:,
                                 holds: Risk.holds)
-        return nil unless risk&.fetch('decision', nil) == 'review' && amount_captured.positive?
+        return nil unless risk && risk['decision'] == 'review' && amount_captured.positive?
 
         holds.open_hold!(db, merchant_id: merchant_id, payment_intent_id: payment_intent_id,
-                             amount: amount_captured, reason: Holds::REASON, clock: clock)
+                             amount: amount_captured, reason: review_reason(risk), clock: clock)
         amount_captured
+      end
+
+      # What the review shows as its reason: RiskGate's reasons for sending the
+      # payment to review, or the generic one when it gave none.
+      sig { params(risk: T::Hash[String, T.untyped]).returns(String) }
+      def self.review_reason(risk)
+        reasons = Array(risk['reasons']).map(&:to_s).reject(&:empty?)
+        reasons.empty? ? Holds::REASON : reasons.join('; ')
       end
     end
   end
