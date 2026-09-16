@@ -52,6 +52,21 @@ RSpec.describe 'Payment to payout', :db do # rubocop:disable RSpec/DescribeClass
     expect(Clearinghouse::Balances::Availability.find(app_db, intent['id']).net).to eq(money(5_796))
   end
 
+  # The default fee is 2.9% + 30 cents, which is exactly 31 cents on a 31-cent
+  # charge: the merchant's net is zero. There is nothing to release, and a
+  # zero-amount ledger line would be refused, so nothing may try to post one.
+  it 'captures a charge the fee takes whole, and neither schedules nor releases a zero net' do
+    intent = create_intent(amount: 31)
+    expect(JSON.parse(confirm(intent['id']).body)['status']).to eq('succeeded')
+    expect(Clearinghouse::Balances::Availability.find(app_db, intent['id'])).to be_nil
+
+    clock.advance(3 * Clearinghouse::Clock::SECONDS_PER_DAY)
+    expect(release!.released).to eq([])
+    expect(Clearinghouse::Payouts.run_scheduled!(app_db, bank: acquirer, clock: clock)).to eq([])
+    expect(%w[pending available held].map { |kind| balance(kind) }).to eq([0, 0, 0])
+    expect(platform_balance('fee_revenue')).to eq(31)
+  end
+
   it 'schedules nothing for a declined payment' do
     intent = create_intent(amount: 10_000, payment_method: 'pm_card_chargeDeclined')
     confirm(intent['id'])
