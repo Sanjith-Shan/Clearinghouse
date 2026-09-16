@@ -69,6 +69,35 @@ module Clearinghouse
         def render_intent(run, db, id)
           run.render(PaymentIntents.find!(db, merchant_id: ctx(run).merchant!.id, id: id).to_api)
         end
+
+        # A refund from `refund_created` to `refund_recorded`: the acquirer call
+        # and its record. The phase before must have created the refund pending
+        # and left its id in `run.state['refund_id']`. POST /v1/refunds and a
+        # rejected review start their refunds differently and drive them with
+        # these same phases, so both are resumed, asked about and recorded the
+        # same way.
+        #
+        #   refund_created -> refund_requested -> refund_recorded
+        sig { returns(T::Array[I::Phase]) }
+        def refund_phases
+          [
+            checkpoint('refund_created', 'refund_requested'),
+            I::Phase.new(from: 'refund_requested', to: 'refund_recorded',
+                         foreign: lambda { |run|
+                           Flows.definite(run, send: -> { Refunds.request(ctx(run), refund(run)) },
+                                               look_up: -> { Refunds.look_up(ctx(run), refund(run)) })
+                         },
+                         atomic: lambda { |run, db, outcome|
+                           Refunds.record!(db, ctx(run), refund(run).id, outcome)
+                           nil
+                         })
+          ]
+        end
+
+        sig { params(run: I::Run).returns(Refund) }
+        def refund(run)
+          Refunds.find!(ctx(run).db, ctx(run), String(run.state.fetch('refund_id')))
+        end
       end
 
       # POST /v1/payment_intents: one phase, nothing foreign.
@@ -291,20 +320,12 @@ module Clearinghouse
         sig { override.returns(T::Array[I::Phase]) }
         def phases
           [
-            I::Phase.new(from: I::STARTED, to: 'refund_created', atomic: lambda { |run, db, _|
-              run.state['refund_id'] = Refunds.reserve!(db, ctx(run), T.cast(run.input, Refunds::Input)).id
-              nil
-            }),
-            checkpoint('refund_created', 'refund_requested'),
-            I::Phase.new(from: 'refund_requested', to: 'refund_recorded',
-                         foreign: lambda { |run|
-                           Flows.definite(run, send: -> { Refunds.request(ctx(run), refund(run)) },
-                                               look_up: -> { Refunds.look_up(ctx(run), refund(run)) })
-                         },
-                         atomic: lambda { |run, db, outcome|
-                           Refunds.record!(db, ctx(run), refund(run).id, outcome)
+            I::Phase.new(from: I::STARTED, to: 'refund_created',
+                         atomic: lambda { |run, db, _|
+                           run.state['refund_id'] = Refunds.reserve!(db, ctx(run), input(run)).id
                            nil
                          }),
+            *refund_phases,
             I::Phase.new(from: 'refund_recorded', to: I::FINISHED, atomic: lambda { |run, db, _|
               run.render(Refunds.to_api(db, ctx(run), Refunds.find!(db, ctx(run), refund(run).id)))
             })
@@ -313,10 +334,8 @@ module Clearinghouse
 
         private
 
-        sig { params(run: I::Run).returns(Refund) }
-        def refund(run)
-          Refunds.find!(ctx(run).db, ctx(run), String(run.state.fetch('refund_id')))
-        end
+        sig { params(run: I::Run).returns(Refunds::Input) }
+        def input(run) = T.cast(run.input, Refunds::Input)
       end
 
       CREATE_INTENT = CreateIntent.new

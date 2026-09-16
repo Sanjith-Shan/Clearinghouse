@@ -50,21 +50,19 @@ module Clearinghouse
 
     # Rejects through the payments area's refunds. `request_refund!` runs the
     # refund's first step (Refunds.reserve!: create it pending, reserve the amount
-    # on the intent) inside the reject's transaction. After that transaction
-    # commits, `finish!` makes the acquirer call and records the answer, the same
-    # steps as POST /v1/refunds. Recording a success posts the refund and, in the
-    # same transaction, Holds.release_after_refund!.
+    # on the intent) inside the reject's transaction. The rest of the refund, the
+    # acquirer call and its record, is the refund flow's own phases, which the
+    # reject flow (ReviewFlows::Reject) runs after that transaction commits. So a
+    # rejected review's refund is idempotent and crash-recoverable exactly like
+    # POST /v1/refunds: if the reject stops half way, its key sits at a refund
+    # recovery point and the completer finishes it.
     class PaymentsRefundRequester
       extend T::Sig
       include RefundRequester
 
-      sig { returns(T::Array[String]) }
-      attr_reader :started
-
       sig { params(ctx: Api::Context).void }
       def initialize(ctx)
         @ctx = ctx
-        @started = T.let([], T::Array[String])
       end
 
       sig do
@@ -73,22 +71,7 @@ module Clearinghouse
       def request_refund!(db, payment_intent_id:, reason:, clock:) # rubocop:disable Lint/UnusedMethodArgument
         input = Payments::Refunds::Input.new(payment_intent_id: payment_intent_id, amount: nil, reason: reason,
                                              metadata: {})
-        refund = Payments::Refunds.reserve!(db, @ctx, input)
-        @started << refund.id
-        refund.id
-      end
-
-      # Drives every refund this requester started to the acquirer and back. An
-      # acquirer that gives no definite answer raises the payments area's retryable
-      # 503 and leaves the refund pending, as POST /v1/refunds does.
-      sig { void }
-      def finish!
-        db = @ctx.db
-        @started.each do |id|
-          refund = Payments::Refunds.find!(db, @ctx, id)
-          outcome = Payments::Operations.definite!(Payments::Refunds.request(@ctx, refund))
-          db.transaction { Payments::Refunds.record!(db, @ctx, id, outcome) }
-        end
+        Payments::Refunds.reserve!(db, @ctx, input).id
       end
     end
   end

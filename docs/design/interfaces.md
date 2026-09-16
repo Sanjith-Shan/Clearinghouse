@@ -229,7 +229,8 @@ Balances::Holds.open_hold!(db, flow_id:, merchant_id:, amount:, reason:, clock:)
 Balances::Holds.close_hold!(db, id, merchant_id:, decision: :approve | :reject, clock:) -> Hold
 Balances::Holds.release_after_refund!(db, flow_id:, clock:)   # Refunds.mark_succeeded calls it with Flows.refund
 Balances::RefundRequester#request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id
-Balances::PaymentsRefundRequester.new(ctx)   # through Payments::Refunds; #finish! after the reject commits
+Balances::PaymentsRefundRequester.new(ctx)   # Payments::Refunds.reserve! inside the reject's first phase
+Balances::ReviewFlows::REJECT                # flow review.reject; its later phases are the refund's (refund_phases)
 ```
 ## Notifications and disputes (`lib/clearinghouse/acquirer/notification_poller.rb`, `lib/clearinghouse/disputes/`)
 

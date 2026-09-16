@@ -37,7 +37,7 @@ module Clearinghouse
           app.post '/v1/reviews/:id/reject' do |id|
             T.bind(self, App)
             api_params.permit!
-            respond(Routes::Reviews.close(ctx, id, :reject).to_api)
+            run_flow(Balances::ReviewFlows::REJECT, Balances::ReviewFlows::Input.new(review_id: id))
           end
         end
 
@@ -53,15 +53,9 @@ module Clearinghouse
           raise Errors::NotFoundError.resource('review', starting_after.to_s, param: 'starting_after')
         end
 
-        # A reject refunds the payment: the refund starts inside the reject's
-        # transaction and goes to the acquirer once that has committed.
         sig { params(ctx: Context, id: String, decision: Symbol).returns(Balances::Holds::Hold) }
         def self.close(ctx, id, decision)
-          refunds = Balances::PaymentsRefundRequester.new(ctx)
-          hold = Balances::Holds.close_hold!(ctx.db, id, merchant_id: ctx.merchant!.id, decision: decision,
-                                                         clock: ctx.clock, refunds: refunds)
-          refunds.finish!
-          hold
+          Balances::Holds.close_hold!(ctx.db, id, merchant_id: ctx.merchant!.id, decision: decision, clock: ctx.clock)
         rescue Balances::Holds::NotFoundError
           raise Errors::NotFoundError.resource('review', id)
         rescue Balances::Holds::AlreadyClosedError
