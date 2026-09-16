@@ -73,8 +73,8 @@ module Experiments
     # retry: the client resends the same request with the same Idempotency-Key.
     #   While the dead process's lease runs it gets 409 idempotency_key_in_use and
     #   waits; then its request resumes from the recovery point.
-    # completer: once the lease has expired, `bin/completer --once` (the
-    #   completer on pr/idempotency-recovery) finishes the key with no client
+    # completer: once the key is the completer's to take (lease expired, and idle
+    #   for its grace period), `bin/completer --once` finishes it with no client
     #   involved; the client's retry then gets the stored response as a replay.
     module RecoveryMode
       RETRY = 'retry'
@@ -290,14 +290,15 @@ module Experiments
         end
       end
 
-      # Waits out the dead process's lease, then runs the completer until the key
-      # is finished (a dropped acquirer answer can take it more than one pass).
+      # Runs the completer until the key is finished (a dropped acquirer answer
+      # takes two passes), each pass once the key is the completer's to take.
       sig { params(work: Work).void }
       def run_completer(work)
-        wait_for_lease(work)
         3.times do |pass|
           state = @inspector.key_state(work.merchant_id, work.key)
           break if state.nil? || state['recovery_point'] == 'finished'
+
+          wait_until_takeable(work)
 
           mark = @proxy.mark
           log = File.join(@settings.log_dir, "#{work.tag}-completer-#{pass + 1}.log")
@@ -311,13 +312,16 @@ module Experiments
         end
       end
 
+      # Idempotency::Completer#candidates: no live lease, and no run for at
+      # least the grace period, which bin/completer defaults to the lock timeout.
       sig { params(work: Work).void }
-      def wait_for_lease(work)
+      def wait_until_takeable(work)
         deadline = CrashMatrix.monotonic + RETRY_DEADLINE
         loop do
-          locked = @inspector.locked_at(work.merchant_id, work.key)
-          return if locked.nil? || locked <= @clock.now - @settings.lock_timeout
-          raise "lease on #{work.key} did not expire" if CrashMatrix.monotonic > deadline
+          locked, last_run = @inspector.lease_times(work.merchant_id, work.key)
+          cutoff = @clock.now - @settings.lock_timeout
+          return if (locked.nil? || locked <= cutoff) && (last_run.nil? || last_run <= cutoff)
+          raise "#{work.key} did not become the completer's to take" if CrashMatrix.monotonic > deadline
 
           sleep 0.05
         end

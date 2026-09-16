@@ -35,7 +35,7 @@ module Experiments
         control_intent = work.scenario.intent_id(control_state, control)
         raise "no PaymentIntent to check (reply #{final})" unless intent && control_intent
 
-        roles = @recovery == RecoveryMode::COMPLETER ? nil : key_roles(work)
+        roles = key_roles(work)
         facts = @inspector.facts(intent, books, keys: roles)
         control_facts = @inspector.facts(control_intent, books, keys: roles)
         record(result, 'resting_state', work.scenario.resting_problems(facts))

@@ -95,9 +95,11 @@ module Experiments
           'flow_state' => Clearinghouse::DB.from_json(row[:flow_state]).keys.sort }
       end
 
-      sig { params(merchant_id: String, key: String).returns(T.nilable(Time)) }
-      def locked_at(merchant_id, key)
-        @db[:idempotency_keys].where(merchant_id: merchant_id, key: key).get(:locked_at)
+      # The key's locked_at and last_run_at.
+      sig { params(merchant_id: String, key: String).returns([T.nilable(Time), T.nilable(Time)]) }
+      def lease_times(merchant_id, key)
+        row = @db[:idempotency_keys].where(merchant_id: merchant_id, key: key).first
+        [row&.fetch(:locked_at), row&.fetch(:last_run_at)]
       end
 
       # Everything that happened to one PaymentIntent, from both sides: its row,
@@ -105,11 +107,10 @@ module Experiments
       # transactions with amounts, and the simulator's authorizations and
       # operations for it. Normalised, so the crashed run's facts can be compared
       # with the control's. `keys` maps Idempotency-Keys to a role name, so each
-      # event says which request caused it; `keys: nil` leaves that out (the
-      # completer writes its events as background work, with no request).
+      # event says which request caused it.
       sig do
         params(intent_id: String, acquirer: T::Hash[String, T.untyped],
-               keys: T.nilable(T::Hash[String, String])).returns(T::Hash[String, T.untyped])
+               keys: T::Hash[String, String]).returns(T::Hash[String, T.untyped])
       end
       def facts(intent_id, acquirer, keys: {})
         Normalize.call(raw_facts(intent_id, acquirer, keys))
@@ -117,7 +118,7 @@ module Experiments
 
       sig do
         params(intent_id: String, acquirer: T::Hash[String, T.untyped],
-               keys: T.nilable(T::Hash[String, String])).returns(T::Hash[String, T.untyped])
+               keys: T::Hash[String, String]).returns(T::Hash[String, T.untyped])
       end
       def raw_facts(intent_id, acquirer, keys)
         intent = @db[:payment_intents].where(id: intent_id).first || {}
@@ -174,15 +175,12 @@ module Experiments
           'cancellation_reason' => row[:cancellation_reason], 'risk' => risk }
       end
 
-      sig do
-        params(objects: T::Array[String], keys: T.nilable(T::Hash[String, String])).returns(T::Array[T.untyped])
-      end
+      sig { params(objects: T::Array[String], keys: T::Hash[String, String]).returns(T::Array[T.untyped]) }
       def events(objects, keys)
         @db[:events].where(object_id: objects).order(:seq).map do |e|
-          event = { 'type' => e[:type], 'object' => e[:object_id], 'data' => Clearinghouse::DB.from_json(e[:data]) }
-          next event if keys.nil?
-
-          event.merge('idempotency_key' => e[:idempotency_key] && keys.fetch(e[:idempotency_key], 'other'))
+          { 'type' => e[:type], 'object' => e[:object_id],
+            'idempotency_key' => e[:idempotency_key] && keys.fetch(e[:idempotency_key], 'other'),
+            'data' => Clearinghouse::DB.from_json(e[:data]) }
         end
       end
 

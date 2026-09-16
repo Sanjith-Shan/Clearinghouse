@@ -2,7 +2,8 @@
 
 Code: `bin/crash-matrix`, `sim/experiments/crash_matrix/`. Specs:
 `spec/experiments/crash_matrix_plan_spec.rb` (the plan is the registry) and
-`spec/experiments/crash_matrix_run_spec.rb` (three cases end to end, against real processes).
+`spec/experiments/crash_matrix_run_spec.rb` (three cases end to end against real processes,
+one of them in completer mode).
 Results: `results/exp2-crash-matrix/`.
 
 `idempotency.md` argues that a request can stop at any recovery point and be finished later
@@ -22,11 +23,16 @@ each registered flow has two crash moments:
   the phase back when the connection dies.
 
 Nobody wrote the list down, so nobody can forget to add a point. `CrashMatrix.plan` maps each
-crash point to a case. It raises `MissingScenarioError` for any registered flow that has no
-scenario, so a payouts or disputes flow stops the run until someone writes one. The plan spec
-checks that the plan equals `registry.crash_points` exactly, in order. It also checks that
-adding a phase to a toy flow adds its two cases with no change to the harness, and that every
-case name fires the real `CrashHook::Armed`. On this branch the registry has 5 flows and 24
+crash point to a case, so a flow such as payouts is in the matrix the moment it is registered,
+with no change to the harness. A crash test still has to know how to set up the flow's
+preconditions, so a flow with no scenario is planned like any other, but each of its cases fails
+with `MissingScenarioError` and counts against the headline. The report lists such flows. They
+fail loudly instead of disappearing from the matrix.
+
+The plan spec checks that the plan equals `registry.crash_points` exactly, in order. It also
+checks that adding a phase to a toy flow adds its two cases with no change to the harness, that
+an unknown flow's cases are planned and then fail, and that every case name fires the real
+`CrashHook::Armed`. On this branch the registry has 5 flows and 24
 recovery points, so the matrix has 48 cases. The headline in the report is computed from the
 run, never typed in.
 
@@ -103,12 +109,10 @@ Comparing the recovered response with the control's rewrites two things and noth
 Status, every amount, every state, every error code and the key order must match exactly. The
 retry-after-recovery comparison (`retry_replays_it`) normalises nothing. It compares bytes.
 
-In retry mode the outcome comparison also records which request's Idempotency-Key each event
-carries, so an event credited to the wrong request would count as a difference. Completer mode
-leaves that field out. The completer writes events as background work with no request
-(`Api::Context.background`), so they have no key. That is a design choice in the payments
-area, and whether an event finished by the completer should carry the original request's key
-is still an open question.
+The outcome comparison also records which request's Idempotency-Key each event carries, so an
+event credited to the wrong request would count as a difference. That holds in both modes,
+because the completer rebuilds the original request's context (`Api::Completion`), including
+its request id and key.
 
 ### before_commit: nothing of the rolled-back phase is visible
 
@@ -156,15 +160,14 @@ list for every stage of every case, which also shows, for example, that a resume
   always took longer than the lease, so every case resumed on its first retry and none saw a
   409. The lease-refusal path is covered by `spec/integration/payments/idempotency_spec.rb`,
   not by this matrix.
-- **completer** (`--recovery completer`). The harness waits for the lease to expire, then runs
-  `bin/completer --once` (from `pr/idempotency-recovery`) with the same environment as the
-  server, at most three times, until the key is finished. The ambiguous variant needs two
-  passes. Only then does the client retry, and it must get the stored answer as a replay.
-  `--completer "<command>"` swaps the command. Until the real completer lands, the spec uses
-  `spec/support/stand_in_completer.rb`. It finds unfinished keys whose lease has expired and
-  calls `Runner#resume` with a background context and `FlowRenderer.from_options`, which is
-  the least a completer has to do. Once `bin/completer` exists, `bin/crash-matrix --recovery
-  completer` needs no flag.
+- **completer** (`--recovery completer`). The harness runs `bin/completer --once` with the
+  same environment as the server, at most three times, until the key is finished. Before each
+  pass it waits until the key is the completer's to take, by the same rule as
+  `Idempotency::Completer#candidates`: no live lease, and no run for the grace period, which
+  defaults to the lock timeout. The ambiguous variant needs two passes, because the first gives
+  its lease back after the lost answer. Only then does the client retry, and it must get the
+  stored answer as a replay (`completer_finished_it`). `--completer "<command>"` swaps the
+  command.
 
 ## What this does not cover
 

@@ -41,16 +41,14 @@ RSpec.describe 'Experiment 2 crash matrix, end to end' do
     expect(report['headline']).to start_with('PARTIAL RUN')
   end
 
-  # Completer mode, with spec/support/stand_in_completer.rb standing in for
-  # bin/completer until pr/idempotency-recovery lands. The ambiguous variant
+  # Completer mode, with the real bin/completer --once. The ambiguous variant
   # needs two completer passes: the first authorizes and loses the answer, the
   # second asks and records it. The client only ever sees the stored answer.
   it 'recovers with the completer and the client reads the stored answer' do
     cases = cm.plan(Clearinghouse::Payments::Flows.registry, only: ['acquirer_drop'])
     report = Dir.mktmpdir('crash-matrix') do |dir|
       settings = cm::Settings.new(db_name: ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_test'), log_dir: dir,
-                                  recovery: 'completer',
-                                  completer_command: [RbConfig.ruby, 'spec/support/stand_in_completer.rb'])
+                                  recovery: 'completer')
       cm::Session.new(settings: settings, cases: cases, full: false).run(command: 'spec')
     end
 

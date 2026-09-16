@@ -72,6 +72,14 @@ module Experiments
         end
       end
 
+      # The commit the run's code came from, marked dirty if the tree had changes.
+      sig { returns(String) }
+      def git_describe
+        sha = IO.popen(%w[git rev-parse --short HEAD], chdir: Processes::ROOT, &:read).to_s.strip
+        dirty = !IO.popen(%w[git status --porcelain --untracked-files=no], chdir: Processes::ROOT, &:read).to_s.empty?
+        dirty ? "#{sha}-dirty" : sha
+      end
+
       sig { params(result: CaseResult).returns(String) }
       def failure_line(result)
         return T.must(result.error) if result.error
@@ -88,7 +96,7 @@ module Experiments
         db = Clearinghouse::DB.connect(role: :app, database: @settings.db_name, max_connections: 1)
         postgres = db.fetch('SHOW server_version').single_value
         db.disconnect
-        { 'experiment' => 'exp2-crash-matrix', 'command' => command, 'machine' => MACHINE,
+        { 'experiment' => 'exp2-crash-matrix', 'command' => command, 'machine' => MACHINE, 'git' => git_describe,
           'postgres' => "PostgreSQL #{postgres}", 'recovery_mode' => @settings.recovery,
           'api_process' => { 'puma_threads' => Processes::PUMA_THREADS, 'db_pool' => Processes::DB_POOL },
           'lock_timeout_s' => @settings.lock_timeout, 'database' => @settings.db_name,
