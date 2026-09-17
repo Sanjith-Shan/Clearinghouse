@@ -39,7 +39,7 @@ module AcquirerSpec
       @mutex.synchronize { @calls.select { |c| c.first == operation } }
     end
 
-    %i[authorize capture void refund].each do |operation|
+    %i[authorize capture void refund payout].each do |operation|
       define_method(operation) do |**args|
         record(operation, args[:idempotency_key])
         fault = @mutex.synchronize { @faults[operation].shift }

@@ -31,7 +31,7 @@ module Clearinghouse
           app.post '/v1/reviews/:id/approve' do |id|
             T.bind(self, App)
             api_params.permit!
-            respond(Routes::Reviews.close(ctx, id, :approve).to_api)
+            run_flow(Balances::ReviewFlows::APPROVE, Balances::ReviewFlows::Input.new(review_id: id))
           end
 
           app.post '/v1/reviews/:id/reject' do |id|
@@ -51,15 +51,6 @@ module Clearinghouse
           { 'object' => 'list', 'url' => '/v1/reviews', 'has_more' => more, 'data' => holds.map(&:to_api) }
         rescue Balances::Holds::NotFoundError
           raise Errors::NotFoundError.resource('review', starting_after.to_s, param: 'starting_after')
-        end
-
-        sig { params(ctx: Context, id: String, decision: Symbol).returns(Balances::Holds::Hold) }
-        def self.close(ctx, id, decision)
-          Balances::Holds.close_hold!(ctx.db, id, merchant_id: ctx.merchant!.id, decision: decision, clock: ctx.clock)
-        rescue Balances::Holds::NotFoundError
-          raise Errors::NotFoundError.resource('review', id)
-        rescue Balances::Holds::AlreadyClosedError
-          raise Errors::InvalidRequestError.new("This review is already closed: #{id}.", code: 'review_closed')
         end
       end
     end

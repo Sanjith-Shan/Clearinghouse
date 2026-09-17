@@ -14,8 +14,9 @@ the code. The last section says what Clearinghouse does beyond it.
 ## The contract
 
 Every mutating endpoint (`POST /v1/payment_intents`, `.../confirm`, `.../capture`,
-`.../cancel`, `POST /v1/refunds`) accepts an `Idempotency-Key` header of 1 to 255
-characters, scoped to the merchant.
+`.../cancel`, `POST /v1/refunds`, `POST /v1/payouts`, `POST /v1/payouts/:id/cancel`,
+`POST /v1/reviews/:id/approve` and `.../reject`) accepts an `Idempotency-Key` header of 1 to
+255 characters, scoped to the merchant.
 
 | The key is | The API answers |
 |---|---|
@@ -174,9 +175,12 @@ Capture, cancel and refund follow the same rules with fewer points:
 | `payment_intent.cancel` | started, intent_locked, void_requested, canceled, finished |
 | `refund.create` | started, refund_created, refund_requested, refund_recorded, finished |
 | `review.reject` | started, refund_created, refund_requested, refund_recorded, finished (the refund's phases, after closing the review) |
+| `review.approve` | started, finished |
+| `payout.create` | started, balance_reserved, bank_requested, bank_recorded, finished (`Payouts::RECOVERY_POINTS`, `payouts.md`) |
+| `payout.cancel` | started, finished |
 
-Every acquirer call happens in a phase that starts at a point named `*_requested`, and that
-point is committed before the call (a registry spec checks it). The only other foreign call
+Every acquirer or bank call happens in a phase that starts at a point named `*_requested`,
+and that point is committed before the call (a registry spec checks it). The only other foreign call
 is RiskGate's, from `intent_locked`, and re-asking RiskGate is safe for the reason above.
 Capture fixes its amount in `flow_state` at `intent_locked`, so a resumed capture sends
 exactly the amount the first run would have. Refund carries its `re_` id the same way.
@@ -304,7 +308,7 @@ so a stray `CLEARINGHOUSE_CRASH_AT` does nothing. The environment is read once, 
 dependencies are built at boot. Nothing can arm the hook in a running process.
 
 The names are exactly `Registry#crash_points`: every recovery point of every registered flow,
-at both moments. Today that's 28 points across 6 flows, 56 crash points. A harness that
+at both moments. Today that's 38 points across 9 flows, 76 crash points. A harness that
 iterates over the registry covers a new flow or point without being told about it.
 `spec/idempotency/crash_hook_spec.rb` does this in process for a toy flow: it crashes at each
 point, resumes, and checks the result is identical to a clean run and every phase ran exactly

@@ -102,6 +102,9 @@ creation, which is when the simulator's bank answers.
 | `GET /v1/payouts` | `limit` (1 to 100), `starting_after`, `status`. Newest first |
 | `POST /v1/payouts/:id/cancel` | only while `pending` and not yet sent to the bank |
 
+Both `POST`s take an `Idempotency-Key` and replay the stored response for a retry, as the
+payments endpoints do.
+
 A payout the balance can't cover is a 400 `invalid_request_error` with code
 `balance_insufficient` and `param: amount`. Cancel on a payout that has gone to the bank is
 400 `payout_not_cancelable`.
@@ -122,7 +125,7 @@ serialization failure and retried.
 
 `spec/payouts/payouts_spec.rb` runs 12 threads, each asking for $10.00, against $96.80
 available, on real Postgres connections. Exactly 9 succeed, 3 get `balance_insufficient`,
-$0.80 is left, and the simulator received exactly $90.00 of payouts. With
+$6.80 is left, and the simulator received exactly $90.00 of payouts. With
 `balance_for_update` swapped for the unlocked `Ledger.balance`, I ran the test three
 times, and each time all 12 payouts succeeded.
 
@@ -159,12 +162,15 @@ committed before the call, so every retry asks about the key that might have bee
 never a new one. A payout goes to the bank at most once (failure is terminal, and the
 merchant makes a new payout), so one key per payout is one key per attempt.
 
-**The completer seam.** Until the framework's completer exists,
-`Payouts.resume_incomplete!(db, bank:, clock:)` finds pending payouts at `balance_reserved`
-or `bank_requested` that have not been touched for 60 simulated seconds, and drives them.
-Racing a live request is safe. Each phase re-checks the recovery point under the payout's
-row lock, and the bank dedupes the key, so two drivers can at worst both ask the bank the
-same question.
+**Who finishes a stopped payout.** A payout made through `POST /v1/payouts` has an
+idempotency key, and the framework's completer resumes it from the key's recovery point (see
+below). `Payouts.resume_incomplete!(db, bank:, clock:)` still drives every pending payout at
+`balance_reserved` or `bank_requested` that has not been touched for 60 simulated seconds.
+Automatic payouts need it, because the daily sweep creates them without a request or a key.
+For an API payout it races the completer, which is safe: each phase re-checks the recovery
+point under the payout's row lock, the key's phases re-check it too (a payout that is no
+longer waiting on the bank has nothing to send), and the bank dedupes the key, so two drivers
+can at worst both ask the bank the same question.
 
 ### The crash matrix
 
@@ -186,34 +192,32 @@ payout is still at `bank_requested`, the handler applies it, takes the bank's re
 the notification, and moves the payout to `bank_recorded`, so the resume has nothing left to
 do. That case has a spec too.
 
-### Plugging into the idempotency framework
+### In the idempotency framework
 
-The framework (payments area) runs each atomic phase in a SERIALIZABLE transaction that also
-advances the key's recovery point, and resumes an expired key from that point. The mapping
-is:
+`POST /v1/payouts` runs as the registered flow `payout.create` (`Payouts::Flows::Create`), whose
+recovery points are exactly `Payouts::RECOVERY_POINTS` (a spec checks they agree), so the crash
+experiment, which enumerates `Payments::Flows.registry.crash_points`, covers payouts without
+being told about them. `POST /v1/payouts/:id/cancel` is `payout.cancel`, one phase.
 
-1. Register `payout` with the framework's recovery-point registry using
-   `Payouts::RECOVERY_POINTS`, in that order, so experiment 2 enumerates them from code.
-2. Phase `started`: call `Payouts.reserve!` inside the framework's phase transaction (it
-   joins an open transaction) and store the payout id on the key. Next point
-   `balance_reserved`.
-3. Phase `balance_reserved`: `Payouts.request_bank!`. Next point `bank_requested`.
-4. Foreign call: `Payouts.call_bank(bank, payout, resuming:)`, with `resuming` true when
-   the key was *loaded* at `bank_requested` (a retry or the completer). That is what makes
-   it ask before sending.
-5. Phase `bank_requested`: `Payouts.record_bank!` with the outcome. On `Unknown` or
-   `Unavailable` it changes nothing, and the framework should leave the key at
-   `bank_requested` and return a 500 that says to retry (`Clearinghouse-Should-Retry: true`,
-   since the request carried a key). Otherwise next point `bank_recorded`.
-6. Phase `bank_recorded`: render `payout.to_api`, store the response, `finished`.
-7. The crash hook: put `CLEARINGHOUSE_CRASH_AT` checks after each phase commits, and after
-   `call_bank` returns but before `record_bank!`. That last one is the "bank accepted,
-   answer lost" row above.
+1. `started -> balance_reserved`: `Payouts.reserve!` inside the phase's SERIALIZABLE
+   transaction (it joins it), the payout id kept in the key's `flow_state`. A balance that
+   can't cover it is a stored 400. Payouts of one balance pass a turnstile on it before their
+   transactions begin (`Idempotency::Turnstile`), so concurrent payouts wait for each other
+   rather than abort each other.
+2. `balance_reserved -> bank_requested`: `Payouts.request_bank!`, the bank key committed.
+3. `bank_requested -> bank_recorded`: the foreign call `Payouts.call_bank(bank, payout,
+   resuming: run.resumed)`, so a resumed phase asks the bank before sending, then
+   `Payouts.record_bank!` in the transaction. `Unknown` or `Unavailable` is a retryable 503
+   (`Clearinghouse-Should-Retry: true` with a key) that leaves the key and the payout at
+   `bank_requested`.
+4. `bank_recorded -> finished`: the payout rendered and stored.
 
-Once that is wired, `resume_incomplete!` is redundant for API-created payouts and should
-only drive automatic ones, which have no key. The payout row keeps its own
-`recovery_point` either way, because automatic payouts are created by a sweep and not by
-a request.
+The crash hook fires before and after each commit. `payout.create:bank_recorded:before_commit`
+is the "bank accepted, answer lost" row of the matrix above: the bank call returned and the
+transaction recording it died. `spec/api/payout_flows_spec.rb` crashes the flow at all ten
+points in process, lets the completer finish it, and checks the bank has exactly one payout,
+the retry gets it, and the ledger invariants hold. The same spec replays a payout, a refusal,
+a cancel and an approve under their keys, and runs 12 concurrent payouts through the API.
 
 ### Bank notifications
 

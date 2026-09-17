@@ -16,7 +16,11 @@ module Clearinghouse
           app.post '/v1/payouts' do
             T.bind(self, App)
             p = api_params.permit!('amount', 'currency', 'description')
-            respond(Routes::Payouts.create(p, ctx).to_api)
+            input = Routes::Payouts.input(p)
+            # Without a bank there is nothing to send the payout to: fail before
+            # anything is reserved.
+            ctx.acquirer!
+            run_flow(Clearinghouse::Payouts::Flows::CREATE, input)
           end
 
           app.get '/v1/payouts' do
@@ -34,26 +38,21 @@ module Clearinghouse
           app.post '/v1/payouts/:id/cancel' do |id|
             T.bind(self, App)
             api_params.permit!
-            respond(Routes::Payouts.cancel(ctx, id).to_api)
+            run_flow(Clearinghouse::Payouts::Flows::CANCEL,
+                     Clearinghouse::Payouts::Flows::CancelInput.new(payout_id: id))
           end
         end
 
-        sig { params(params: Params, ctx: Context).returns(Clearinghouse::Payouts::Payout) }
-        def self.create(params, ctx)
+        sig { params(params: Params).returns(Clearinghouse::Payouts::Flows::CreateInput) }
+        def self.input(params)
           currency = params.string('currency') || 'usd'
           unless Currency.known?(currency)
             raise Errors::InvalidRequestError.invalid_parameter('currency', 'is not a supported currency.')
           end
 
-          Clearinghouse::Payouts.create!(
-            ctx.db, merchant_id: ctx.merchant!.id, currency: currency, bank: bank(ctx), clock: ctx.clock,
-                    amount: params.integer('amount', min: 1), metadata: params.metadata,
-                    description: params.string('description', max_length: 1000)
-          )
-        rescue Clearinghouse::Payouts::BalanceInsufficientError => e
-          raise Errors::InvalidRequestError.new(
-            "Your available balance (#{e.available}) is too low for this payout. Payouts are refused while " \
-            'the available balance is zero or negative.', code: 'balance_insufficient', param: 'amount'
+          Clearinghouse::Payouts::Flows::CreateInput.new(
+            currency: Currency.normalize(currency), amount: params.integer('amount', min: 1),
+            description: params.string('description', max_length: 1000), metadata: params.metadata
           )
         end
 
@@ -74,24 +73,6 @@ module Clearinghouse
         def self.find!(ctx, id)
           Clearinghouse::Payouts.find(ctx.db, id, merchant_id: ctx.merchant!.id) ||
             raise(Errors::NotFoundError.resource('payout', id))
-        end
-
-        sig { params(ctx: Context, id: String).returns(Clearinghouse::Payouts::Payout) }
-        def self.cancel(ctx, id)
-          Clearinghouse::Payouts.cancel!(ctx.db, id, merchant_id: ctx.merchant!.id, clock: ctx.clock)
-        rescue Clearinghouse::Payouts::NotFoundError
-          raise Errors::NotFoundError.resource('payout', id)
-        rescue Clearinghouse::Payouts::NotCancelableError => e
-          raise Errors::InvalidRequestError.new("This payout cannot be canceled: #{e.message}. Only a pending " \
-                                                'payout that has not been sent to the bank can be canceled.',
-                                                code: 'payout_not_cancelable')
-        end
-
-        # Payouts go through the same acquirer connection as payments (the simulator
-        # plays the bank too).
-        sig { params(ctx: Context).returns(Acquirer::Client) }
-        def self.bank(ctx)
-          ctx.acquirer!
         end
       end
     end

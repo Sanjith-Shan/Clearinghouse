@@ -3,8 +3,9 @@
 
 module Clearinghouse
   module Balances
-    # Closing a risk review as idempotent flows, run by the idempotency framework
-    # like every other mutating request (docs/design/idempotency.md).
+    # Closing a risk review, approve or reject, as idempotent flows run by the
+    # idempotency framework like every other mutating request
+    # (docs/design/idempotency.md).
     module ReviewFlows
       extend T::Sig
 
@@ -80,7 +81,24 @@ module Clearinghouse
         end
       end
 
+      # POST /v1/reviews/:id/approve. One phase: whatever the hold has in held
+      # goes to available, in the transaction that closes it.
+      class Approve < Base
+        sig { override.returns(String) }
+        def name = 'review.approve'
+
+        sig { override.returns(T::Array[I::Phase]) }
+        def phases
+          [I::Phase.new(from: I::STARTED, to: I::FINISHED, atomic: lambda { |run, db, _|
+            close!(run, db, :approve)
+            render_review(run, db)
+          })]
+        end
+      end
+
+      APPROVE = Approve.new
       REJECT = Reject.new
+      Payments::Flows.registry.register(APPROVE)
       Payments::Flows.registry.register(REJECT)
     end
   end
