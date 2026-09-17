@@ -40,4 +40,26 @@ RSpec.describe 'Experiment 2 crash matrix, end to end' do
     expect(ambiguous['recovery']).to eq(['retry 1: 503 acquirer_unavailable', 'retry 2: 200 succeeded'])
     expect(report['headline']).to start_with('PARTIAL RUN')
   end
+
+  # Completer mode, with the real bin/completer --once. The ambiguous variant
+  # needs two completer passes: the first authorizes and loses the answer, the
+  # second asks and records it. The client only ever sees the stored answer.
+  it 'recovers with the completer and the client reads the stored answer' do
+    cases = cm.plan(Clearinghouse::Payments::Flows.registry, only: ['acquirer_drop'])
+    report = Dir.mktmpdir('crash-matrix') do |dir|
+      settings = cm::Settings.new(db_name: ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_test'), log_dir: dir,
+                                  recovery: 'completer')
+      cm::Session.new(settings: settings, cases: cases, full: false).run(command: 'spec')
+    end
+
+    expect(report['cases'].length).to eq(1)
+    kase = report['cases'].first
+    expect([kase['error'], kase['checks'].reject { |c| c['ok'] }]).to eq([nil, []])
+    expect(kase['checks'].map do |c|
+      c['name']
+    end).to include('completer_finished_it', 'ambiguous_answer_resolved_by_asking')
+    expect(kase['recovery']).to eq(['completer pass 1: exit 0, key at authorization_requested',
+                                    'completer pass 2: exit 0, key at finished',
+                                    'retry after completer: 200 succeeded (replayed)'])
+  end
 end

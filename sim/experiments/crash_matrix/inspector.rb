@@ -95,16 +95,19 @@ module Experiments
           'flow_state' => Clearinghouse::DB.from_json(row[:flow_state]).keys.sort }
       end
 
-      sig { params(merchant_id: String, key: String).returns(T.nilable(Time)) }
-      def locked_at(merchant_id, key)
-        @db[:idempotency_keys].where(merchant_id: merchant_id, key: key).get(:locked_at)
+      # The key's locked_at and last_run_at.
+      sig { params(merchant_id: String, key: String).returns([T.nilable(Time), T.nilable(Time)]) }
+      def lease_times(merchant_id, key)
+        row = @db[:idempotency_keys].where(merchant_id: merchant_id, key: key).first
+        [row&.fetch(:locked_at), row&.fetch(:last_run_at)]
       end
 
       # Everything that happened to one PaymentIntent, from both sides: its row,
       # its refunds, every event about it, its charge or its refunds, its ledger
       # transactions with amounts, and the simulator's authorizations and
       # operations for it. Normalised, so the crashed run's facts can be compared
-      # with the control's. `keys` maps Idempotency-Keys to a role name.
+      # with the control's. `keys` maps Idempotency-Keys to a role name, so each
+      # event says which request caused it.
       sig do
         params(intent_id: String, acquirer: T::Hash[String, T.untyped],
                keys: T::Hash[String, String]).returns(T::Hash[String, T.untyped])

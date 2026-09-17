@@ -141,6 +141,9 @@ module Experiments
       extend T::Sig
 
       ROOT = File.expand_path('../../..', __dir__)
+      PUMA_THREADS = '1:4'
+      # CLEARINGHOUSE_DB_POOL for the API, set explicitly so the report states it.
+      DB_POOL = 10
 
       # The API on Puma, single mode, as `config.ru` builds it from the
       # environment. Launched through `ruby -rbundler/setup` rather than `bundle
@@ -148,7 +151,7 @@ module Experiments
       sig { params(port: Integer, env: T::Hash[String, String], log: String).returns(ChildProcess) }
       def self.api(port:, env:, log:)
         argv = [RbConfig.ruby, '-rbundler/setup', Gem.bin_path('puma', 'puma'), '--port', port.to_s,
-                '--threads', '1:4', '--environment', 'production', '--quiet', 'config.ru']
+                '--threads', PUMA_THREADS, '--environment', 'production', '--quiet', 'config.ru']
         ChildProcess.new(label: 'api', argv: argv, port: port, dir: ROOT, env: env, log: log, health_path: '/healthz')
       end
 

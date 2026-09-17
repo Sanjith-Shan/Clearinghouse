@@ -4,8 +4,9 @@
 # Experiment 2: crash the API at every recovery point of every registered flow, restart it,
 # recover, and check nothing was lost, doubled or changed. See docs/design/crash-matrix.md.
 #
-#   bin/crash-matrix [--recovery retry] [--only NAME[,NAME]] [--no-variants]
-#                    [--lock-timeout 1] [--db clearinghouse_exp2] [--out results/exp2-crash-matrix]
+#   bin/crash-matrix [--recovery retry|completer] [--only NAME[,NAME]] [--no-variants]
+#                    [--lock-timeout 1] [--db clearinghouse_exp2] [--completer "bin/completer --once"]
+#                    [--out results/exp2-crash-matrix]
 #
 # The cases come from Clearinghouse::Payments::Flows.registry.crash_points, never from a list
 # here. --only narrows the run by substring for development; such a run is marked partial.
@@ -15,11 +16,12 @@
 require 'bundler/setup'
 require 'fileutils'
 require 'optparse'
+require 'shellwords'
 require_relative '../sim/experiments/crash_matrix'
 
 root = File.expand_path('..', __dir__)
 opts = { recovery: 'retry', only: nil, variants: true, lock_timeout: 1.0, db: 'clearinghouse_exp2',
-         out: File.join(root, 'results/exp2-crash-matrix') }
+         completer: 'bin/completer --once', out: File.join(root, 'results/exp2-crash-matrix') }
 COMMAND = "bin/crash-matrix #{ARGV.join(' ')}".strip
 OptionParser.new do |o|
   o.on('--recovery MODE', Experiments::CrashMatrix::RecoveryMode::ALL) { |v| opts[:recovery] = v }
@@ -27,8 +29,14 @@ OptionParser.new do |o|
   o.on('--no-variants') { opts[:variants] = false }
   o.on('--lock-timeout S', Float) { |v| opts[:lock_timeout] = v }
   o.on('--db NAME') { |v| opts[:db] = v }
+  o.on('--completer CMD') { |v| opts[:completer] = v }
   o.on('--out DIR') { |v| opts[:out] = File.expand_path(v) }
 end.parse!
+
+completer = Shellwords.split(opts[:completer])
+if opts[:recovery] == 'completer' && !File.exist?(File.join(root, completer.first.to_s))
+  abort "completer mode needs #{completer.first} (it lands with pr/idempotency-recovery)"
+end
 
 registry = Clearinghouse::Payments::Flows.registry
 cases = Experiments::CrashMatrix.plan(registry, only: opts[:only], variants: opts[:variants])
@@ -36,7 +44,7 @@ stamp = Clearinghouse::Clock::Real.new.now.strftime('%Y%m%dT%H%M%SZ')
 dir = File.join(opts[:out], "#{stamp}-#{opts[:recovery]}")
 FileUtils.mkdir_p(dir)
 settings = Experiments::CrashMatrix::Settings.new(
-  db_name: opts[:db], recovery: opts[:recovery], lock_timeout: opts[:lock_timeout],
+  db_name: opts[:db], recovery: opts[:recovery], lock_timeout: opts[:lock_timeout], completer_command: completer,
   log_dir: File.join(root, 'tmp/crash-matrix', File.basename(dir))
 )
 warn "#{cases.length} cases (#{registry.crash_points.length} registry crash points), recovery: #{opts[:recovery]}"

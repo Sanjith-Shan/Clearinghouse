@@ -73,9 +73,13 @@ module Experiments
     # retry: the client resends the same request with the same Idempotency-Key.
     #   While the dead process's lease runs it gets 409 idempotency_key_in_use and
     #   waits; then its request resumes from the recovery point.
+    # completer: once the key is the completer's to take (lease expired, and idle
+    #   for its grace period), `bin/completer --once` finishes it with no client
+    #   involved; the client's retry then gets the stored response as a replay.
     module RecoveryMode
       RETRY = 'retry'
-      ALL = [RETRY].freeze
+      COMPLETER = 'completer'
+      ALL = [RETRY, COMPLETER].freeze
     end
 
     # Settings shared by every case.
@@ -83,6 +87,7 @@ module Experiments
       const :db_name, String
       const :recovery, String, default: RecoveryMode::RETRY
       const :lock_timeout, Float, default: 1.0
+      const :completer_command, T::Array[String], default: %w[bin/completer --once]
       const :log_dir, String
     end
 
@@ -137,7 +142,7 @@ module Experiments
         @db = db
         @owner_db = owner_db
         @inspector = T.let(Inspector.new(db: db, sim: @sim), Inspector)
-        @verifier = T.let(Verifier.new(inspector: @inspector), Verifier)
+        @verifier = T.let(Verifier.new(inspector: @inspector, recovery: settings.recovery), Verifier)
         @clock = T.let(Clearinghouse::Clock::Real.new, Clearinghouse::Clock)
         @server = T.let(nil, T.nilable(ChildProcess))
         @secret = T.let(nil, T.nilable(String))
@@ -153,6 +158,7 @@ module Experiments
           # verdict in one run and not the other.
           'RISKGATE_DEADLINE_MS' => '5000',
           'CLEARINGHOUSE_IDEMPOTENCY_LOCK_TIMEOUT' => @settings.lock_timeout.to_s,
+          'CLEARINGHOUSE_DB_POOL' => Processes::DB_POOL.to_s,
           'CLEARINGHOUSE_CRASH_AT' => '' }
       end
 
@@ -252,7 +258,17 @@ module Experiments
       end
 
       sig { params(work: Work, api: ApiClient).returns(Reply) }
-      def recover(work, api) = retry_until_answered(work, api)
+      def recover(work, api)
+        return retry_until_answered(work, api) unless @settings.recovery == RecoveryMode::COMPLETER
+
+        run_completer(work)
+        request = T.must(work.request)
+        mark = @proxy.mark
+        reply = api.post(request.path, request.params, key: work.key)
+        work.result.recovery << "retry after completer: #{reply}#{' (replayed)' if reply.replayed?}"
+        work.result.exchanges['client_retry'] = @proxy.since(mark).map(&:to_s)
+        reply
+      end
 
       # Resends until the answer is neither "still in use" nor a retryable 503.
       sig { params(work: Work, api: ApiClient).returns(Reply) }
@@ -271,6 +287,43 @@ module Experiments
           return reply unless (in_use || retryable) && CrashMatrix.monotonic < deadline
 
           sleep(in_use ? 0.1 : 0.05)
+        end
+      end
+
+      # Runs the completer until the key is finished (a dropped acquirer answer
+      # takes two passes), each pass once the key is the completer's to take.
+      sig { params(work: Work).void }
+      def run_completer(work)
+        3.times do |pass|
+          state = @inspector.key_state(work.merchant_id, work.key)
+          break if state.nil? || state['recovery_point'] == 'finished'
+
+          wait_until_takeable(work)
+
+          mark = @proxy.mark
+          log = File.join(@settings.log_dir, "#{work.tag}-completer-#{pass + 1}.log")
+          pid = T.unsafe(Process).spawn(base_env, *@settings.completer_command, chdir: Processes::ROOT,
+                                                                                out: [log, 'a'], err: [log, 'a'])
+          _, status = Process.wait2(pid)
+          after = @inspector.key_state(work.merchant_id, work.key)
+          work.result.recovery << "completer pass #{pass + 1}: exit #{T.must(status).exitstatus}, key at " \
+                                  "#{after && after['recovery_point']}"
+          work.result.exchanges["completer_#{pass + 1}"] = @proxy.since(mark).map(&:to_s)
+        end
+      end
+
+      # Idempotency::Completer#candidates: no live lease, and no run for at
+      # least the grace period, which bin/completer defaults to the lock timeout.
+      sig { params(work: Work).void }
+      def wait_until_takeable(work)
+        deadline = CrashMatrix.monotonic + RETRY_DEADLINE
+        loop do
+          locked, last_run = @inspector.lease_times(work.merchant_id, work.key)
+          cutoff = @clock.now - @settings.lock_timeout
+          return if (locked.nil? || locked <= cutoff) && (last_run.nil? || last_run <= cutoff)
+          raise "#{work.key} did not become the completer's to take" if CrashMatrix.monotonic > deadline
+
+          sleep 0.05
         end
       end
 
