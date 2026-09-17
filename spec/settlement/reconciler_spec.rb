@@ -179,6 +179,16 @@ RSpec.describe Clearinghouse::Reconciliation::Ingestor, :db do
       expect(cash).to eq(10_000 - 160)
     end
 
+    it 'reports a late line that is also wrong for both' do
+      pi, ref = visa
+      ingest(due_day, inject: [{ type: 'late', acquirer_reference: ref }])
+      result = ingest(next_day, inject: [{ type: 'amount_mismatch', acquirer_reference: ref, delta: 4 }])
+      expect(result).to have_attributes(outcomes: { 'mismatch' => 1 },
+                                        exceptions: { 'amount_mismatch' => 1, 'late' => 1 })
+      expect(exceptions('late').first).to include(flow_id: pi, unexplained_amount: 0, status: 'resolved')
+      expect(exceptions('amount_mismatch').first).to include(flow_id: pi, unexplained_amount: -4, status: 'open')
+    end
+
     it 'does not call a line late when the acquirer carried it over because it happened after the file was built' do
       ingest(due_day)
       lagging_clock = Clearinghouse::Clock::Test.new(start: Time.utc(2026, 3, 2, 12))

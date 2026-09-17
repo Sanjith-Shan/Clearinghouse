@@ -166,37 +166,73 @@ module Clearinghouse
 
       sig { params(line: SettlementCsv::Line, target: Matcher::Target, row_id: Integer).void }
       def settle(line, target, row_id)
-        reason, detail = discrepancy(line, target)
-        entries = reason.nil? || reason == 'late' ? exact_entries(line) : discrepancy_entries(line, target)
+        problems = discrepancies(line, target)
+        mismatched = problems.any? { |reason, _| reason != 'late' }
+        entries = mismatched ? discrepancy_entries(line, target) : exact_entries(line)
         txn = post(line, target, entries)
-        update_line(row_id, outcome: outcome_for(reason), flow_id: target.flow_id, ledger_transaction_id: txn)
-        return unless reason
-
-        stuck = unexplained(line, target, posted: !txn.nil?)
-        id = raise_exception(line, row_id, reason, T.must(detail), target: target, unexplained: stuck)
-        Exceptions.close_automatically!(@db, id, note: 'cleared on arrival; nothing to do', now: @clock.now) if
-          reason == 'late'
+        outcome = if mismatched then 'mismatch'
+                  elsif problems.empty? then 'cleared'
+                  else 'late'
+                  end
+        update_line(row_id, outcome: outcome, flow_id: target.flow_id, ledger_transaction_id: txn)
+        missing_arrived(line, target)
+        problems.each do |reason, detail|
+          late = reason == 'late'
+          stuck = late ? 0 : unexplained(line, target, posted: !txn.nil?)
+          id = raise_exception(line, row_id, reason, detail, target: target, unexplained: stuck)
+          Exceptions.close_automatically!(@db, id, note: 'cleared on arrival; nothing to do', now: @clock.now) if late
+        end
       end
 
-      # The first problem found, in this order: the amount, the fee, the timing.
-      sig { params(line: SettlementCsv::Line, target: Matcher::Target).returns([T.nilable(String), T.nilable(String)]) }
-      def discrepancy(line, target)
+      # The SLA job may already have called this line missing. It was not: it was
+      # late. An open `missing` exception closes itself. One an operator already
+      # wrote off gets its write-off reversed, because the money did arrive and the
+      # line has just been booked; leaving both would count it twice.
+      sig { params(line: SettlementCsv::Line, target: Matcher::Target).void }
+      def missing_arrived(line, target)
+        row = @db[:reconciliation_exceptions].where(reason: 'missing', flow_id: target.flow_id, line_type: line.type)
+                                             .first
+        return unless row
+
+        note = "the line arrived in the #{line.settled_on} file and was booked"
+        return Exceptions.close_automatically!(@db, row.fetch(:id), note: note, now: @clock.now) if
+          row.fetch(:status) == 'open'
+
+        write_off = row[:resolution_transaction_id]
+        return unless row[:resolution_action] == 'write_off' && write_off
+
+        reversal = begin
+          Ledger.reverse!(@db, write_off, reason: "#{row.fetch(:id)}: #{note}", effective_at: @clock.now)
+        rescue Ledger::AlreadyReversedError
+          nil # an operator already undid it
+        end
+        after = reversal ? "transaction #{reversal} reverses the write-off" : 'the write-off was already reversed'
+        @db[:reconciliation_exceptions].where(id: row.fetch(:id))
+                                       .update(resolution_note: "#{row[:resolution_note]} Later #{note}; #{after}.")
+      end
+
+      # What is wrong with the line: at most one of amount (or currency) and fee, the
+      # amount checked first because a wrong amount usually makes the fee look wrong
+      # too; and, independently, whether it is late. A late line can also be wrong,
+      # and both are reported.
+      sig { params(line: SettlementCsv::Line, target: Matcher::Target).returns(T::Array[[String, String]]) }
+      def discrepancies(line, target)
+        problems = T.let([], T::Array[[String, String]])
         if line.currency != target.currency
-          return ['amount_mismatch', "line is in #{line.currency}, #{target.flow_id} is in #{target.currency}"]
+          problems << ['amount_mismatch', "line is in #{line.currency}, #{target.flow_id} is in #{target.currency}"]
+        elsif line.amount != target.expected_amount
+          problems << ['amount_mismatch',
+                       "line says #{line.amount}, #{target.flow_id} expects #{target.expected_amount}"]
+        elsif line.fee != target.expected_fee
+          problems << ['fee_mismatch', "line takes a fee of #{line.fee}, the fee schedule gives #{target.expected_fee}"]
         end
-        if line.amount != target.expected_amount
-          return ['amount_mismatch', "line says #{line.amount}, #{target.flow_id} expects #{target.expected_amount}"]
-        end
-        if line.fee != target.expected_fee
-          return ['fee_mismatch', "line takes a fee of #{line.fee}, the fee schedule gives #{target.expected_fee}"]
-        end
-
         evidence = late_evidence(line, target)
-        return [nil, nil] unless evidence
-
-        due = @config.due_on(target.happened_at)
-        ['late', "due on #{due} and missing from the #{evidence} file, which already knew about it; " \
-                 "arrived #{(line.settled_on - due).to_i} days after its due date"]
+        if evidence
+          due = @config.due_on(target.happened_at)
+          problems << ['late', "due on #{due} and missing from the #{evidence} file, which already knew about it; " \
+                               "arrived #{(line.settled_on - due).to_i} days after its due date"]
+        end
+        problems
       end
 
       # A line is late only if an earlier file we ingested should have held it: its
@@ -277,15 +313,6 @@ module Clearinghouse
                else "acquirer return for dispute #{target.flow_id} on #{target.payment_intent}"
                end
         "#{what} (line #{line.line_id}, #{line.settled_on})"
-      end
-
-      sig { params(reason: T.nilable(String)).returns(String) }
-      def outcome_for(reason)
-        case reason
-        when nil then 'cleared'
-        when 'late' then 'late'
-        else 'mismatch'
-        end
       end
 
       sig do
