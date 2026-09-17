@@ -1,0 +1,297 @@
+{
+  "experiment": "exp5-reconciliation",
+  "label": "smoke",
+  "command": "bin/exp-reconciliation --reset --smoke",
+  "seed": 1,
+  "driver": "api",
+  "config": {
+    "seed": 1,
+    "payments": 120,
+    "discrepancies": 12,
+    "merchants": 3,
+    "days": 10,
+    "tail_days": 14,
+    "start": "2026-01-01",
+    "refund_rate": 0.15,
+    "dispute_rate": 0.03,
+    "decline_rate": 0.02,
+    "accept_rate": 0.25,
+    "lagging_every_days": 3
+  },
+  "machine": {
+    "cpu": "Apple M3 Pro",
+    "cores": "12",
+    "memory_gb": 18,
+    "postgres": "16.15 (Debian 16.15-1.pgdg13+2)",
+    "note": "Postgres in Docker (docker compose, container clearinghouse-db-1)",
+    "db_pool": 8
+  },
+  "wall_seconds": 111.9,
+  "workload": {
+    "payouts_skipped": 35,
+    "captured": 119,
+    "payouts_sent": 28,
+    "lagging_captures": 3,
+    "refunds": 19,
+    "declined": 1,
+    "disputes_lost_at_acquirer": 4,
+    "disputes_won_at_acquirer": 3,
+    "payouts_paid": 28,
+    "disputes_lost": 4,
+    "disputes_won": 3,
+    "disputes_closed_by_merchant": 2,
+    "disputes_closed_by_acquirer": 5,
+    "lines_mismatch": 7,
+    "lines_cleared": 140,
+    "lines_late": 2,
+    "lines_unknown": 1,
+    "payments_planned": 120,
+    "payment_intents_succeeded": 122,
+    "disputes_opened": 7,
+    "settlement_files": 24,
+    "settlement_lines": 150
+  },
+  "score": {
+    "injected": {
+      "missing": 2,
+      "duplicate": 0,
+      "amount_mismatch": 4,
+      "fee_mismatch": 3,
+      "late": 2,
+      "unknown_payment": 1
+    },
+    "detected": {
+      "missing": 2,
+      "duplicate": 0,
+      "amount_mismatch": 4,
+      "fee_mismatch": 3,
+      "late": 2,
+      "unknown_payment": 1
+    },
+    "detected_as_another_type": [],
+    "not_observable": [],
+    "undetected": [],
+    "false_exceptions": [],
+    "missing_then_arrived": 0,
+    "carried_over_not_injected": 3,
+    "carried_over_flagged_late": 0
+  },
+  "exceptions_by_reason": {
+    "unknown_payment": 1,
+    "fee_mismatch": 3,
+    "amount_mismatch": 4,
+    "late": 2,
+    "missing": 2
+  },
+  "explainability_before_resolving": [
+    {
+      "flow_type": "dispute",
+      "currency": "jpy",
+      "flows": 5,
+      "explained_flows": 5,
+      "volume": 153470,
+      "explained_volume": 153470,
+      "share": 1.0
+    },
+    {
+      "flow_type": "dispute",
+      "currency": "usd",
+      "flows": 2,
+      "explained_flows": 2,
+      "volume": 46129,
+      "explained_volume": 46129,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payment",
+      "currency": "jpy",
+      "flows": 49,
+      "explained_flows": 46,
+      "volume": 1253712,
+      "explained_volume": 1154176,
+      "share": 0.920607
+    },
+    {
+      "flow_type": "payment",
+      "currency": "kwd",
+      "flows": 34,
+      "explained_flows": 31,
+      "volume": 948327,
+      "explained_volume": 877278,
+      "share": 0.92508
+    },
+    {
+      "flow_type": "payment",
+      "currency": "usd",
+      "flows": 39,
+      "explained_flows": 37,
+      "volume": 832713,
+      "explained_volume": 802549,
+      "share": 0.963776
+    },
+    {
+      "flow_type": "payout",
+      "currency": "jpy",
+      "flows": 10,
+      "explained_flows": 10,
+      "volume": 980299,
+      "explained_volume": 980299,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payout",
+      "currency": "kwd",
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 778951,
+      "explained_volume": 778951,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payout",
+      "currency": "usd",
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 671256,
+      "explained_volume": 671256,
+      "share": 1.0
+    },
+    {
+      "flow_type": "refund",
+      "currency": "jpy",
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 222727,
+      "explained_volume": 222727,
+      "share": 1.0
+    },
+    {
+      "flow_type": "refund",
+      "currency": "kwd",
+      "flows": 5,
+      "explained_flows": 4,
+      "volume": 160439,
+      "explained_volume": 146955,
+      "share": 0.915956
+    },
+    {
+      "flow_type": "refund",
+      "currency": "usd",
+      "flows": 5,
+      "explained_flows": 5,
+      "volume": 136139,
+      "explained_volume": 136139,
+      "share": 1.0
+    }
+  ],
+  "resolutions": {
+    "none": 1,
+    "write_off": 9
+  },
+  "explainability_after_resolving": [
+    {
+      "flow_type": "dispute",
+      "currency": "jpy",
+      "flows": 5,
+      "explained_flows": 5,
+      "volume": 153470,
+      "explained_volume": 153470,
+      "share": 1.0
+    },
+    {
+      "flow_type": "dispute",
+      "currency": "usd",
+      "flows": 2,
+      "explained_flows": 2,
+      "volume": 46129,
+      "explained_volume": 46129,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payment",
+      "currency": "jpy",
+      "flows": 49,
+      "explained_flows": 49,
+      "volume": 1253712,
+      "explained_volume": 1253712,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payment",
+      "currency": "kwd",
+      "flows": 34,
+      "explained_flows": 34,
+      "volume": 948327,
+      "explained_volume": 948327,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payment",
+      "currency": "usd",
+      "flows": 39,
+      "explained_flows": 39,
+      "volume": 832713,
+      "explained_volume": 832713,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payout",
+      "currency": "jpy",
+      "flows": 10,
+      "explained_flows": 10,
+      "volume": 980299,
+      "explained_volume": 980299,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payout",
+      "currency": "kwd",
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 778951,
+      "explained_volume": 778951,
+      "share": 1.0
+    },
+    {
+      "flow_type": "payout",
+      "currency": "usd",
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 671256,
+      "explained_volume": 671256,
+      "share": 1.0
+    },
+    {
+      "flow_type": "refund",
+      "currency": "jpy",
+      "flows": 9,
+      "explained_flows": 9,
+      "volume": 222727,
+      "explained_volume": 222727,
+      "share": 1.0
+    },
+    {
+      "flow_type": "refund",
+      "currency": "kwd",
+      "flows": 5,
+      "explained_flows": 5,
+      "volume": 160439,
+      "explained_volume": 160439,
+      "share": 1.0
+    },
+    {
+      "flow_type": "refund",
+      "currency": "usd",
+      "flows": 5,
+      "explained_flows": 5,
+      "volume": 136139,
+      "explained_volume": 136139,
+      "share": 1.0
+    }
+  ],
+  "invariant_violations": {
+    "before": 0,
+    "after": 0
+  },
+  "balance_drifts": 0
+}

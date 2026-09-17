@@ -1,0 +1,102 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 5: reconciliation of a simulated month with injected discrepancies.
+# Runs the acquirer simulator and the API in this process on real ports, drives a
+# month of traffic through the API with the Ruby client library, and scores the
+# reconciler's exceptions against the simulator's manifests. Writes the result as JSON
+# under results/exp5-reconciliation/ and prints a summary.
+#
+#   bin/exp-reconciliation --reset                        the published run (seed 1)
+#   bin/exp-reconciliation --reset --seed 2 --payments 600 --discrepancies 30
+#   bin/exp-reconciliation --reset --smoke                small and quick
+#
+# --reset empties the database named by CLEARINGHOUSE_DB (it must look like a test or
+# experiment database). Without it the run refuses a database that already has money.
+
+require 'bundler/setup'
+require 'fileutils'
+require 'json'
+require 'optparse'
+require 'securerandom'
+require_relative '../lib/clearinghouse'
+require_relative '../lib/clearinghouse/experiments/reconciliation_month'
+
+command = "bin/exp-reconciliation #{ARGV.join(' ')}".strip
+options = { seed: 1, payments: 1_500, discrepancies: 60, days: 30, tail: 14, reset: false,
+            label: 'full', out: File.expand_path('../results/exp5-reconciliation', __dir__),
+            machine_note: 'Postgres in Docker (docker compose, container clearinghouse-db-1)' }
+OptionParser.new do |opts|
+  opts.on('--seed N', Integer) { |v| options[:seed] = v }
+  opts.on('--payments N', Integer) { |v| options[:payments] = v }
+  opts.on('--discrepancies N', Integer) { |v| options[:discrepancies] = v }
+  opts.on('--days N', Integer) { |v| options[:days] = v }
+  opts.on('--tail N', Integer) { |v| options[:tail] = v }
+  opts.on('--reset') { options[:reset] = true }
+  opts.on('--smoke') { options.merge!(payments: 120, discrepancies: 12, days: 10, label: 'smoke') }
+  opts.on('--out DIR') { |v| options[:out] = v }
+  opts.on('--machine-note TEXT') { |v| options[:machine_note] = v }
+end.parse!
+
+include Clearinghouse # rubocop:disable Style/MixinUsage
+
+month = Experiments::ReconciliationMonth
+config = month::Config.new(seed: options[:seed], payments: options[:payments],
+                           discrepancies: options[:discrepancies], days: options[:days],
+                           tail_days: options[:tail])
+
+owner = DB.connect(role: :owner, max_connections: 1)
+if options[:reset]
+  month.reset!(owner)
+elsif owner[:ledger_transactions].any?
+  abort "#{owner.opts[:database]} already has ledger transactions; run with --reset to empty it first"
+end
+owner.disconnect
+
+pool = 8
+db = DB.connect(role: :app, max_connections: pool)
+harness = month::Harness.new(db: db, config: config)
+started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+begin
+  result = harness.run
+ensure
+  harness.stop
+end
+elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+sysctl = ->(key) { `sysctl -n #{key} 2>/dev/null`.strip }
+memory = sysctl.call('hw.memsize')
+record = {
+  'experiment' => 'exp5-reconciliation', 'label' => options[:label], 'command' => command,
+  'seed' => config.seed, 'driver' => 'api', 'config' => config.serialize,
+  'machine' => { 'cpu' => sysctl.call('machdep.cpu.brand_string'), 'cores' => sysctl.call('hw.ncpu'),
+                 'memory_gb' => memory.empty? ? nil : (Integer(memory) / (1024**3)),
+                 'postgres' => db.fetch('SHOW server_version').single_value, 'note' => options[:machine_note],
+                 'db_pool' => pool },
+  'wall_seconds' => elapsed.round(1)
+}.merge(result)
+
+FileUtils.mkdir_p(options[:out])
+path = File.join(options[:out], "seed-#{config.seed}-#{options[:label]}.json")
+File.write(path, "#{JSON.pretty_generate(record)}\n")
+
+score = result.fetch('score')
+puts "exp5 #{options[:label]} seed #{config.seed}: #{config.payments} payments over #{config.days} days " \
+     "(+#{config.tail_days} quiet), #{config.discrepancies} discrepancies requested"
+puts "#{'type'.ljust(16)}#{'injected'.rjust(10)}#{'detected'.rjust(10)}"
+score.fetch('injected').each do |type, count|
+  puts "#{type.ljust(16)}#{count.to_s.rjust(10)}#{score.fetch('detected').fetch(type).to_s.rjust(10)}"
+end
+puts "detected as another type: #{score.fetch('detected_as_another_type').length}, " \
+     "undetected: #{score.fetch('undetected').length}, not observable: #{score.fetch('not_observable').length}, " \
+     "false exceptions: #{score.fetch('false_exceptions').length}, " \
+     "missing then arrived: #{score.fetch('missing_then_arrived')}"
+puts "carried-over lines not injected: #{score.fetch('carried_over_not_injected')}, " \
+     "called late: #{score.fetch('carried_over_flagged_late')}"
+%w[explainability_before_resolving explainability_after_resolving].each do |key|
+  shares = result.fetch(key).map { |e| "#{e['flow_type']}/#{e['currency']} #{(e['share'] * 100).round(2)}%" }
+  puts "#{key.tr('_', ' ')}: #{shares.join(', ')}"
+end
+puts "ledger invariant violations: #{result.fetch('invariant_violations')}, " \
+     "balance drifts: #{result.fetch('balance_drifts')}"
+puts "wrote #{path} (#{elapsed.round(1)}s)"
