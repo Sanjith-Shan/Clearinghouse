@@ -239,11 +239,131 @@ module Experiments
       end
     end
 
+    # POST /v1/reviews/:id/approve on a captured payment under review.
+    class ApproveReviewScenario < Scenario
+      sig { override.returns(String) }
+      def flow = 'review.approve'
+
+      sig { override.params(api: ApiClient, tag: String).returns(T::Hash[String, String]) }
+      def setup(api, tag) = intent(api, tag, confirm: true)
+
+      sig do
+        override.params(db: Sequel::Database, merchant_id: String, clock: Clearinghouse::Clock,
+                        state: T::Hash[String, String]).returns(T::Hash[String, String])
+      end
+      def prepare(db, merchant_id, clock, state) = ReviewHold.open(db, merchant_id, clock, state)
+
+      sig { override.params(state: T::Hash[String, String]).returns(Request) }
+      def request(state) = Request.new(path: "/v1/reviews/#{state.fetch('review_id')}/approve", params: {})
+
+      sig { override.params(facts: T::Hash[String, T.untyped]).returns(T::Array[String]) }
+      def resting_problems(facts)
+        review = facts.fetch('review', {}).slice('resolution', 'refunded')
+        problems = expect_intent(facts, 'status' => 'succeeded', 'amount_received' => 2000, 'amount_refunded' => 0)
+        problems << "review is #{review}, expected approved with no refund" unless
+          review == { 'resolution' => 'approved', 'refunded' => false }
+        problems
+      end
+    end
+
+    # Money a payout can take: a card payment through the API, then the
+    # availability sweep run on a clock past the merchant's payout delay.
+    module Funding
+      extend T::Sig
+
+      sig { params(db: Sequel::Database, clock: Clearinghouse::Clock).void }
+      def self.release!(db, clock)
+        later = Clearinghouse::Clock::Test.new(start: clock.now + (3 * Clearinghouse::Clock::SECONDS_PER_DAY))
+        Clearinghouse::Balances::Availability.release_due!(db, clock: later)
+      end
+    end
+
+    PAYOUT_AMOUNT = 1000
+
+    # The subject of a payout scenario is the payout, not the payment that funded it.
+    class PayoutScenario < Scenario
+      abstract!
+
+      sig { override.params(api: ApiClient, tag: String).returns(T::Hash[String, String]) }
+      def setup(api, tag) = intent(api, tag, confirm: true)
+
+      sig { override.params(state: T::Hash[String, String], reply: Reply).returns(T.nilable(String)) }
+      def intent_id(state, reply)
+        id = state['payout_id'] || reply.json['id']
+        id.is_a?(String) && id.start_with?('po_') ? id : nil
+      end
+
+      private
+
+      sig { params(facts: T::Hash[String, T.untyped], expected: T::Hash[String, T.untyped]).returns(T::Array[String]) }
+      def expect_payout(facts, expected)
+        got = facts.fetch('payout', {}).slice(*expected.keys)
+        got == expected ? [] : ["payout is #{got}, expected #{expected}"]
+      end
+    end
+
+    # POST /v1/payouts for part of the available balance: one call to the bank.
+    class CreatePayoutScenario < PayoutScenario
+      sig { override.returns(String) }
+      def flow = 'payout.create'
+
+      sig do
+        override.params(db: Sequel::Database, merchant_id: String, clock: Clearinghouse::Clock,
+                        state: T::Hash[String, String]).returns(T::Hash[String, String])
+      end
+      def prepare(db, merchant_id, clock, state) # rubocop:disable Lint/UnusedMethodArgument
+        Funding.release!(db, clock)
+        state
+      end
+
+      sig { override.params(_state: T::Hash[String, String]).returns(Request) }
+      def request(_state) = Request.new(path: '/v1/payouts', params: { 'amount' => PAYOUT_AMOUNT })
+
+      sig { override.params(facts: T::Hash[String, T.untyped]).returns(T::Array[String]) }
+      def resting_problems(facts)
+        bank = facts.fetch('acquirer').map { |op| op.slice('type', 'amount') }
+        problems = expect_payout(facts, 'status' => 'in_transit', 'amount' => PAYOUT_AMOUNT,
+                                        'recovery_point' => 'bank_recorded')
+        problems << "bank operations are #{bank}, expected one payout of #{PAYOUT_AMOUNT}" unless
+          bank == [{ 'type' => 'payout', 'amount' => PAYOUT_AMOUNT }]
+        problems
+      end
+    end
+
+    # POST /v1/payouts/:id/cancel on a payout reserved but not yet sent to the bank.
+    class CancelPayoutScenario < PayoutScenario
+      sig { override.returns(String) }
+      def flow = 'payout.cancel'
+
+      sig do
+        override.params(db: Sequel::Database, merchant_id: String, clock: Clearinghouse::Clock,
+                        state: T::Hash[String, String]).returns(T::Hash[String, String])
+      end
+      def prepare(db, merchant_id, clock, state)
+        Funding.release!(db, clock)
+        payout = Clearinghouse::Payouts.reserve!(db, merchant_id: merchant_id, currency: 'usd', clock: clock,
+                                                     amount: PAYOUT_AMOUNT)
+        state.merge('payout_id' => payout.id)
+      end
+
+      sig { override.params(state: T::Hash[String, String]).returns(Request) }
+      def request(state) = Request.new(path: "/v1/payouts/#{state.fetch('payout_id')}/cancel", params: {})
+
+      sig { override.params(facts: T::Hash[String, T.untyped]).returns(T::Array[String]) }
+      def resting_problems(facts)
+        problems = expect_payout(facts, 'status' => 'canceled', 'amount' => PAYOUT_AMOUNT,
+                                        'recovery_point' => 'balance_reserved')
+        problems << "the bank saw #{facts.fetch('acquirer')}, expected nothing" unless facts.fetch('acquirer').empty?
+        problems
+      end
+    end
+
     class MissingScenarioError < StandardError; end
 
     SCENARIOS = T.let(
       [CreateScenario.new, ConfirmScenario.new, CaptureScenario.new, CancelScenario.new, RefundScenario.new,
-       RejectReviewScenario.new].to_h { |s| [s.flow, s] }.freeze,
+       RejectReviewScenario.new, ApproveReviewScenario.new, CreatePayoutScenario.new, CancelPayoutScenario.new]
+        .to_h { |s| [s.flow, s] }.freeze,
       T::Hash[String, Scenario]
     )
 

@@ -84,7 +84,11 @@ module Experiments
                          'refunds' => @db[:refunds].where(merchant_id: merchant_id).order(:created_at, :id)
                                                    .map { |r| r.slice(:status, :amount).transform_keys(&:to_s) },
                          'events' => @db[:events].where(merchant_id: merchant_id).order(:seq).select_map(:type),
-                         'ledger' => @db[:ledger_transactions].order(:id).select_map(%i[flow_type description])
+                         'ledger' => @db[:ledger_transactions].order(:id).select_map(%i[flow_type description]),
+                         'payouts' => @db[:payouts].where(merchant_id: merchant_id).order(:created_at, :id)
+                                                   .select_map(%i[status recovery_point amount]),
+                         'reviews' => @db[:risk_holds].where(merchant_id: merchant_id).order(:opened_at, :id)
+                                                      .select_map(%i[resolution held_amount])
                        })
       end
 
@@ -125,6 +129,8 @@ module Experiments
                keys: T::Hash[String, String]).returns(T::Hash[String, T.untyped])
       end
       def raw_facts(intent_id, acquirer, keys)
+        return payout_facts(intent_id, acquirer, keys) if intent_id.start_with?('po_')
+
         intent = @db[:payment_intents].where(id: intent_id).first || {}
         refunds = @db[:refunds].where(payment_intent_id: intent_id).order(:created_at, :id).all
         hold = @db[:risk_holds].where(flow_id: intent_id).first
@@ -136,6 +142,22 @@ module Experiments
                   'acquirer' => acquirer_side(intent_id, intent[:acquirer_reference], acquirer) }
         facts['review'] = review_state(hold) if hold
         facts
+      end
+
+      # A payout scenario's subject: the payout, its events and ledger flow, and
+      # what the bank received under its reference.
+      sig do
+        params(payout_id: String, acquirer: T::Hash[String, T.untyped],
+               keys: T::Hash[String, String]).returns(T::Hash[String, T.untyped])
+      end
+      def payout_facts(payout_id, acquirer, keys)
+        row = @db[:payouts].where(id: payout_id).first || {}
+        ops = acquirer.fetch('operations').select { |op| op['reference'] == payout_id }
+        { 'payout' => row.slice(:status, :amount, :currency, :recovery_point, :automatic, :failure_code)
+                         .transform_keys(&:to_s),
+          'events' => events([payout_id], keys),
+          'ledger' => ledger([payout_id]),
+          'acquirer' => ops.map { |op| op.slice('type', 'status', 'amount', 'idempotency_key') } }
       end
 
       # A risk review on the payment, when it has one.
