@@ -45,6 +45,10 @@ The design is built from public engineering writing, credited here.
 - [Isolation](docs/design/isolation.md): experiment 3, READ COMMITTED read-then-write against `FOR UPDATE` against SERIALIZABLE with retry, the anomalies each allows, and what ships where.
 - [Model-based testing](docs/design/model-testing.md): experiment 4. A reference model of the domain, random operation sequences checked against the ledger and the API after every step, shrinking to a replay script, and a planted-bug demo.
 
+## Testing
+
+- [Wall-clock assertions](docs/design/testing-timing.md): why deadline specs have a load-tolerant form that always runs and a strict `:timing` form for `CLEARINGHOUSE_STRICT_TIMING=1`.
+
 ## Bugs the harness caught
 
 See `docs/bugs/`.

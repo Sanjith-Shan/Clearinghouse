@@ -26,3 +26,6 @@ bin/ci
   or experiment caught it, the fix commit. Real ones only.
 - **Experiment output** goes in `results/<experiment>/` with the machine, Postgres
   version, pool size and command that produced it.
+- **Timing specs.** Tight wall-clock bounds are tagged `:timing` and run only with
+  `CLEARINGHOUSE_STRICT_TIMING=1`; each has a load-tolerant twin that always runs
+  (docs/design/testing-timing.md). Run `CLEARINGHOUSE_STRICT_TIMING=1 bin/ci` on a quiet machine.

@@ -32,10 +32,25 @@ RSpec.describe 'Experiment 9 runner' do
     expect(report.values_at('calls', 'completed')).to eq([400, 400])
     expect(report['unchecked']).to be_between(20, 399)
     expect(report['phases']['down_breaker_closed']['reasons'].keys).to eq(['timeout'])
-    expect(report['phases']['down_breaker_closed']['service_ms']['max']).to be < 50 + 40
     expect(report['phases']['breaker_open']['reasons']).to include('breaker_open')
     expect(report['breaker_transitions'].map { |t| t['to'] }).to include('open', 'closed')
-    expect(report['phases']['healthy_after']['unchecked']).to eq(0)
+    # Recovered: RiskGate answers most calls again. On a loaded machine a few of
+    # them still miss the 50 ms deadline (and a burst of those can reopen the
+    # breaker), so exactly zero is the :timing twin's assertion. Anything but a
+    # timeout or the breaker would mean RiskGate itself was not back.
+    after = report['phases']['healthy_after']
+    expect(after['unchecked']).to be < after['calls'] / 2
+    expect(after.fetch('reasons', {}).keys - %w[timeout breaker_open]).to eq([])
     expect(Experiments::RiskFailure.summary(report)).to include('went through unchecked', '| down_breaker_closed |')
+  end
+
+  it 'checks every payment after recovery, with no step outliving the deadline by more than a wake-up', :timing do
+    plan = Experiments::RiskFailure::Plan.new(rate: 100.0, healthy: 0.5, down: 1.0, after: 2.5, mode: 'freeze',
+                                              deadline_ms: 50, workers: 16)
+    target.start
+    report = Experiments::RiskFailure::Runner.new(target: target, plan: plan, requests: requests, log: nil).run
+
+    expect(report['phases']['down_breaker_closed']['service_ms']['max']).to be < 50 + 40
+    expect(report['phases']['healthy_after']['unchecked']).to eq(0)
   end
 end

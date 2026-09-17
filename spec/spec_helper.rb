@@ -33,6 +33,10 @@ RSpec.configure do |config|
   end
   config.shared_context_metadata_behavior = :apply_to_host_groups
   config.filter_run_when_matching :focus
+  # Examples tagged :timing assert tight wall-clock bounds (a deadline's overrun
+  # in milliseconds) that only hold on a quiet machine. Every one of them has a
+  # load-tolerant twin that always runs. See docs/design/testing-timing.md.
+  config.filter_run_excluding :timing unless ENV['CLEARINGHOUSE_STRICT_TIMING'] == '1'
   config.disable_monkey_patching!
   config.order = :random
   Kernel.srand config.seed

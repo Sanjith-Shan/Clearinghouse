@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Everything GitHub Actions runs, runnable locally. A branch merges only when this passes.
+# CLEARINGHOUSE_STRICT_TIMING=1 also runs the strict wall-clock specs tagged :timing
+# (docs/design/testing-timing.md); run it that way on a quiet machine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CLEARINGHOUSE_ENV=test
