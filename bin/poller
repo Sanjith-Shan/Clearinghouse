@@ -1,0 +1,53 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Reads the acquirer's notification feed and applies each notification once. Safe to
+# run more than one: a notification's effects, its processed_notifications row and the
+# cursor commit together, and a second poller skips what the first applied.
+#
+#   bin/poller                 poll every 5 seconds until interrupted
+#   bin/poller --once          one poll, then exit (non-zero if it failed)
+#   bin/poller --interval 1 --name acquirer
+
+require 'bundler/setup'
+require 'json'
+require 'optparse'
+require_relative '../lib/clearinghouse'
+
+options = { once: false, interval: 5.0, name: 'acquirer' }
+OptionParser.new do |opts|
+  opts.on('--once') { options[:once] = true }
+  opts.on('--interval SECONDS', Float) { |v| options[:interval] = v }
+  opts.on('--name NAME') { |v| options[:name] = v }
+end.parse!
+
+db = Clearinghouse::DB.connect(role: :app, max_connections: 2)
+clock = Clearinghouse::Clock::Real.new
+poller = Clearinghouse::Acquirer::NotificationPoller.new(
+  db: db, client: Clearinghouse::Acquirer::Client.new(clock: clock), clock: clock,
+  handlers: Clearinghouse::Settlement.notification_handlers, name: options[:name]
+)
+
+def log(fields)
+  $stdout.puts(JSON.generate(fields))
+  $stdout.flush
+end
+
+stop = false
+%w[INT TERM].each { |signal| trap(signal) { stop = true } }
+until stop
+  ok = begin
+    result = poller.poll
+    log('level' => result.unavailable ? 'warn' : 'info', 'processed' => result.processed,
+        'already_processed' => result.already_processed, 'cursor' => result.cursor,
+        'unavailable' => result.unavailable)
+    result.unavailable.nil?
+  rescue StandardError => e
+    # The cursor stays on the last committed notification, so the next poll retries
+    # the one that failed. Nothing is skipped.
+    log('level' => 'error', 'exception' => e.class.name, 'message' => e.message)
+    false
+  end
+  exit(ok ? 0 : 1) if options[:once]
+  sleep(options[:interval])
+end
