@@ -215,7 +215,9 @@ another refund.
 
 ## Balance
 
-`GET /v1/balance` reads `merchant:<id>:available` and `:pending` from the ledger for every
-currency the merchant has accounts in (zero USD when there are none), in Stripe's shape. It
+`GET /v1/balance` reads `merchant:<id>:available`, `:pending` and `:held` from the ledger for
+every currency the merchant has accounts in (zero USD when there are none), in Stripe's shape
+plus a `held` array: money under risk review, which no payout can reach until the review
+closes (`payouts.md`). Adding a field is backward compatible, so it has no version change. It
 is a read of `account_balances` with no lock. The payout work takes `balance_for_update`
 when it needs one.

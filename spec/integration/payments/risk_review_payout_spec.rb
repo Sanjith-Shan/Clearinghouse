@@ -55,6 +55,13 @@ RSpec.describe 'A reviewed payment and payouts', :db do
 
   def balances = %w[pending held available].to_h { |kind| [kind, balance(kind)] }
 
+  # The same three, as GET /v1/balance reports them in USD.
+  def api_balance
+    get '/v1/balance', {}, auth
+    usd = ->(entries) { entries.find { |b| b['currency'] == 'usd' }.fetch('amount') }
+    %w[pending held available].to_h { |kind| [kind, usd.call(json_body.fetch(kind))] }
+  end
+
   def review_for(intent_id)
     get '/v1/reviews', { 'open' => 'true' }, auth
     json_body['data'].find { |r| r['payment_intent'] == intent_id }
@@ -71,6 +78,7 @@ RSpec.describe 'A reviewed payment and payouts', :db do
     seen = []
     release_due!
     seen << balances
+    expect(api_balance).to eq(seen.last) # GET /v1/balance shows held alongside the rest
     expect(payout!).to include('amount' => 4_825, 'status' => 'in_transit')
     seen << balances
     expect(api_post('/v1/payouts').status).to eq(400) # nothing available; held is not payable

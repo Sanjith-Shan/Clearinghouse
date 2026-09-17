@@ -290,7 +290,8 @@ reaper's schedule.
 `bin/completer` runs, on every tick, the authorization expiry sweep, a completer pass and a
 reaper pass, and prints one JSON line with what each did. `--once` does a single tick, and
 `--interval`, `--grace` and `--limit` tune it. It is configured like the server
-(`Dependencies.from_env`).
+(`Dependencies.from_env`). `bin/scheduler` (`scheduler.md`) runs the same passes along with
+the availability and payout sweeps, and is what a deployment runs.
 
 ## Fault injection
 

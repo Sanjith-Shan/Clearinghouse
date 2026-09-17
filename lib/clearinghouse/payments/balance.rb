@@ -5,11 +5,13 @@ module Clearinghouse
   module Payments
     # GET /v1/balance, read from the ledger. `pending` is captured money not yet
     # available; `available` can be paid out and goes negative when refunds or
-    # disputes take more than the merchant has (docs/design/ledger.md).
+    # disputes take more than the merchant has (docs/design/ledger.md); `held` is
+    # money under risk review, which no payout can reach until the review closes
+    # (docs/design/payouts.md).
     module Balance
       extend T::Sig
 
-      KINDS = %w[available pending].freeze
+      KINDS = %w[available pending held].freeze
 
       sig { params(db: Sequel::Database, merchant: Merchant).returns(T::Hash[String, T.untyped]) }
       def self.to_api(db, merchant)
