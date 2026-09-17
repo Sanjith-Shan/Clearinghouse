@@ -130,6 +130,11 @@ RSpec.describe Clearinghouse::Acquirer::NotificationPoller, :db do
     expect(Clearinghouse::Ledger::Invariants.check(app_db)).to be_empty
   end
 
+  it 'collects the handlers bin/poller runs with: disputes and payouts' do
+    expect(Clearinghouse::Settlement.notification_handlers(clock: clock).types)
+      .to eq(%w[dispute.closed dispute.opened payout.failed payout.paid])
+  end
+
   it 'refuses to register two handlers for one type' do
     expect { handlers.register('payout.paid') { nil } }.to raise_error(ArgumentError, /already registered/)
     expect(handlers.types).to eq(%w[dispute.closed dispute.opened payout.failed payout.paid])

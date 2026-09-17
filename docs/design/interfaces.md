@@ -231,3 +231,17 @@ Balances::Holds.release_after_refund!(db, flow_id:, clock:)   # Refunds.mark_suc
 Balances::RefundRequester#request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id
 Balances::PaymentsRefundRequester.new(ctx)   # through Payments::Refunds; #finish! after the reject commits
 ```
+## Notifications and disputes (`lib/clearinghouse/acquirer/notification_poller.rb`, `lib/clearinghouse/disputes/`)
+
+```ruby
+NotificationPoller::Handlers#register(type) { |db, notification| ... }   # runs inside the poller's transaction
+Settlement.notification_handlers(clock:) -> Handlers                        # what bin/poller runs with
+PaymentLookup.by_acquirer_reference(db, acquirer_reference) -> Payment(id, merchant_id, currency) | nil
+Disputes::Service#opened / #closed(db, notification), #accept(db, merchant_id:, id:, request: nil)
+```
+
+Payouts registers `payout.paid` and `payout.failed` on the same `Handlers`. A handler must
+not commit; its effects commit with the notification's `processed_notifications` row and the
+cursor. Dispute object: `{id: "dp_...", object: "dispute", payment_intent, amount, currency,
+reason, status: needs_response | won | lost, fee, created, livemode}`. See
+`docs/design/disputes.md`.

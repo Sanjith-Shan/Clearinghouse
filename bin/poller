@@ -25,7 +25,7 @@ db = Clearinghouse::DB.connect(role: :app, max_connections: 2)
 clock = Clearinghouse::Clock::Real.new
 poller = Clearinghouse::Acquirer::NotificationPoller.new(
   db: db, client: Clearinghouse::Acquirer::Client.new(clock: clock), clock: clock,
-  handlers: Clearinghouse::Settlement.notification_handlers, name: options[:name]
+  handlers: Clearinghouse::Settlement.notification_handlers(clock: clock), name: options[:name]
 )
 
 def log(fields)
