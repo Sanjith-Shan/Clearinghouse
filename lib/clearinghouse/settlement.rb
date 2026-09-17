@@ -28,3 +28,4 @@ end
 require_relative 'acquirer/notification_poller'
 require_relative 'payment_lookup'
 require_relative 'disputes'
+require_relative 'reconciliation'

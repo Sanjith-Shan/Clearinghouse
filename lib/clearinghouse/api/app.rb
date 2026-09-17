@@ -59,12 +59,22 @@ module Clearinghouse
       # unknown /v1 path without a key is therefore a 401, not a 404, as in Stripe.)
       UNAUTHENTICATED = [%w[POST /v1/merchants]].freeze
 
+      # Operator routes: platform-wide, so they take the admin token instead of a
+      # merchant's key. Each route checks the token itself (`operator!`).
+      OPERATOR_PATHS = %r{\A/v1/reconciliation_exceptions(/|\z)}
+
       sig { returns(T::Boolean) }
       def requires_secret_key?
         path = request.path_info.to_s
         return false unless path.start_with?('/v1/')
+        return false if OPERATOR_PATHS.match?(path)
 
         UNAUTHENTICATED.none?([request.request_method, path])
+      end
+
+      sig { void }
+      def operator!
+        Auth.admin!(@deps.admin_token, request.get_header('HTTP_AUTHORIZATION'))
       end
 
       sig { returns(Merchant) }
@@ -237,6 +247,7 @@ module Clearinghouse
       register Routes::Payouts
       register Routes::Reviews
       register Routes::Disputes
+      register Routes::ReconciliationExceptions
     end
   end
 end

@@ -4,7 +4,8 @@
 require_relative 'db'
 require_relative '../sim/sim_helper'
 
-DBHelper.clean_tables('acquirer_cursors', 'processed_notifications', 'disputes', 'merchants')
+DBHelper.clean_tables('acquirer_cursors', 'processed_notifications', 'disputes', 'merchants',
+                      'settlement_files', 'settlement_lines', 'reconciliation_exceptions')
 
 # Wiring shared by the settlement specs: an in-process simulator on a real port, a
 # test clock, and a client that sends the clock as Sim-Time.
@@ -92,6 +93,12 @@ module DisputeHelpers
     [intent.fetch('id'), app_db[:payment_intents].where(id: intent.fetch('id')).get(:acquirer_reference)]
   end
 
+  # A refund through the API. Returns [refund id, the acquirer's operation id for it].
+  def refunded(payment, amount)
+    refund = api_request(:post, '/v1/refunds', { payment_intent: payment, amount: amount })
+    [refund.fetch('id'), app_db[:refunds].where(id: refund.fetch('id')).get(:acquirer_operation_id)]
+  end
+
   def poller(hook: nil, handlers: service.register(Clearinghouse::Acquirer::NotificationPoller::Handlers.new))
     Clearinghouse::Acquirer::NotificationPoller.new(db: app_db, client: client, clock: clock, handlers: handlers,
                                                     crash_hook: hook)
@@ -117,5 +124,37 @@ module DisputeHelpers
 
   def dispute_event_types
     dispute_events.map { |event| event['type'] }
+  end
+end
+
+# The reconciler wired to the simulator, and the day-by-day moves its specs make.
+module ReconcilerHelpers
+  def self.included(base)
+    base.let(:ingestor) { Clearinghouse::Reconciliation::Ingestor.new(db: app_db, client: client, clock: clock) }
+  end
+
+  # Moves the clock to 00:30 on `date`, when the day's file is fetched.
+  def on(date)
+    clock.advance_to(Time.utc(date.year, date.month, date.day, 0, 30))
+  end
+
+  def ingest(date, inject: [])
+    on(date)
+    ingestor.ingest(date, inject: inject)
+  end
+
+  def exceptions(reason = nil)
+    scope = app_db[:reconciliation_exceptions]
+    scope = scope.where(reason: reason) if reason
+    scope.order(:created_at, :id).all
+  end
+
+  def open_flows
+    Clearinghouse::Ledger::Clearing.report(app_db, as_of: clock.now, slas: {}).open_flows
+                                   .to_h { |flow| [flow.flow_id, flow.unexplained] }
+  end
+
+  def manifest(date)
+    JSON.parse(Net::HTTP.get(URI("#{sim.url}/admin/settlement_files/#{date.iso8601}/manifest")))
   end
 end

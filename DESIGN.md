@@ -34,6 +34,7 @@ The design is built from public engineering writing, credited here.
 - [Webhook security](docs/design/webhook-security.md): signatures, secret rotation, test vectors shared with the Go verifier, and the SSRF-safe egress path.
 - [Webhook delivery](docs/design/webhooks.md): endpoints, the outbox dispatcher, the SKIP LOCKED queue with leases, at-least-once semantics, retries, and per-endpoint isolation.
 - [Disputes and the notification feed](docs/design/disputes.md): reading the acquirer's feed exactly once in effect, and the dispute lifecycle.
+- [Settlement and reconciliation](docs/design/reconciliation.md): matching settlement files against the ledger, the typed exceptions, and how an operator resolves them.
 - [Acquirer simulator](docs/design/sim.md): the simulated card acquirer, how it drops responses after committing, and why the client separates Unknown from Unavailable.
 - [Client library](docs/design/client.md): the Ruby client, and why it reuses one idempotency key across every retry of a call.
 - [bin/explain](docs/design/explain.md): a readable trace of every ledger entry behind a payment, refund, dispute or payout.

@@ -58,3 +58,5 @@ header is absent when that is not known. See `docs/design/api.md`.
 - `payout_not_cancelable`: the payout has been sent to the bank or has finished. Only a pending payout that has not been sent can be canceled.
 - `review_closed`: the review has already been approved or rejected.
 - `dispute_already_closed`: the dispute was already won, so there is no loss to accept.
+- `reconciliation_exception_resolved`: the reconciliation exception was already resolved.
+- `resolution_invalid`: the resolution cannot apply to this exception (nothing stuck to write off, a transaction from another flow, a blank note).
