@@ -1,0 +1,352 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# A scripted tour of Clearinghouse, end to end over real sockets.
+#
+#   docker compose up -d db && bin/demo
+#   bin/demo [--db NAME]          # default: clearinghouse_demo
+#
+# It creates the database if it is missing, migrates it and empties it, then starts the
+# acquirer simulator, a fake RiskGate and the API server as child processes on free ports and
+# walks one merchant through a simulated two weeks with the Ruby client library
+# (clients/ruby): an idempotent confirm and its replay, a decline, a partial refund, a manual
+# partial capture, the ledger trail of each flow, settlement files reconciled, funds becoming
+# available, a payout the bank pays, and a dispute that opens and is won. The API runs on the
+# wall clock. Everything that happens later (settlement, availability, the acquirer's
+# notifications) is driven here with test clocks moved days ahead, the way the specs do it.
+#
+# The database is emptied at the start of every run, so the name must contain "demo" or
+# "test". Children are stopped by PID on exit. Their logs go to tmp/demo/<timestamp>/.
+
+require 'bundler/setup'
+require 'English'
+require 'fileutils'
+require 'json'
+require 'net/http'
+require 'optparse'
+require 'rbconfig'
+require 'securerandom'
+require 'socket'
+require_relative '../lib/clearinghouse'
+require_relative '../clients/ruby/lib/clearinghouse_client'
+
+ROOT = File.expand_path('..', __dir__)
+DAY = Clearinghouse::Clock::SECONDS_PER_DAY
+# Ports another project on this machine uses. A free port from the OS is never one of these
+# in practice (they are below the ephemeral range), but the check costs nothing.
+RESERVED_PORTS = [13_000, *13_306..13_324, *18_011..18_024, 18_404, 19_090].freeze
+
+db_name = 'clearinghouse_demo'
+OptionParser.new do |o|
+  o.banner = 'Usage: bin/demo [--db NAME]'
+  o.on('--db NAME', 'database to create if missing, migrate and empty (default clearinghouse_demo)') do |v|
+    db_name = v
+  end
+end.parse!
+abort "bin/demo empties its database first, so its name must contain demo or test: #{db_name}" unless
+  db_name.match?(/demo|test/)
+
+$stdout.sync = true
+
+def section(number, title)
+  puts
+  puts "== #{number}. #{title}"
+end
+
+def say(text = '') = puts("   #{text}")
+
+def money(amount, currency = 'usd')
+  Clearinghouse::Money.of(Integer(amount), currency).to_s
+end
+
+def free_port
+  loop do
+    server = TCPServer.new('127.0.0.1', 0)
+    port = server.addr[1]
+    server.close
+    return port unless RESERVED_PORTS.include?(port)
+  end
+end
+
+def wait_for(what, pid, deadline: 60)
+  stop_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + deadline
+  loop do
+    return if yield
+  rescue SystemCallError, IOError, Net::OpenTimeout, Net::ReadTimeout
+    raise "#{what} exited during boot (see its log)" if Process.waitpid(pid, Process::WNOHANG)
+    raise "#{what} did not come up within #{deadline}s (see its log)" if
+      Process.clock_gettime(Process::CLOCK_MONOTONIC) > stop_at
+
+    sleep 0.2
+  end
+end
+
+def port_open?(port)
+  TCPSocket.new('127.0.0.1', port).close
+  true
+end
+
+def http_ok?(url) = Net::HTTP.get_response(URI(url)).is_a?(Net::HTTPSuccess)
+
+def balance_line(balance)
+  %w[available pending].map do |kind|
+    parts = Array(balance[kind]).map { |b| money(b['amount'], b['currency']) }
+    "#{kind} #{parts.empty? ? '0' : parts.join(', ')}"
+  end.join('   ')
+end
+
+def lines(count) = count == 1 ? '1 line' : "#{count} lines"
+
+def explain(id, db_name)
+  puts
+  system(RbConfig.ruby, File.join(ROOT, 'bin/explain'), id, '--db', db_name, '--no-color', chdir: ROOT) ||
+    say("(bin/explain exited with #{$CHILD_STATUS&.exitstatus})")
+end
+
+# Creates the database if it is missing, migrates it, and empties every table (as the owner,
+# with triggers off for the session, which is the only way past the ledger's append-only
+# triggers), so a run always starts from nothing and settlement files never collide.
+def prepare_database(name)
+  admin = Clearinghouse::DB.connect(role: :owner, database: 'postgres', max_connections: 1)
+  admin.run("CREATE DATABASE #{admin.literal(Sequel.identifier(name))}") if
+    admin[:pg_database].where(datname: name).empty?
+  admin.disconnect
+  Clearinghouse::DB.migrate!(database: name)
+  owner = Clearinghouse::DB.connect(role: :owner, database: name, max_connections: 1)
+  tables = owner.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").map(:tablename) -
+           ['schema_migrations']
+  owner.transaction do
+    owner.run('SET LOCAL session_replication_role = replica')
+    owner.run("TRUNCATE #{tables.map { |t| owner.literal(Sequel.identifier(t)) }.join(', ')} RESTART IDENTITY")
+  end
+  owner.disconnect
+end
+
+# The simulator's admin endpoint that closes a dispute, at a simulated time.
+def resolve_dispute(sim_url, dispute_id, outcome, at)
+  uri = URI("#{sim_url}/admin/disputes/#{dispute_id}/resolve")
+  request = Net::HTTP::Post.new(uri)
+  request['Sim-Time'] = at.utc.iso8601(6)
+  request['Content-Type'] = 'application/json'
+  request.body = JSON.generate('outcome' => outcome)
+  Net::HTTP.start(uri.host, uri.port) { |http| http.request(request) }
+end
+
+begin
+  prepare_database(db_name)
+rescue Sequel::DatabaseConnectionError => e
+  host = ENV.fetch('CLEARINGHOUSE_DB_HOST', Clearinghouse::DB::DEFAULT_HOST)
+  warn "Cannot reach Postgres at #{host}. Start it with `docker compose up -d db`, then run bin/demo again."
+  warn "(#{e.message.lines.first&.strip})"
+  exit 1
+end
+
+logs = File.join(ROOT, 'tmp/demo', Time.now.utc.strftime('%Y%m%dT%H%M%SZ'))
+FileUtils.mkdir_p(logs)
+sim_port = free_port
+risk_port = free_port
+api_port = free_port
+sim_url = "http://127.0.0.1:#{sim_port}"
+api_url = "http://127.0.0.1:#{api_port}"
+admin_token = "demo_admin_#{SecureRandom.hex(8)}"
+children = {}
+db = nil
+
+begin
+  puts 'Clearinghouse demo. Everything is simulated: test card tokens, a simulated acquirer and bank, no real money.'
+  puts "database #{db_name} (created if missing, migrated, emptied), logs in #{logs.delete_prefix("#{ROOT}/")}"
+
+  children['acquirer simulator'] =
+    Process.spawn(RbConfig.ruby, 'bin/sim', '--port', sim_port.to_s, '--threads', '4',
+                  chdir: ROOT, out: File.join(logs, 'sim.log'), err: %i[child out])
+  wait_for('bin/sim', children['acquirer simulator']) { http_ok?("#{sim_url}/health") }
+
+  children['fake RiskGate'] =
+    Process.spawn(RbConfig.ruby, 'bin/fake-riskgate', '--port', risk_port.to_s,
+                  chdir: ROOT, out: File.join(logs, 'fake-riskgate.log'), err: %i[child out])
+  wait_for('bin/fake-riskgate', children['fake RiskGate']) { port_open?(risk_port) }
+
+  server_env = { 'PORT' => api_port.to_s, 'PUMA_THREADS' => '2:4', 'CLEARINGHOUSE_DB' => db_name,
+                 'CLEARINGHOUSE_DB_POOL' => '4', 'CLEARINGHOUSE_ACQUIRER_URL' => sim_url,
+                 'RISKGATE_URL' => "http://127.0.0.1:#{risk_port}", 'CLEARINGHOUSE_ADMIN_TOKEN' => admin_token }
+  children['API server'] =
+    Process.spawn(server_env, 'bin/server', chdir: ROOT, out: File.join(logs, 'server.log'), err: %i[child out])
+  wait_for('bin/server', children['API server']) { http_ok?("#{api_url}/healthz") }
+  say "acquirer simulator #{sim_url}, fake RiskGate :#{risk_port}, API #{api_url}"
+
+  db = Clearinghouse::DB.connect(role: :app, database: db_name, max_connections: 2)
+  t0 = Clearinghouse::Clock::Real.new.now
+  day0 = t0.to_date
+  # A test clock `days` simulated days after the demo started.
+  later = ->(days) { Clearinghouse::Clock::Test.new(start: t0 + (days * DAY)) }
+
+  # 1. A merchant. POST /v1/merchants is the simulation's stand-in for onboarding, guarded by an
+  # admin token. Payouts are manual here so the demo decides when one happens.
+  section 1, 'Create a merchant'
+  admin = ClearinghouseClient::Client.new(api_key: admin_token, base_url: api_url)
+  merchant = admin.request(:post, '/v1/merchants',
+                           params: { name: 'Demo Coffee Roasters',
+                                     payout_schedule: { interval: 'manual', delay_days: 2 } }).data
+  say "#{merchant['id']}  pinned to API version #{merchant['api_version']}, fee 2.9% + 30 cents, " \
+      'funds available 2 days after capture'
+  ch = ClearinghouseClient::Client.new(api_key: merchant.fetch('secret_key'), base_url: api_url)
+
+  # 2. Create and confirm with a key the client chose, then send the very same call again.
+  section 2, 'Create and confirm a payment with an Idempotency-Key'
+  pi = ch.payment_intents.create(amount: 10_000, currency: 'usd', payment_method: 'pm_card_visa')
+  say "POST /v1/payment_intents                 -> #{pi['id']} #{pi['status']}, #{money(pi['amount'])}"
+  key = "demo-confirm-#{SecureRandom.hex(4)}"
+  first = ch.request(:post, "/v1/payment_intents/#{pi['id']}/confirm", idempotency_key: key)
+  paid = first.data
+  say "POST .../confirm  Idempotency-Key: #{key}"
+  say "  -> #{first.status} #{paid['status']}, amount_received #{money(paid['amount_received'])}, " \
+      "risk #{paid.dig('risk', 'decision') || 'not checked'}, Idempotent-Replayed: " \
+      "#{first.headers['idempotent-replayed'] || 'absent'}"
+
+  section 3, 'Retry the same confirm (as a client would after a timeout)'
+  again = ch.request(:post, "/v1/payment_intents/#{pi['id']}/confirm", idempotency_key: key)
+  say "POST .../confirm  Idempotency-Key: #{key}"
+  say "  -> #{again.status}, Idempotent-Replayed: #{again.headers['idempotent-replayed']}, " \
+      "Original-Request: #{again.headers['original-request']}"
+  say "  body byte-for-byte identical to the first response: #{again.body == first.body}"
+  say '  the card was charged once; nothing ran the second time'
+  begin
+    ch.request(:post, "/v1/payment_intents/#{pi['id']}/confirm",
+               idempotency_key: key, params: { payment_method: 'pm_card_mastercard' })
+    say '  unexpected: a reused key with different parameters was accepted'
+  rescue ClearinghouseClient::IdempotencyError => e
+    say "same key, different parameters -> #{e.http_status} #{e.error['type']} (#{e.code})"
+  end
+
+  # 4. A decline is a typed error, not a 500, and it leaves the intent ready for another card.
+  section 4, 'A declined card'
+  declined = ch.payment_intents.create(amount: 2_500, currency: 'usd')
+  begin
+    ch.payment_intents.confirm(declined['id'], payment_method: 'pm_card_chargeDeclined')
+    say 'unexpected: pm_card_chargeDeclined was approved'
+  rescue ClearinghouseClient::CardError => e
+    say "POST .../confirm with pm_card_chargeDeclined -> #{e.class.name.split('::').last} (HTTP #{e.http_status})"
+    say "  type #{e.error['type']}, code #{e.code}, decline_code #{e.decline_code}"
+    say "  message: #{e.error['message']}"
+  end
+  after = ch.payment_intents.retrieve(declined['id'])
+  say "intent is back in #{after['status']}; nothing was posted to the ledger"
+
+  # 5. A partial refund of the first payment.
+  section 5, 'Refund part of the payment'
+  refund = ch.refunds.create(payment_intent: pi['id'], amount: 4_000)
+  say "POST /v1/refunds  #{money(4_000)} of #{pi['id']} -> #{refund['id']} #{refund['status']}"
+  say 'our fee is not returned on a refund (policy in docs/design/ledger.md)'
+
+  # 6. Authorize now, capture less later. The rest of the authorization is released.
+  section 6, 'Manual capture, captured partially'
+  held = ch.payment_intents.create(amount: 5_000, currency: 'usd', capture_method: 'manual',
+                                   payment_method: 'pm_card_mastercard')
+  held = ch.payment_intents.confirm(held['id'])
+  say "#{held['id']} authorized for #{money(held['amount'])} -> #{held['status']}, " \
+      "amount_capturable #{money(held['amount_capturable'])}"
+  held = ch.payment_intents.capture(held['id'], amount_to_capture: 3_000)
+  say "POST .../capture amount_to_capture #{money(3_000)} -> #{held['status']}, " \
+      "amount_received #{money(held['amount_received'])}"
+
+  # 7. The card the simulator disputes as fraud, a week after capture.
+  section 7, 'A payment that will be disputed'
+  fraud = ch.payment_intents.create(amount: 6_000, currency: 'usd', payment_method: 'pm_card_disputeFraudulent')
+  fraud = ch.payment_intents.confirm(fraud['id'])
+  say "#{fraud['id']} with pm_card_disputeFraudulent -> #{fraud['status']}, #{money(fraud['amount_received'])}. " \
+      'The acquirer will open a dispute in 7 simulated days.'
+
+  # 8. The ledger's view before the acquirer has settled anything.
+  section 8, 'The ledger trail today (bin/explain)'
+  say 'The payment and the refund are OPEN: processor_receivable and refund_clearing hold money that'
+  say 'only the acquirer\'s settlement file can clear.'
+  explain(pi['id'], db_name)
+  explain(refund['id'], db_name)
+  section 9, 'Balance today'
+  say balance_line(ch.balance.retrieve)
+  say 'the refund came out of available (negative until the captures become available); the captures sit in pending'
+
+  # 10. Settlement: the acquirer settles each movement two days after it happened, in one file
+  # per day. The reconciler matches every line against the ledger and posts what clears.
+  section 10, 'Three simulated days later: reconcile the settlement file'
+  day3 = later.call(3)
+  ingestor = Clearinghouse::Reconciliation::Ingestor.new(
+    db: db, client: Clearinghouse::Acquirer::Client.new(clock: day3, base_url: sim_url), clock: day3
+  )
+  result = ingestor.ingest(day0 + 2)
+  say "settlement file for #{day0 + 2}: #{result.status}, #{lines(result.lines)} #{result.outcomes}, " \
+      "exceptions #{result.exceptions.empty? ? 'none' : result.exceptions}"
+  explain(pi['id'], db_name)
+  explain(refund['id'], db_name)
+
+  # 11. available_on is two days after capture; the sweep runs on the same advanced clock.
+  section 11, 'Funds become available (the availability sweep on the day-3 clock)'
+  released = Clearinghouse::Balances::Availability.release_due!(db, clock: day3).released
+  say "released #{released.length} captures: #{released.map { |r| r.net.to_s }.join(' + ')}"
+  balance = ch.balance.retrieve
+  say balance_line(balance)
+
+  # 12. A payout of part of what is available. The API sends it to the simulated bank now.
+  section 12, 'Pay out'
+  available = Array(balance['available']).find { |b| b['currency'] == 'usd' }&.fetch('amount').to_i
+  amount = [5_000, available].min
+  amount -= 1 if amount % 100 == 13 # the simulator's documented failing amount
+  payout = ch.payouts.create(amount: amount, currency: 'usd')
+  say "POST /v1/payouts #{money(amount)} -> #{payout['id']} #{payout['status']}"
+
+  # 13. Everything the acquirer says later arrives on its notification feed: the bank paying the
+  # payout, and the dispute opening. bin/poller reads it on the wall clock; here the same poller
+  # reads it on a clock eight days ahead.
+  section 13, 'Eight simulated days later: the acquirer\'s notifications'
+  day8 = later.call(8)
+  poll = Clearinghouse::Acquirer::NotificationPoller.new(
+    db: db, client: Clearinghouse::Acquirer::Client.new(clock: day8, base_url: sim_url), clock: day8,
+    handlers: Clearinghouse::Settlement.notification_handlers(clock: day8)
+  ).poll
+  say "poller applied #{poll.processed} notifications"
+  say "#{payout['id']} is #{ch.payouts.retrieve(payout['id'])['status']}"
+  dispute = ch.request(:get, '/v1/disputes').data.fetch('data').first
+  say "#{dispute['id']} on #{dispute['payment_intent']}: #{dispute['status']}, #{money(dispute['amount'])}, " \
+      "reason #{dispute['reason']}"
+  say balance_line(ch.balance.retrieve)
+  say 'the disputed amount and an assumed 15.00 USD dispute fee came out of available'
+  explain(payout['id'], db_name)
+
+  # 14. The merchant wins. The acquirer debited us when the dispute opened and returns the
+  # money now; both show up as settlement lines, which the reconciler clears.
+  section 14, 'The dispute is won'
+  sim_dispute = JSON.parse(Net::HTTP.get(URI("#{sim_url}/admin/operations"))).fetch('disputes').first
+  resolve_dispute(sim_url, sim_dispute.fetch('id'), 'won', later.call(9).now)
+  day9 = later.call(9)
+  Clearinghouse::Acquirer::NotificationPoller.new(
+    db: db, client: Clearinghouse::Acquirer::Client.new(clock: day9, base_url: sim_url), clock: day9,
+    handlers: Clearinghouse::Settlement.notification_handlers(clock: day9)
+  ).poll
+  say "#{dispute['id']} is #{ch.request(:get, "/v1/disputes/#{dispute['id']}").data['status']}; " \
+      'the amount is back in available, the dispute fee is kept'
+  day12 = later.call(12)
+  ingestor = Clearinghouse::Reconciliation::Ingestor.new(
+    db: db, client: Clearinghouse::Acquirer::Client.new(clock: day12, base_url: sim_url), clock: day12
+  )
+  (3..11).each do |offset|
+    result = ingestor.ingest(day0 + offset)
+    next if result.lines.zero?
+
+    say "settlement file for #{day0 + offset}: #{lines(result.lines)} #{result.outcomes}, " \
+        "exceptions #{result.exceptions.empty? ? 'none' : result.exceptions}"
+  end
+  say balance_line(ch.balance.retrieve)
+  explain(dispute['id'], db_name)
+
+  puts
+  puts "Done. The merchant, its payments and their ledger stay in #{db_name} until the next run:"
+  puts "bin/explain <id> --db #{db_name} shows any of them again."
+ensure
+  db&.disconnect
+  children.reverse_each do |_name, pid|
+    Process.kill('TERM', pid)
+    Process.wait(pid)
+  rescue Errno::ESRCH, Errno::ECHILD
+    nil
+  end
+end
