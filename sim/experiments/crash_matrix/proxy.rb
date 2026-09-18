@@ -20,6 +20,14 @@ module Experiments
     # socket without writing) arrives here as EOF with no bytes, and the proxy
     # drops the downstream connection the same way, so the API sees exactly what
     # it would have seen talking to the simulator directly.
+    #
+    # An exchange is written down only after the last byte has been relayed, so
+    # the API can have its answer, finish the request and reply to the harness
+    # before the proxy's thread gets round to recording it. `mark` and `since`
+    # therefore wait until nothing is in flight: every connection the proxy
+    # accepted has been recorded (or has failed). Without that wait, a loaded
+    # machine attributed an exchange to the next stage or to none (the flaky
+    # `retry_1` expectation in spec/experiments/crash_matrix_run_spec.rb).
     class RecordingProxy
       extend T::Sig
 
@@ -52,6 +60,8 @@ module Experiments
         @port = T.let(@server.addr[1], Integer)
         @exchanges = T.let([], T::Array[Exchange])
         @mutex = T.let(Mutex.new, Thread::Mutex)
+        @settled = T.let(ConditionVariable.new, Thread::ConditionVariable)
+        @in_flight = T.let(0, Integer)
         @thread = T.let(nil, T.nilable(Thread))
       end
 
@@ -63,6 +73,9 @@ module Experiments
         @thread = Thread.new do
           loop do
             client = @server.accept
+            # Counted here, before the request is even read: the API cannot have
+            # an answer for a connection the proxy has not accepted yet.
+            @mutex.synchronize { @in_flight += 1 }
             Thread.new(client) { |c| serve(c) }
           end
         rescue IOError, Errno::EBADF
@@ -78,17 +91,45 @@ module Experiments
       end
 
       # A position in the recording, so a stage can read only its own exchanges.
-      sig { returns(Integer) }
-      def mark
-        @mutex.synchronize { @exchanges.length }
+      # Waits for the exchanges in flight, so none of an earlier stage's lands
+      # after the mark.
+      sig { params(timeout: Float).returns(Integer) }
+      def mark(timeout: SETTLE_TIMEOUT)
+        @mutex.synchronize do
+          settle(timeout)
+          @exchanges.length
+        end
       end
 
-      sig { params(mark: Integer).returns(T::Array[Exchange]) }
-      def since(mark)
-        @mutex.synchronize { T.must(@exchanges[mark..]).dup }
+      # Everything recorded after `mark`, once nothing is in flight.
+      sig { params(mark: Integer, timeout: Float).returns(T::Array[Exchange]) }
+      def since(mark, timeout: SETTLE_TIMEOUT)
+        @mutex.synchronize do
+          settle(timeout)
+          T.must(@exchanges[mark..]).dup
+        end
       end
+
+      # How long `mark` and `since` wait for exchanges in flight. A relay ends when
+      # the simulator answers or hangs up, which it does within its own latency
+      # settings; one still open after this is a harness bug, and says so.
+      SETTLE_TIMEOUT = 30.0
+
+      class StillInFlightError < StandardError; end
 
       private
+
+      # Called holding @mutex.
+      sig { params(timeout: Float).void }
+      def settle(timeout)
+        deadline = CrashMatrix.monotonic + timeout
+        while @in_flight.positive?
+          left = deadline - CrashMatrix.monotonic
+          raise StillInFlightError, "#{@in_flight} acquirer exchanges still in flight after #{timeout}s" if left <= 0
+
+          @settled.wait(@mutex, left)
+        end
+      end
 
       sig { params(client: TCPSocket).void }
       def serve(client)
@@ -107,6 +148,10 @@ module Experiments
         nil
       ensure
         client.close unless client.closed?
+        @mutex.synchronize do
+          @in_flight -= 1
+          @settled.broadcast
+        end
       end
 
       # The request head and body, read by Content-Length. nil if the client went
