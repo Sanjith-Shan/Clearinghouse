@@ -67,6 +67,28 @@ RSpec.describe FakeRiskgate::Server do
     expect { TCPSocket.new('127.0.0.1', fake_riskgate.port).close }.to raise_error(Errno::ECONNREFUSED)
   end
 
+  describe 'POST /v1/webhooks/clearinghouse' do
+    let(:fake_config) { { 'webhook_secrets' => ['whsec_fake_spec'] } }
+
+    def deliver(event, secret: 'whsec_fake_spec', at: Time.now.to_i)
+      body = JSON.generate(event)
+      header = Clearinghouse::Webhooks::Signature.sign(payload: body, secrets: [secret], timestamp: at)
+      Net::HTTP.new('127.0.0.1', fake_riskgate.port)
+               .post('/v1/webhooks/clearinghouse', body, 'Content-Type' => 'application/json',
+                                                         'Clearinghouse-Signature' => header)
+    end
+
+    it "accepts Clearinghouse's signature, counts each event id once, and rejects forgeries and stale ones" do
+      event = { 'id' => 'evt_1', 'object' => 'event', 'type' => 'payment_intent.succeeded', 'data' => {} }
+      expect(deliver(event).code).to eq('200')
+      expect(deliver(event).code).to eq('200')
+      expect(deliver(event.merge('id' => 'evt_2'), secret: 'whsec_wrong').code).to eq('400')
+      expect(deliver(event.merge('id' => 'evt_3'), at: Time.now.to_i - 3_600).code).to eq('400')
+      expect(fake_riskgate.webhooks).to eq('accepted' => 1, 'by_type' => { 'payment_intent.succeeded' => 1 },
+                                           'duplicates' => 1, 'rejected' => 2)
+    end
+  end
+
   describe 'bin/fake-riskgate' do
     let(:port) { FakeRiskgateHelper.closed_port }
     let(:root) { File.expand_path('../..', __dir__) }

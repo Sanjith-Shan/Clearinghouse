@@ -1,0 +1,126 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 8: RiskGate's replay through Clearinghouse, under one policy
+# (docs/design/replay.md). Runs the API, the acquirer simulator, the scheduler and the
+# webhook workers in this process on a simulated clock driven by the rows' `created`,
+# and writes aggregates to results/exp8-replay/<timestamp>/<policy>.{json,md}.
+#
+#   bin/exp-replay --replay PATH --policy none|model_only|model_rules
+#                  [--limit N] [--speed SIM_SECONDS_PER_SECOND] [--riskgate-url URL]
+#                  [--riskgate-dir DIR] [--fake-riskgate CONFIG.json] [--out DIR] [--label smoke|full]
+#                  [--seed S] [--deadline-ms 50] [--dispute-after-days 7] [--db NAME] [--reset-db]
+#                  [--no-webhooks] [--webhook-secret whsec_...]
+#
+# model_only and model_rules PUT RiskGate's rules/model_only.rules or rules/default.rules
+# (from --riskgate-dir) before the run. none runs with the risk client off.
+# --fake-riskgate runs bin/fake-riskgate's server in this process with that config
+# instead of calling --riskgate-url, and deploys no rules; for smoke runs and specs.
+# --reset-db empties every table of --db first (owner role, triggers skipped for that
+# one transaction), so policies can be compared on the same database one after another.
+#
+# The replay file is read in place. Nothing from it is written except aggregates.
+
+require 'bundler/setup'
+require 'fileutils'
+require 'optparse'
+require_relative '../sim/experiments/replay'
+require_relative '../sim/fake_riskgate/lib/fake_riskgate'
+
+ROOT = File.expand_path('..', __dir__)
+# Home directories are shortened to ~ so a committed report names no local user.
+COMMAND = "bin/exp-replay #{ARGV.join(' ')}".strip.gsub(Dir.home, '~')
+
+opts = { replay: nil, policy: nil, limit: nil, speed: 0.0, riskgate_url: 'http://127.0.0.1:8080',
+         riskgate_dir: File.expand_path('~/Documents/RiskGate'), fake: nil, out: nil, label: 'smoke', seed: 1,
+         deadline_ms: 50, dispute_after_days: 7, db: ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_dev'),
+         reset_db: false, webhooks: true, webhook_secret: Experiments::Replay::DEFAULT_WEBHOOK_SECRET }
+OptionParser.new do |o|
+  o.on('--replay PATH') { |v| opts[:replay] = File.expand_path(v) }
+  o.on('--policy POLICY', Experiments::Replay::POLICIES) { |v| opts[:policy] = v }
+  o.on('--limit N', Integer) { |v| opts[:limit] = v }
+  o.on('--speed X', Float, 'simulated seconds per wall second; 0 (default) is as fast as it goes') do |v|
+    opts[:speed] = v
+  end
+  o.on('--riskgate-url URL') { |v| opts[:riskgate_url] = v.chomp('/') }
+  o.on('--riskgate-dir DIR') { |v| opts[:riskgate_dir] = File.expand_path(v) }
+  o.on('--fake-riskgate CONFIG') { |v| opts[:fake] = File.expand_path(v) }
+  o.on('--out DIR') { |v| opts[:out] = File.expand_path(v) }
+  o.on('--label LABEL', %w[smoke full]) { |v| opts[:label] = v }
+  o.on('--seed S', Integer) { |v| opts[:seed] = v }
+  o.on('--deadline-ms N', Integer) { |v| opts[:deadline_ms] = v }
+  o.on('--dispute-after-days N', Integer) { |v| opts[:dispute_after_days] = v }
+  o.on('--db NAME') { |v| opts[:db] = v }
+  o.on('--reset-db') { opts[:reset_db] = true }
+  o.on('--no-webhooks') { opts[:webhooks] = false }
+  o.on('--webhook-secret SECRET') { |v| opts[:webhook_secret] = v }
+end.parse!
+abort 'bin/exp-replay: --replay PATH is required' unless opts[:replay]
+abort 'bin/exp-replay: --policy is required' unless opts[:policy]
+abort 'bin/exp-replay: --webhook-secret must start with whsec_' unless opts[:webhook_secret].start_with?('whsec_')
+
+def reset_database(name)
+  owner = Clearinghouse::DB.connect(role: :owner, database: name, max_connections: 1)
+  tables = owner.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").map(:tablename) -
+           %w[schema_migrations schema_info]
+  owner.transaction do
+    # Ledger tables refuse TRUNCATE by trigger; replica mode skips triggers for this
+    # transaction only, which needs the owner (a superuser in dev), never the app.
+    owner.run('SET LOCAL session_replication_role = replica')
+    owner.run("TRUNCATE #{tables.map { |t| owner.literal(Sequel.identifier(t)) }.join(', ')} RESTART IDENTITY CASCADE")
+  end
+  owner.disconnect
+end
+
+Clearinghouse::DB.migrate!(database: opts[:db])
+reset_database(opts[:db]) if opts[:reset_db]
+db = Clearinghouse::DB.connect(role: :app, database: opts[:db], max_connections: 16)
+
+fake = nil
+riskgate = { 'kind' => opts[:policy] == 'none' ? nil : 'riskgate', 'url' => nil, 'ruleset_version' => nil,
+             'rules_file' => nil }
+riskgate_url = nil
+if opts[:policy] != 'none'
+  if opts[:fake]
+    config = JSON.parse(File.read(opts[:fake])).merge('webhook_secrets' => [opts[:webhook_secret]])
+    fake = FakeRiskgate::Server.new(config: FakeRiskgate::Config.new(config)).start
+    riskgate_url = "http://127.0.0.1:#{fake.port}"
+    riskgate.merge!('kind' => 'fake-riskgate', 'url' => riskgate_url, 'config' => File.basename(opts[:fake]),
+                    'ruleset_version' => config.fetch('ruleset_version', 'fake-1'))
+  else
+    riskgate_url = opts[:riskgate_url]
+    rules = File.join(opts[:riskgate_dir], Experiments::Replay::RULE_FILES.fetch(opts[:policy]))
+    riskgate.merge!('url' => riskgate_url, 'rules_file' => Experiments::Replay::RULE_FILES.fetch(opts[:policy]),
+                    'ruleset_version' => Experiments::Replay.deploy_rules(riskgate_url, rules),
+                    'health' => Experiments::Replay.health(riskgate_url))
+  end
+end
+
+plan = Experiments::Replay::Plan.new(policy: opts[:policy], seed: opts[:seed], speed: opts[:speed],
+                                     dispute_after_days: opts[:dispute_after_days], deadline_ms: opts[:deadline_ms],
+                                     webhooks: opts[:webhooks], webhook_secret: opts[:webhook_secret])
+stamp = Time.now.utc.strftime('%Y%m%dT%H%M%SZ')
+out = opts[:out] || File.join(ROOT, 'results/exp8-replay', stamp)
+FileUtils.mkdir_p(out)
+
+load_before = Experiments::Replay.load_average
+started_at = Time.now.utc
+begin
+  report = Experiments::Replay::Runner.new(db: db, plan: plan, riskgate_url: riskgate_url)
+                                      .run(Experiments::Replay.read(opts[:replay], limit: opts[:limit]))
+ensure
+  fake_webhooks = fake&.webhooks
+  fake&.stop
+end
+report = {
+  'label' => opts[:label], 'command' => COMMAND, 'machine' => Experiments::Replay::MACHINE, 'ruby' => RUBY_DESCRIPTION,
+  'started_at' => started_at.iso8601, 'finished_at' => Time.now.utc.iso8601,
+  'load_average' => { 'before' => load_before, 'after' => Experiments::Replay.load_average },
+  'replay_file' => opts[:replay].sub(Dir.home, '~'), 'database' => opts[:db]
+}.merge(report)
+report['riskgate'] = riskgate.compact.merge(report.fetch('riskgate').compact)
+report['webhooks']['received_by_fake_riskgate'] = fake_webhooks if fake_webhooks
+File.write(File.join(out, "#{opts[:policy]}.json"), "#{JSON.pretty_generate(report)}\n")
+File.write(File.join(out, "#{opts[:policy]}.md"), "#{Experiments::Replay.markdown(report)}\n")
+puts Experiments::Replay.markdown(report)
+puts "\nwritten to #{out}"

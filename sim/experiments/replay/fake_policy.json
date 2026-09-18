@@ -1,0 +1,10 @@
+{
+  "ruleset_version": "fake-exp8-smoke",
+  "latency_ms": { "p50": 1, "p99": 5 },
+  "rules": [
+    { "name": "smoke_block_large", "amount_gte": 40000, "decision": "block", "score": 90,
+      "reasons": ["amount at or above 400.00 (smoke rule, not a real policy)"] },
+    { "name": "smoke_review_mid", "amount_gte": 20000, "decision": "review", "score": 60,
+      "reasons": ["amount at or above 200.00 (smoke rule, not a real policy)"] }
+  ]
+}
