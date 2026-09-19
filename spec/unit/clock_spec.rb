@@ -38,4 +38,19 @@ RSpec.describe Clearinghouse::Clock do
       expect((now - Time.now).abs).to be < 5
     end
   end
+
+  describe '.from_env' do
+    it 'is the wall clock unless a test or experiment asks to run ahead' do
+      expect(described_class.from_env({})).to be_a(Clearinghouse::Clock::Real)
+      ahead = described_class.from_env('CLEARINGHOUSE_ENV' => 'experiment', 'CLEARINGHOUSE_CLOCK_AHEAD_S' => '86400')
+      expect(ahead.now - Time.now).to be_within(5).of(86_400)
+    end
+
+    it 'refuses to run ahead anywhere else' do
+      expect { described_class.from_env('CLEARINGHOUSE_CLOCK_AHEAD_S' => '86400') }
+        .to raise_error(Clearinghouse::Clock::NotAllowedError)
+      expect { described_class.from_env('CLEARINGHOUSE_ENV' => 'production', 'CLEARINGHOUSE_CLOCK_AHEAD_S' => '1') }
+        .to raise_error(Clearinghouse::Clock::NotAllowedError)
+    end
+  end
 end

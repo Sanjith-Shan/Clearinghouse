@@ -60,8 +60,14 @@ handler is all it takes to resume.
 aborts the open transaction exactly as a dead process would) and checks that after a
 restart every notification's effects exist exactly once, the ledger invariants hold, and
 `processed_notifications` has one row each. The spec iterates the constant, so a new point
-cannot be skipped. When the idempotency framework's crash hook (`CLEARINGHOUSE_CRASH_AT`)
-lands, `crash_hook:` is where it plugs in.
+cannot be skipped.
+
+The same points also run against a real process. `bin/poller` arms the idempotency
+framework's crash hook from `CLEARINGHOUSE_CRASH_AT` (test and experiment environments only),
+and the poller tells the hook the notification type it is at, so a crash name aims at one
+type: `notification.dispute.opened:effects_written`. `Settlement.background_crash_points`
+enumerates every registered type times the three points, and experiment 2 crashes a real
+`bin/poller` at each one (see `crash-matrix.md`, "Background crash points").
 
 ### Running it
 
@@ -143,6 +149,10 @@ run inside the poller's transaction, so theirs are the poller's three. The merch
 has `dispute_locked`, `effects_written` and `committed`, and recovery is the client retrying
 the request. `spec/settlement/disputes_recovery_spec.rb` crashes at all nine and checks one
 dispute row, one posting per step, one event per state change, and the ledger invariants.
+Experiment 2 runs the two notification flows' six again against a real `bin/poller`. The
+merchant's accept isn't in experiment 2: it is not a registered idempotency flow, and the API
+does not arm `Disputes::Service`'s hook from the environment, so the in-process spec is its
+only crash test.
 
 ### What it is built on
 

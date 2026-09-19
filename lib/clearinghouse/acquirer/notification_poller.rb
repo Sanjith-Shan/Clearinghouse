@@ -28,8 +28,30 @@ module Clearinghouse
       # Where a crash can land, in order. `notification_fetched`: read from the feed,
       # nothing written. `effects_written`: everything written, not yet committed.
       # `committed`: committed, the next notification not started. The crash matrix in
-      # spec/settlement/notification_poller_spec.rb runs every one of them.
+      # spec/settlement/notification_poller_spec.rb runs every one of them in process,
+      # and experiment 2 runs them against a real bin/poller per notification type
+      # (Settlement.background_crash_points).
       RECOVERY_POINTS = %w[notification_fetched effects_written committed].freeze
+
+      # Called at each recovery point with the point and the type of the notification
+      # being handled, so a test can crash on one type and not another.
+      CrashHook = T.type_alias { T.proc.params(point: String, type: String).void }
+
+      # The flow name a notification type's recovery points go by in crash names:
+      # `notification.dispute.opened:effects_written`.
+      sig { params(type: String).returns(String) }
+      def self.flow_name(type)
+        "notification.#{type}"
+      end
+
+      # Adapts the idempotency framework's hook (armed from CLEARINGHOUSE_CRASH_AT in
+      # test and experiment environments, DISARMED otherwise) to the poller's. Each
+      # point is one crash moment and its name already says which side of the commit
+      # it is on, so every name is the plain `<flow>:<point>` form.
+      sig { params(hook: Idempotency::CrashHook).returns(CrashHook) }
+      def self.crash_hook(hook)
+        ->(point, type) { hook.reached(flow_name(type), point, :after_commit) }
+      end
 
       class UnhandledNotificationError < Clearinghouse::Error; end
 
@@ -75,7 +97,7 @@ module Clearinghouse
 
       sig do
         params(db: Sequel::Database, client: Client, clock: Clock, handlers: Handlers, name: String,
-               crash_hook: T.nilable(T.proc.params(point: String).void)).void
+               crash_hook: T.nilable(CrashHook)).void
       end
       def initialize(db:, client:, clock:, handlers:, name: 'acquirer', crash_hook: nil)
         @db = db
@@ -122,15 +144,15 @@ module Clearinghouse
       sig { params(notification: Notification).returns(T::Boolean) }
       def handle(notification)
         handler = @handlers.fetch(notification.type) # before any write: an unknown type stops here
-        crash!('notification_fetched')
+        crash!('notification_fetched', notification)
         fresh = T.let(@db.transaction do
           first = claimed?(notification)
           handler.call(@db, notification) if first
           @db[:acquirer_cursors].where(name: @name).update(cursor: notification.cursor, updated_at: @clock.now)
-          crash!('effects_written')
+          crash!('effects_written', notification)
           first
         end, T::Boolean)
-        crash!('committed')
+        crash!('committed', notification)
         fresh
       end
 
@@ -147,9 +169,9 @@ module Clearinghouse
         !rows.empty?
       end
 
-      sig { params(point: String).void }
-      def crash!(point)
-        @crash_hook&.call(point)
+      sig { params(point: String, notification: Notification).void }
+      def crash!(point, notification)
+        @crash_hook&.call(point, notification.type)
       end
     end
   end
