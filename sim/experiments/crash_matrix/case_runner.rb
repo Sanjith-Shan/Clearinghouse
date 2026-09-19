@@ -17,6 +17,9 @@ module Experiments
       # nil for a registry point. 'acquirer_drop': the simulator drops the
       # response of every fresh commit once the server has crashed.
       const :variant, T.nilable(String), default: nil
+      # A background job's point (bin/poller), run by BackgroundRunner, rather than
+      # a request's.
+      const :background, T::Boolean, default: false
 
       # Exactly Registry::CrashPoint#to_s: the value for CLEARINGHOUSE_CRASH_AT.
       sig { returns(String) }

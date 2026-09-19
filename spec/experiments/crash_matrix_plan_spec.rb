@@ -9,6 +9,7 @@ require_relative '../../sim/experiments/crash_matrix'
 RSpec.describe 'Experiment 2 crash matrix plan' do
   let(:cm) { Experiments::CrashMatrix }
   let(:registry) { Clearinghouse::Payments::Flows.registry }
+  let(:background) { Clearinghouse::Settlement.background_crash_points }
 
   def phase(from, to)
     Clearinghouse::Idempotency::Phase.new(from: from, to: to, atomic: ->(_run, _db, _foreign) {})
@@ -24,11 +25,14 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
     end.new
   end
 
-  it 'covers registry.crash_points exactly, in order, before any variant' do
+  it 'covers registry.crash_points, then the background crash points, exactly and in order, before any variant' do
     plan = cm.plan(registry)
-    points = plan.reject(&:variant)
-    expect(points.map(&:crash_name)).to eq(registry.crash_points.map(&:to_s))
-    expect(points.map(&:crash_name).uniq.length).to eq(registry.crash_points.length)
+    requests, jobs = plan.reject(&:variant).partition { |c| !c.background }
+    expect(requests.map(&:crash_name)).to eq(registry.crash_points.map(&:to_s))
+    expect(jobs.map(&:crash_name)).to eq(background.map(&:to_s))
+    expect(plan.reject(&:variant)).to eq(requests + jobs)
+    expect(plan.reject(&:variant).map(&:crash_name).uniq.length)
+      .to eq(registry.crash_points.length + background.length)
     expect(plan.select(&:variant).map(&:name)).to eq(['payment_intent.confirm:authorization_requested+acquirer_drop'])
   end
 
@@ -36,9 +40,44 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
     expect(registry.flows.map(&:name)).to all(satisfy { |name| cm.scenario_for(name).flow == name })
   end
 
+  it "enumerates bin/poller's recovery points for every notification type a handler is registered for" do
+    types = Clearinghouse::Settlement.notification_handlers(clock: Clearinghouse::Clock::Test.new).types
+    expect(types).to eq(%w[dispute.closed dispute.opened payout.failed payout.paid])
+    expect(background.map(&:to_s)).to eq(types.flat_map do |type|
+      Clearinghouse::Acquirer::NotificationPoller::RECOVERY_POINTS.map { |point| "notification.#{type}:#{point}" }
+    end)
+  end
+
+  it 'has a scenario for every background flow' do
+    expect(background.map(&:flow).uniq).to all(satisfy { |name| cm.background_scenario_for(name).flow == name })
+    expect(cm.flows_without_scenario(registry)).to eq([])
+  end
+
+  it 'plans a notification type with no scenario, and its cases fail instead of vanishing' do
+    extra = Clearinghouse::Acquirer::NotificationPoller::RECOVERY_POINTS.map do |point|
+      Clearinghouse::Idempotency::Registry::CrashPoint.new(flow: 'notification.spec.unhandled', point: point,
+                                                           moment: :after_commit)
+    end
+    plan = cm.plan(registry, variants: false, background: background + extra)
+    expect(plan.last(3).map(&:crash_name)).to eq(%w[notification_fetched effects_written committed].map do |p|
+      "notification.spec.unhandled:#{p}"
+    end)
+    expect(plan.last(3)).to all(have_attributes(background: true))
+    expect(cm.flows_without_scenario(registry, background: background + extra)).to eq(['notification.spec.unhandled'])
+
+    proxy = cm::RecordingProxy.new(upstream_port: 1)
+    runner = cm::BackgroundRunner.new(settings: cm::Settings.new(db_name: 'unused', log_dir: Dir.tmpdir),
+                                      sim_url: 'http://127.0.0.1:1', proxy: proxy, riskgate_url: 'http://127.0.0.1:1',
+                                      db: Sequel.mock, owner_db: Sequel.mock)
+    result = runner.run(plan.last, 1)
+    proxy.stop
+    expect([result.passed?, result.error])
+      .to match([false, /MissingScenarioError: background flow notification\.spec\.unhandled/])
+  end
+
   it 'plans a flow with no scenario like any other, and its cases fail instead of vanishing' do
     extended = Clearinghouse::Idempotency::Registry.new([*registry.flows, flow_named('spec.unscenarioed', 'paid')])
-    plan = cm.plan(extended, variants: false)
+    plan = cm.plan(extended, variants: false, background: [])
     expect(plan.map(&:crash_name)).to eq(extended.crash_points.map(&:to_s))
     expect(plan.last(6).map(&:crash_name)).to all(start_with('spec.unscenarioed:'))
     expect(cm.flows_without_scenario(extended)).to eq(['spec.unscenarioed'])
@@ -55,13 +94,13 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
 
   it 'picks up a new recovery point with no change to the harness' do
     toy = Clearinghouse::Idempotency::Registry.new([flow_named('toy.flow', 'a', 'b')])
-    plan = cm.plan(toy, variants: false)
+    plan = cm.plan(toy, variants: false, background: [])
     expect(plan.map(&:crash_name)).to eq(%w[started a b finished].flat_map do |p|
       ["toy.flow:#{p}", "toy.flow:#{p}:before_commit"]
     end)
 
     grown = Clearinghouse::Idempotency::Registry.new([flow_named('toy.flow', 'a', 'a2', 'b')])
-    names = cm.plan(grown, variants: false).map(&:crash_name)
+    names = cm.plan(grown, variants: false, background: []).map(&:crash_name)
     expect(names).to include('toy.flow:a2', 'toy.flow:a2:before_commit')
   end
 
@@ -89,6 +128,19 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
       hook.reached(cp.flow, cp.point, cp.moment)
     end
     expect(fired).to eq(registry.crash_points.map(&:to_s))
+  end
+
+  it "uses background names bin/poller's hook fires on, for that notification type only" do
+    fired = []
+    cm.plan(registry, variants: false).select(&:background).each do |kase|
+      armed = Clearinghouse::Idempotency::CrashHook::Armed.new(kase.crash_name, env: { 'CLEARINGHOUSE_ENV' => 'test' },
+                                                                                action: -> { fired << kase.name })
+      hook = Clearinghouse::Acquirer::NotificationPoller.crash_hook(armed)
+      type = kase.flow.delete_prefix('notification.')
+      hook.call(kase.point, type == 'dispute.opened' ? 'payout.paid' : 'dispute.opened') # another type: no crash
+      hook.call(kase.point, type)
+    end
+    expect(fired).to eq(background.map(&:to_s))
   end
 
   describe 'normalisation' do
@@ -140,5 +192,10 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
     results.last.checks << cm::Check.new(name: 'crashed', ok: false)
     expect(cm.headline(results, full: true)).to eq('crashed at 3 points across 1 flow, recovered at 2 of 3')
     expect(cm.headline(results.first(2), full: false)).to start_with('PARTIAL RUN')
+
+    everything = cm.plan(registry, variants: false).map { |k| cm::CaseResult.new(kase: k) }
+    flows = registry.flows.length + background.map(&:flow).uniq.length
+    expect(cm.headline(everything, full: true))
+      .to eq("crashed at #{everything.length} points across #{flows} flows, recovered at all #{everything.length}")
   end
 end
