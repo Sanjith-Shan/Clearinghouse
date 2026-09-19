@@ -286,8 +286,9 @@ The rows are also in the ledger's money-flow table.
 ### Lifecycle
 
 - **Open.** The risk integration calls `Holds.open_hold!(db, flow_id:, merchant_id:, amount:,
-  reason:, clock:)` when RiskGate says `review`. That is normally during confirm, before the
-  capture has scheduled anything. When the availability sweep reaches the payment, it asks
+  reason:, clock:)` when RiskGate said `review`, in the capture's transaction
+  (`Risk::Step.hold_on_capture!` through `Api::Dependencies#risk_holds`), right after the
+  capture has scheduled its availability and before the sweep can reach it. When the availability sweep reaches the payment, it asks
   `Holds.withholds?` and posts pending -> held instead of pending -> available, recording the
   amount in `risk_holds.held_amount` in the same transaction. If the review opens after the
   money was already available, `open_hold!` moves it back (available -> held). That can take

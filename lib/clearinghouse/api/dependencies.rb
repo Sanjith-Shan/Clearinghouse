@@ -30,6 +30,10 @@ module Clearinghouse
       # intent's `risk` stays null), which only specs and experiments that are not
       # about risk use; from_env always builds one.
       const :risk_client, T.nilable(Risk::Client), default: nil
+      # Where a capture of a payment RiskGate sent to review opens its payout
+      # hold: the payouts area's Balances::Holds. Specs about the seam itself pass
+      # a recording stand-in.
+      const :risk_holds, Risk::Holds, factory: -> { Risk::Holds::Delegate.new(Balances::Holds) }
       # How long a request's lease on its idempotency key lasts without a phase
       # committing. Longer than the slowest foreign call (acquirer read timeout
       # plus the risk deadline), or a slow request would be resumed by another

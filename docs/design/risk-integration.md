@@ -58,8 +58,17 @@ the "safer payouts" idea: the risk decision gates when money *leaves*, not wheth
 in.
 
 The hold is opened when funds are captured, not at confirm, and for the amount captured.
-There is nothing to hold until capture. A partial capture should hold only what moved, and a
-declined authorization should leave no hold behind.
+There is nothing to hold until capture. A partial capture holds only what moved, and a
+declined authorization leaves no hold behind.
+
+**Gross or net.** The review records the captured amount (what is under review, and what a
+rejection refunds). The money kept out of payouts is the merchant's **net** of it, because
+that is all the capture credited to the merchant: the fee went to `platform:fee_revenue` in
+the same posting. The availability sweep moves that net from pending to held, and approval
+moves it from held to available, so the ledger never holds more than the merchant was
+credited. A rejection refunds the gross, which comes out of available, while the held net
+goes back to available in the same transaction, so the merchant ends the fee short, as with
+any refund (`payouts.md`, "Risk-review holds").
 
 ## The client
 
@@ -162,8 +171,9 @@ it by hand (`Monotonic::Manual`) with no sleeps.
    - On `Proceed`, it writes the `authorization_requested` recovery point, and the flow goes
      on to the acquirer.
 4. The capture transaction calls `Risk::Step.hold_on_capture!(db, risk:, merchant_id:,
-   payment_intent_id:, amount_captured:, clock:)`. It opens a payout hold through
-   `Risk.holds` if the stored decision is `review`.
+   payment_intent_id:, amount_captured:, clock:, holds:)` with the request's
+   `Dependencies#risk_holds`. It opens a payout hold if the stored decision is `review`, with
+   RiskGate's reasons as the review's reason.
 
 **What a crash-resume relies on.** A crash between 2 and 3 leaves nothing stored. The
 completer resumes at `intent_locked` and calls the step again with the same attempt, so with
@@ -186,14 +196,22 @@ different jobs:
 A new attempt (confirm again after a decline, with another card) has a new key and gets a
 fresh assessment. That is right, because it is a different payment method.
 
-## What is not wired yet
+## How it is wired
 
-- The confirm flow is the payments area's. It calls `Step.call` and stores the verdict as
-  above, and the end-to-end test (a block posts nothing and never reaches the simulator)
-  belongs with it.
-- Holds are the payouts area's. `Risk.holds` defaults to `Holds::Unwired`, which raises, so a
-  review can't pass silently without its hold. Wiring it is
-  `Risk.holds = Risk::Holds::Delegate.new(Balances::Holds)` at boot.
+- The confirm flow (payments area) calls `Step.call` from its `intent_locked` phase and stores
+  the verdict as above. `spec/integration/payments/risk_confirm_spec.rb` checks a block posts
+  nothing and never reaches the simulator.
+- Holds are the payouts area's `Balances::Holds`. `Api::Dependencies#risk_holds` defaults to
+  `Risk::Holds::Delegate.new(Balances::Holds)`, so every app, the completer and the specs get
+  real holds without a global to set. The process-wide `Risk.holds`, the default for a caller
+  that passes nothing, stays `Holds::Unwired`, which raises, so a review still can't pass
+  silently without its hold. `Delegate` maps the risk side's `payment_intent_id:` onto the
+  payouts side's `flow_id:` (a payment's ledger flow id is its `pi_` id).
+- `spec/integration/payments/risk_review_payout_spec.rb` runs M6 end to end through the API
+  with the fake RiskGate answering `review`: confirm, capture, the net lands in held, a payout
+  takes only the allowed payment's money, approval makes the held net available and the next
+  payout takes it. Rejecting instead refunds the payment once and releases the held net
+  against the refund. The ledger invariants are checked after every step.
 
 ## RiskGate-side facts this relies on
 

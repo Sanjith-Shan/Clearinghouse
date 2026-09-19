@@ -24,7 +24,8 @@ module Clearinghouse
       @client_mutex.synchronize { @client = client }
     end
 
-    # Where review holds are opened. See Risk::Holds.
+    # Where review holds are opened by callers that do not pass one. The API
+    # passes Dependencies#risk_holds instead. See Risk::Holds.
     sig { returns(Holds) }
     def self.holds
       @client_mutex.synchronize { @holds ||= Holds::Unwired.new }

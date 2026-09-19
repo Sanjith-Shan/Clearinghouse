@@ -104,6 +104,11 @@ RSpec.describe Clearinghouse::Risk::Step do
                                                reason: 'risk_review', at: clock.now }])
     end
 
+    it "shows RiskGate's reasons for the review as the hold's reason" do
+      hold({ 'decision' => 'review', 'reasons' => ['velocity: 5 cards in 1h', 'new device'] })
+      expect(holds.holds.map(&:reason)).to eq(['velocity: 5 cards in 1h; new device'])
+    end
+
     it 'holds nothing for allow, risk_unavailable, no assessment, or a zero capture' do
       [{ 'decision' => 'allow' }, { 'decision' => 'risk_unavailable', 'reason' => 'timeout' }, nil].each do |risk|
         expect(hold(risk)).to be_nil
@@ -121,14 +126,14 @@ RSpec.describe Clearinghouse::Risk::Step do
       end.to raise_error(Clearinghouse::Risk::Holds::NotWired)
     end
 
-    it 'forwards to the payouts area in its own argument names through Delegate' do
+    it 'forwards to Balances::Holds in its own argument names through Delegate' do
       calls = []
       target = Class.new { define_method(:open_hold!) { |*args, **kwargs| calls << [args, kwargs] } }.new
       Clearinghouse::Risk::Holds::Delegate.new(target)
                                           .open_hold!(db, merchant_id: 'acct_1', payment_intent_id: 'pi_1',
                                                           amount: Clearinghouse::Money.of(5, 'usd'),
                                                           reason: 'risk_review', clock: clock)
-      expect(calls).to eq([[[db], { merchant_id: 'acct_1', source_id: 'pi_1', amount: Clearinghouse::Money.of(5, 'usd'),
+      expect(calls).to eq([[[db], { flow_id: 'pi_1', merchant_id: 'acct_1', amount: Clearinghouse::Money.of(5, 'usd'),
                                     reason: 'risk_review', clock: clock }]])
     end
   end
