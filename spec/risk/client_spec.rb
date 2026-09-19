@@ -28,6 +28,21 @@ RSpec.describe Clearinghouse::Risk::Client do
     [result, monotonic_ms - started]
   end
 
+  # How late this process wakes up right now: the worst overrun of a few 5 ms
+  # sleeps. On a quiet machine it is about a millisecond; under heavy load it is
+  # tens or hundreds. The load-tolerant bounds below allow the deadline, the one
+  # wake-up the design allows (epsilon), and a few of these, so they still fail
+  # if the client waited again after the deadline (another 80 ms wait or more on
+  # a quiet machine, the whole hang or handshake timeout under load) but not
+  # because the machine was busy. The strict bounds are tagged :timing.
+  def scheduling_lag_ms
+    Array.new(5) { timed { sleep 0.005 }.last - 5 }.max
+  end
+
+  def loaded_bound_ms
+    deadline_ms + epsilon_ms + (4 * scheduling_lag_ms)
+  end
+
   def local_server(&)
     server = LocalHttpServer.new(&)
     servers << server
@@ -121,6 +136,12 @@ RSpec.describe Clearinghouse::Risk::Client do
 
       expect(result).to have_attributes(reason: reason::Timeout)
       expect(elapsed).to be >= deadline_ms - 1
+      expect(elapsed).to be < loaded_bound_ms
+    end
+
+    it 'holds when RiskGate never answers, to within one wake-up', :timing do
+      reconfigure_fake('hang' => true)
+      _, elapsed = timed { client.assess(assess_request, attempt: 1) }
       expect(elapsed).to be < deadline_ms + epsilon_ms
     end
 
@@ -128,7 +149,14 @@ RSpec.describe Clearinghouse::Risk::Client do
       reconfigure_fake('latency_ms' => { 'p50' => 300, 'p99' => 300 })
       result, elapsed = timed { client.assess(assess_request, attempt: 1) }
 
+      # A timeout at all means the client gave up before the 300 ms answer arrived.
       expect(result.reason).to eq(reason::Timeout)
+      expect(elapsed).to be < loaded_bound_ms
+    end
+
+    it 'holds when RiskGate is merely slower, to within one wake-up', :timing do
+      reconfigure_fake('latency_ms' => { 'p50' => 300, 'p99' => 300 })
+      _, elapsed = timed { client.assess(assess_request, attempt: 1) }
       expect(elapsed).to be < deadline_ms + epsilon_ms
     end
 
@@ -146,7 +174,8 @@ RSpec.describe Clearinghouse::Risk::Client do
 
       expect(result).to have_attributes(reason: reason::Timeout)
       expect(result.detail).to include('waiting for the response')
-      expect(elapsed).to be < deadline_ms + epsilon_ms
+      # The whole drip takes over a second; a per-read timeout would sit through all of it.
+      expect(elapsed).to be < loaded_bound_ms
     end
 
     it 'covers connecting: an address that never completes the handshake times out or fails, within the deadline' do
@@ -156,7 +185,23 @@ RSpec.describe Clearinghouse::Risk::Client do
       result, elapsed = timed { blackhole.assess(assess_request, attempt: 1) }
 
       expect([reason::Timeout, reason::Connection]).to include(result.reason)
-      expect(elapsed).to be < deadline_ms + epsilon_ms
+      # Without the deadline this waits for the kernel's handshake timeout, over a minute.
+      expect(elapsed).to be < loaded_bound_ms
+    end
+
+    it 'covers the whole response and connecting, to within one wake-up', :timing do
+      body = JSON.generate('assessment_id' => 'asm_1', 'decision' => 'allow', 'risk_score' => 1,
+                           'matched_rule' => nil, 'reasons' => [], 'ruleset_version' => 'v1')
+      drip = local_server do |socket, _request|
+        "HTTP/1.1 200 OK\r\nContent-Length: #{body.bytesize}\r\n\r\n#{body}".each_char do |c|
+          socket.write(c)
+          sleep 0.01
+        end
+      end
+      clients = [described_class.new(base_url: "http://127.0.0.1:#{drip.port}", deadline_ms: deadline_ms),
+                 described_class.new(base_url: 'http://10.255.255.1:80', deadline_ms: deadline_ms)]
+      elapsed = clients.map { |c| timed { c.assess(assess_request, attempt: 1) }.last }
+      expect(elapsed).to all(be < deadline_ms + epsilon_ms)
     end
   end
 
@@ -191,7 +236,13 @@ RSpec.describe Clearinghouse::Risk::Client do
       refused = described_class.new(base_url: "http://127.0.0.1:#{FakeRiskgateHelper.closed_port}")
       result, elapsed = timed { refused.assess(assess_request, attempt: 1) }
       expect(result.reason).to eq(reason::Connection)
-      expect(elapsed).to be < 20
+      # Far less than the deadline: a refusal is not waited out.
+      expect(elapsed).to be < 20 + (4 * scheduling_lag_ms)
+    end
+
+    it 'reports a refused connection within 20 ms', :timing do
+      refused = described_class.new(base_url: "http://127.0.0.1:#{FakeRiskgateHelper.closed_port}")
+      expect(timed { refused.assess(assess_request, attempt: 1) }.last).to be < 20
     end
 
     it 'reports a connection closed before any answer as connection' do
