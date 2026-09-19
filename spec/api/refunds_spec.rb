@@ -187,7 +187,8 @@ RSpec.describe Clearinghouse::Api::Routes::Refunds, :db do
     it 'is zero in USD for a merchant that has never been paid' do
       get '/v1/balance', {}, auth
       expect(json_body).to eq('object' => 'balance', 'available' => [{ 'amount' => 0, 'currency' => 'usd' }],
-                              'pending' => [{ 'amount' => 0, 'currency' => 'usd' }], 'livemode' => false)
+                              'pending' => [{ 'amount' => 0, 'currency' => 'usd' }],
+                              'held' => [{ 'amount' => 0, 'currency' => 'usd' }], 'livemode' => false)
     end
 
     it 'reads pending and available per currency from the ledger' do

@@ -1,0 +1,43 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The one clock-driven worker. Each tick runs, in order: the authorization expiry
+# sweep, the acquirer notification poller, settlement file ingestion, the missing
+# settlement line check, the availability sweep, automatic payouts, resuming
+# stopped payouts, the idempotency completer and the reaper. It prints one JSON line per tick with
+# what each step did and any step that failed. Configured like the API server
+# (CLEARINGHOUSE_DB, CLEARINGHOUSE_ACQUIRER_URL, RISKGATE_URL,
+# CLEARINGHOUSE_IDEMPOTENCY_LOCK_TIMEOUT). See docs/design/scheduler.md.
+#
+#   bin/scheduler [--once] [--interval SECONDS] [--grace SECONDS] [--limit N]
+#
+# --grace is how long an unlocked, unfinished idempotency key must have been idle
+# before the completer takes it (default: the lock timeout). SIGINT or SIGTERM
+# lets the current tick finish, then exits.
+
+require 'bundler/setup'
+require 'json'
+require 'optparse'
+require_relative '../lib/clearinghouse'
+
+options = { once: false, interval: 5.0, grace: nil, limit: 100 }
+OptionParser.new do |opts|
+  opts.on('--once') { options[:once] = true }
+  opts.on('--interval SECONDS', Float) { |v| options[:interval] = v }
+  opts.on('--grace SECONDS', Float) { |v| options[:grace] = v }
+  opts.on('--limit N', Integer) { |v| options[:limit] = v }
+end.parse!
+$stdout.sync = true
+
+stopping = false
+%w[INT TERM].each { |signal| Signal.trap(signal) { stopping = true } }
+
+deps = Clearinghouse::Api::Dependencies.from_env
+scheduler = Clearinghouse::Scheduler.new(deps, grace: options[:grace], limit: options[:limit])
+# Sleep in short slices so a signal does not wait out a long interval.
+now = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+nap = lambda do |seconds|
+  deadline = now.call + seconds
+  sleep([0.2, deadline - now.call].min) until stopping || now.call >= deadline
+end
+scheduler.run(interval: options[:interval], out: $stdout, stop: -> { options[:once] || stopping }, sleeper: nap)
