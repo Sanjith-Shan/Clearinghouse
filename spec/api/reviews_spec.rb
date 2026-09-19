@@ -92,6 +92,80 @@ RSpec.describe Clearinghouse::Api::Routes::Reviews, :db do
     expect(json_body['error']).to include('code' => 'resource_missing')
   end
 
+  describe 'reject under an idempotency key' do
+    def acquirer_refunds
+      AcquirerSpec.simulator.operations.select { |o| o.type == 'refund' }
+    end
+
+    # Rejected, refunded once, held money released against the refund.
+    def expect_rejected_once(hold)
+      expect(Clearinghouse::Balances::Holds.find(app_db, id: hold.id))
+        .to have_attributes(resolution: 'rejected', held_amount: 0)
+      refunds = app_db[:refunds].where(payment_intent_id: hold.flow_id).all
+      expect(refunds.map { |r| [r[:status], r[:amount]] }).to eq([['succeeded', 10_000]])
+      expect(acquirer_refunds.map(&:idempotency_key)).to eq([refunds.first[:id]])
+      expect([merchant_balance(merchant, 'held'), merchant_balance(merchant, 'available')]).to eq([0, -320])
+      expect(app_db[:events].where(type: 'charge.refunded').count).to eq(1)
+    end
+
+    it 'replays the stored response for a retry and refunds once' do
+      hold = review_payment
+      release!
+      first = api_post("/v1/reviews/#{hold.id}/reject", {}, 'HTTP_IDEMPOTENCY_KEY' => 'rj1')
+      expect(first.status).to eq(200)
+      again = api_post("/v1/reviews/#{hold.id}/reject", {}, 'HTTP_IDEMPOTENCY_KEY' => 'rj1')
+      expect([again.status, again.body, again.headers['idempotent-replayed']]).to eq([200, first.body, 'true'])
+      expect_rejected_once(hold)
+    end
+
+    it 'leaves the refund to the completer when the acquirer answer is lost, and it refunds once' do
+      hold = review_payment
+      release!
+      acquirer.fail_next(:refund, :drop)
+      response = api_post("/v1/reviews/#{hold.id}/reject", {}, 'HTTP_IDEMPOTENCY_KEY' => 'rj2')
+      expect(response.status).to eq(503)
+      expect(response.headers['clearinghouse-should-retry']).to eq('true')
+      # Closed as rejected with its refund pending: the money stays held until the refund posts.
+      expect(app_db[:refunds].where(payment_intent_id: hold.flow_id).get(:status)).to eq('pending')
+      expect(merchant_balance(merchant, 'held')).to eq(9_680)
+      key = app_db[:idempotency_keys].where(key: 'rj2').first
+      expect(key).to include(flow: 'review.reject', recovery_point: 'refund_requested')
+
+      clock.advance(60)
+      report = Clearinghouse::Api::Completion.completer(deps, grace: 30).run_once
+      expect([report.completed, report.failed]).to eq([[key[:id]], []])
+      expect_rejected_once(hold)
+      expect(acquirer.calls_of(:lookup).length).to eq(1) # asked before refunding again, and did not
+      replay = api_post("/v1/reviews/#{hold.id}/reject", {}, 'HTTP_IDEMPOTENCY_KEY' => 'rj2')
+      expect([replay.status, JSON.parse(replay.body)['closed_reason']]).to eq([200, 'refunded_as_fraud'])
+    end
+
+    # Every recovery point of review.reject, from the registry, at both moments.
+    FlowCrashHelpers.crash_points('review.reject').each do |point|
+      it "recovers from a crash at #{point}" do
+        hold = review_payment
+        release!
+        path = "/v1/reviews/#{hold.id}/reject"
+        input = Clearinghouse::Balances::ReviewFlows::Input.new(review_id: hold.id)
+        expect do
+          run_flow_directly(Clearinghouse::Balances::ReviewFlows::REJECT, input, path: path, key: 'crash',
+                                                                                 crash_at: point)
+        end.to raise_error(SimulatedCrash)
+
+        report = complete_after_crash('crash')
+        if report.nil?
+          expect(point.to_s).to eq('review.reject:started:before_commit')
+        else
+          expect(report.failed).to eq([])
+        end
+        retry_response = api_post(path, {}, 'HTTP_IDEMPOTENCY_KEY' => 'crash')
+        expect([retry_response.status, JSON.parse(retry_response.body)['closed_reason']])
+          .to eq([200, 'refunded_as_fraud'])
+        expect_rejected_once(hold)
+      end
+    end
+  end
+
   it 'lists reviews newest first, filtered by open, with paging' do
     first = review_payment(1_000)
     clock.advance(1)

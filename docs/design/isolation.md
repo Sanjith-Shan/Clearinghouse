@@ -155,6 +155,11 @@ What the code on main does today, read from `lib/clearinghouse/payments` and
   in a SERIALIZABLE transaction with bounded, jittered retry, as the spec asks. Around the
   code above, that makes the shipped combination `serializable_for_update`.
 
+- **Refunds of one payment inside the framework** also pass an advisory-lock turnstile on the
+  intent before their SERIALIZABLE phases begin (`Idempotency::Turnstile`,
+  `docs/design/idempotency.md`), because `serializable_for_update` still aborts every waiter
+  once per winner ahead of it, and 16 concurrent refunds ran some requests out of retries.
+
 The decision the numbers will test: row locks where the code knows which row it is
 checking, SERIALIZABLE around the whole phase. `FOR UPDATE` protects exactly the rows you
 remember to lock. SERIALIZABLE also protects the checks that are not a single row: a read of

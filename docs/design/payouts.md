@@ -341,25 +341,40 @@ word. Closing a closed review is 400 `review_closed`. Events: `review.opened` an
 
 ### How a reject refunds
 
-`POST /v1/reviews/:id/reject` passes `Balances::PaymentsRefundRequester` to `close_hold!`:
+`POST /v1/reviews/:id/reject` is an idempotent flow, `review.reject`
+(`Balances::ReviewFlows::Reject`), run by the idempotency framework like `POST /v1/refunds`:
 
-1. Inside the reject's transaction, `request_refund!` runs the refund's first step,
-   `Payments::Refunds.reserve!` (a full refund, reason `fraudulent`, created pending, with
-   its amount reserved on the intent). If the payment can't be refunded (already refunded,
-   not captured), the payments error comes back and the whole reject rolls back, so the
-   review stays open.
-2. After that commits, `finish!` makes the acquirer call and records it, the same steps as
-   `POST /v1/refunds`.
-3. `Refunds.mark_succeeded` posts `Flows.refund` and calls
-   `Holds.release_after_refund!` in the same transaction. That call is a no-op for a
-   payment without a rejected review, so every refund makes it.
+```
+started -> refund_created -> refund_requested -> refund_recorded -> finished
+```
+
+1. `started -> refund_created`, one transaction: `close_hold!` with
+   `Balances::PaymentsRefundRequester`, whose `request_refund!` runs the refund's first step,
+   `Payments::Refunds.reserve!` (a full refund, reason `fraudulent`, created pending, with its
+   amount reserved on the intent). The refund id goes into the key's `flow_state`. If the
+   payment can't be refunded (already refunded, not captured), the payments error comes back,
+   the transaction rolls back, the review stays open, and the 400 is the stored answer.
+2. `refund_created -> refund_requested -> refund_recorded` are the refund flow's own phases
+   (`Payments::Flows::Base#refund_phases`, shared with `refund.create`): commit the promise,
+   call the acquirer under the refund's id, record the answer. A resumed phase asks the
+   acquirer about that id before sending anything.
+3. `Refunds.mark_succeeded` posts `Flows.refund` and calls `Holds.release_after_refund!` in the
+   same transaction. That call is a no-op for a payment without a rejected review, so every
+   refund makes it.
 
 `spec/api/reviews_spec.rb` runs this end to end: a real card payment, a hold, the sweep,
 then a reject. The acquirer gets exactly one refund, the refund succeeds, held goes to
 zero, and available ends at -$3.20 (the fee is not returned). If the acquirer gives no
-definite answer, the payments area's retryable 503 comes back, the review is already
-closed as rejected, and the refund stays pending like any refund with a lost answer.
-Driving it to completion is the completer's job once it exists.
+definite answer, the reject answers a retryable 503 with the review already closed as
+rejected and the refund pending, and the money still held. The key stays at
+`refund_requested`, and the client's retry or the completer finishes it: it asks the
+acquirer, records the refund once, and releases the held money. The same spec crashes the
+reject at every one of its recovery points (from the registry, before and after commit)
+and checks the completer and a retry end with one refund and the right balances.
+
+Before the idempotency framework landed, the route ran the reserve in one transaction and
+then called the acquirer inline, outside any key. A lost answer left the refund pending
+with nothing that would ever finish it, and a retry of the reject got `review_closed`.
 
 Callers without a request context get `UnwiredRefundRequester` by default, which raises
 rather than closing a review without a refund. The domain specs use `StandInRefunds`

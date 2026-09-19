@@ -15,9 +15,9 @@ module Experiments
     #    assessment ids (`asm_` + digits, a counter in the fake RiskGate). The same id in two places gets the same
     #    placeholder, so the shape of the references is still compared: a body
     #    whose latest_charge pointed at the wrong charge would not normalise equal.
-    # 2. The value of every key named `created` (a Unix timestamp of when the
-    #    object was created; the crashed run and the control create their objects
-    #    at different seconds).
+    # 2. The value of every key named `created`, `closed` or `arrival_date` (Unix
+    #    timestamps of when the object was created, closed or is due; the crashed
+    #    run and the control reach them at different seconds).
     #
     # Everything else, every amount, status, count, error code and key order,
     # must match exactly.
@@ -26,11 +26,15 @@ module Experiments
 
       ID = /\b([a-z]+)_[A-Za-z0-9]{24}\b|\b(asm)_\d+\b/
 
+      # Unix timestamps of when something happened to an object, which differ
+      # between the crashed run and the control by however long apart they ran.
+      TIME_KEYS = %w[created closed arrival_date].freeze
+
       sig { params(value: T.untyped, table: T::Hash[String, String]).returns(T.untyped) }
       def self.call(value, table = {})
         case value
         when Hash
-          value.to_h { |k, v| [k, k == 'created' && v.is_a?(Integer) ? '<created>' : call(v, table)] }
+          value.to_h { |k, v| [k, TIME_KEYS.include?(k) && v.is_a?(Integer) ? "<#{k}>" : call(v, table)] }
         when Array then value.map { |v| call(v, table) }
         when String then ids(value, table)
         else value
@@ -123,12 +127,22 @@ module Experiments
       def raw_facts(intent_id, acquirer, keys)
         intent = @db[:payment_intents].where(id: intent_id).first || {}
         refunds = @db[:refunds].where(payment_intent_id: intent_id).order(:created_at, :id).all
-        objects = [intent_id, intent[:latest_charge], *refunds.map { |r| r[:id] }].compact
-        { 'intent' => intent_state(intent),
-          'refunds' => refunds.map { |r| r.slice(:id, :status, :amount, :failure_reason).transform_keys(&:to_s) },
-          'events' => events(objects, keys),
-          'ledger' => ledger([intent_id, *refunds.map { |r| r[:id] }]),
-          'acquirer' => acquirer_side(intent_id, intent[:acquirer_reference], acquirer) }
+        hold = @db[:risk_holds].where(flow_id: intent_id).first
+        objects = [intent_id, intent[:latest_charge], *refunds.map { |r| r[:id] }, hold&.fetch(:id)].compact
+        refund_rows = refunds.map { |r| r.slice(:id, :status, :amount, :failure_reason).transform_keys(&:to_s) }
+        facts = { 'intent' => intent_state(intent), 'refunds' => refund_rows,
+                  'events' => events(objects, keys),
+                  'ledger' => ledger([intent_id, *refunds.map { |r| r[:id] }]),
+                  'acquirer' => acquirer_side(intent_id, intent[:acquirer_reference], acquirer) }
+        facts['review'] = review_state(hold) if hold
+        facts
+      end
+
+      # A risk review on the payment, when it has one.
+      sig { params(hold: T::Hash[Symbol, T.untyped]).returns(T::Hash[String, T.untyped]) }
+      def review_state(hold)
+        { 'resolution' => hold[:resolution], 'held_amount' => hold[:held_amount], 'refunded' => !hold[:refund_id].nil?,
+          'refund_applied' => !hold[:refund_applied_at].nil? }
       end
 
       sig { returns(T::Hash[String, T.untyped]) }

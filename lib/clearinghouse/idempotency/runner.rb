@@ -234,6 +234,16 @@ module Clearinghouse
         params(flow: Flow, phase: Phase, run: Run, token: String, foreign: T.untyped).returns(T.nilable(Response))
       end
       def commit(flow, phase, run, token, foreign)
+        queue = phase.queue_on&.call(run)
+        return Turnstile.through(@db, queue) { commit_serializable(flow, phase, run, token, foreign) } if queue
+
+        commit_serializable(flow, phase, run, token, foreign)
+      end
+
+      sig do
+        params(flow: Flow, phase: Phase, run: Run, token: String, foreign: T.untyped).returns(T.nilable(Response))
+      end
+      def commit_serializable(flow, phase, run, token, foreign)
         committed_state = run.state.dup
         response = Serializable.transaction(@db, policy: @policy) do
           # A retried attempt starts from the committed state, not from what the

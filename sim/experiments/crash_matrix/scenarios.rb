@@ -37,6 +37,15 @@ module Experiments
       sig { abstract.params(state: T::Hash[String, String]).returns(Request) }
       def request(state); end
 
+      # Preconditions the API cannot create, written straight to the database
+      # after `setup` (a review hold, money made available). Runs for the crashed
+      # case and for the control alike. Returns the state, with anything added.
+      sig do
+        overridable.params(db: Sequel::Database, merchant_id: String, clock: Clearinghouse::Clock,
+                           state: T::Hash[String, String]).returns(T::Hash[String, String])
+      end
+      def prepare(db, merchant_id, clock, state) = state # rubocop:disable Lint/UnusedMethodArgument
+
       # What a finished request should have left: the problems, empty if none.
       sig { abstract.params(facts: T::Hash[String, T.untyped]).returns(T::Array[String]) }
       def resting_problems(facts); end
@@ -181,11 +190,60 @@ module Experiments
       end
     end
 
+    # A review hold opened on a captured payment, the way the risk integration
+    # opens one when RiskGate answered `review`.
+    module ReviewHold
+      extend T::Sig
+
+      sig do
+        params(db: Sequel::Database, merchant_id: String, clock: Clearinghouse::Clock,
+               state: T::Hash[String, String]).returns(T::Hash[String, String])
+      end
+      def self.open(db, merchant_id, clock, state)
+        hold = Clearinghouse::Balances::Holds.open_hold!(
+          db, flow_id: state.fetch('intent_id'), merchant_id: merchant_id,
+              amount: Clearinghouse::Money.of(2000, 'usd'), reason: 'crash matrix', clock: clock
+        )
+        state.merge('review_id' => hold.id)
+      end
+    end
+
+    # POST /v1/reviews/:id/reject on a captured payment under review: the review
+    # closes and the payment is refunded in full through the refund's own phases.
+    class RejectReviewScenario < Scenario
+      sig { override.returns(String) }
+      def flow = 'review.reject'
+
+      sig { override.params(api: ApiClient, tag: String).returns(T::Hash[String, String]) }
+      def setup(api, tag) = intent(api, tag, confirm: true)
+
+      sig do
+        override.params(db: Sequel::Database, merchant_id: String, clock: Clearinghouse::Clock,
+                        state: T::Hash[String, String]).returns(T::Hash[String, String])
+      end
+      def prepare(db, merchant_id, clock, state) = ReviewHold.open(db, merchant_id, clock, state)
+
+      sig { override.params(state: T::Hash[String, String]).returns(Request) }
+      def request(state) = Request.new(path: "/v1/reviews/#{state.fetch('review_id')}/reject", params: {})
+
+      sig { override.params(facts: T::Hash[String, T.untyped]).returns(T::Array[String]) }
+      def resting_problems(facts)
+        refunds = facts.fetch('refunds').map { |r| r.slice('status', 'amount') }
+        review = facts.fetch('review', {}).slice('resolution', 'held_amount', 'refunded')
+        problems = expect_intent(facts, 'status' => 'succeeded', 'amount_received' => 2000, 'amount_refunded' => 2000)
+        problems << "refunds are #{refunds}, expected one succeeded for 2000" unless
+          refunds == [{ 'status' => 'succeeded', 'amount' => 2000 }]
+        expected = { 'resolution' => 'rejected', 'held_amount' => 0, 'refunded' => true }
+        problems << "review is #{review}, expected #{expected}" unless review == expected
+        problems
+      end
+    end
+
     class MissingScenarioError < StandardError; end
 
     SCENARIOS = T.let(
-      [CreateScenario.new, ConfirmScenario.new, CaptureScenario.new, CancelScenario.new, RefundScenario.new]
-        .to_h { |s| [s.flow, s] }.freeze,
+      [CreateScenario.new, ConfirmScenario.new, CaptureScenario.new, CancelScenario.new, RefundScenario.new,
+       RejectReviewScenario.new].to_h { |s| [s.flow, s] }.freeze,
       T::Hash[String, Scenario]
     )
 

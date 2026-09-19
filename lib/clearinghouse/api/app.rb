@@ -154,6 +154,11 @@ module Clearinghouse
         raise Errors::IdempotencyKeyReusedError, T.must(key)
       rescue Idempotency::KeyInUseError, Idempotency::LockLostError
         raise Errors::IdempotencyKeyInUseError, key || 'generated'
+      rescue Idempotency::Serializable::ExhaustedError
+        # Contention outlasted the retry budget. Nothing committed for the phase
+        # that lost and the lease was given back, so this is transient: a retry
+        # resumes where the request stopped.
+        raise Errors::LockTimeoutError, 'Another request is changing the same object. Retry shortly.'
       end
 
       sig { returns(T.nilable(String)) }

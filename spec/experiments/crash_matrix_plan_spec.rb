@@ -37,11 +37,11 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
   end
 
   it 'plans a flow with no scenario like any other, and its cases fail instead of vanishing' do
-    extended = Clearinghouse::Idempotency::Registry.new([*registry.flows, flow_named('payout.create', 'paid')])
+    extended = Clearinghouse::Idempotency::Registry.new([*registry.flows, flow_named('spec.unscenarioed', 'paid')])
     plan = cm.plan(extended, variants: false)
     expect(plan.map(&:crash_name)).to eq(extended.crash_points.map(&:to_s))
-    expect(plan.last(6).map(&:crash_name)).to all(start_with('payout.create:'))
-    expect(cm.flows_without_scenario(extended)).to eq(['payout.create'])
+    expect(plan.last(6).map(&:crash_name)).to all(start_with('spec.unscenarioed:'))
+    expect(cm.flows_without_scenario(extended)).to eq(['spec.unscenarioed'])
 
     proxy = cm::RecordingProxy.new(upstream_port: 1)
     runner = cm::CaseRunner.new(settings: cm::Settings.new(db_name: 'unused', log_dir: Dir.tmpdir),
@@ -49,7 +49,7 @@ RSpec.describe 'Experiment 2 crash matrix plan' do
                                 db: Sequel.mock, owner_db: Sequel.mock)
     result = runner.run(plan.last, 1)
     proxy.stop
-    expect([result.passed?, result.error]).to match([false, /MissingScenarioError: flow payout\.create/])
+    expect([result.passed?, result.error]).to match([false, /MissingScenarioError: flow spec\.unscenarioed/])
     expect(cm.headline([result], full: true)).to eq('crashed at 1 point across 1 flow, recovered at 0 of 1')
   end
 

@@ -54,7 +54,10 @@ triggers off for that transaction (the ledger's append-only triggers refuse it o
    cancel get a confirmed manual-capture intent (so cancel has an authorization to void),
    refund gets a succeeded intent, confirm gets a created one, and create gets nothing. Every
    payment uses `pm_card_visa`. A setup only ever calls *other* flows, so it can't reach the
-   point it is preparing.
+   point it is preparing. What the API can't create is written to the database by the
+   scenario's `prepare` afterwards: a review hold for `review.reject` and `review.approve`,
+   and money made available (the availability sweep, run on a clock three days ahead) for
+   `payout.create` and `payout.cancel`.
 4. **Snapshot, send, die.** Snapshot the merchant's state, then send the request with an
    Idempotency-Key. The case passes `crashed` only if the client's connection ends with no
    response *and* the process exits with status 86. A process that exits any other way, or not

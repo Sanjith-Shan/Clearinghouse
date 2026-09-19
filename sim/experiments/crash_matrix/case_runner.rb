@@ -188,7 +188,9 @@ module Experiments
       def crash(work)
         result = work.result
         api = start_api(work.kase.crash_name, result, 'boot_armed_s', "#{work.tag}-armed")
-        work.state = timed(result, 'setup_s') { work.scenario.setup(api, work.tag) }
+        work.state = timed(result, 'setup_s') do
+          work.scenario.prepare(@db, work.merchant_id, @clock, work.scenario.setup(api, work.tag))
+        end
         raise 'the armed server died during setup' if T.must(@server).exited?
 
         work.request = work.scenario.request(work.state)
@@ -227,7 +229,7 @@ module Experiments
         again = api.post(request.path, request.params, key: work.key)
         @sim.configure('drop_after_commit_rate' => 0.0) if work.kase.variant == DROP
 
-        control_state = work.scenario.setup(api, work.control_tag)
+        control_state = work.scenario.prepare(@db, work.merchant_id, @clock, work.scenario.setup(api, work.control_tag))
         control_request = work.scenario.request(control_state)
         control = api.post(control_request.path, control_request.params, key: work.control_key)
         timed(result, 'verify_s') do
