@@ -215,7 +215,8 @@ Payouts (`lib/clearinghouse/payouts.rb`):
 Payouts.create!(db, merchant_id:, currency:, bank:, clock:, amount: nil) -> Payout   # reserve! then drive!
 Payouts.reserve! / request_bank! / call_bank / record_bank!    # the atomic phases, in RECOVERY_POINTS order
 Payouts.drive!(db, payout_id, bank:, clock:) -> Payout         # runs the phases left, from payouts.recovery_point
-Payouts.resume_incomplete!(db, bank:, clock:)                  # completer stand-in
+Payouts.resume_incomplete!(db, bank:, clock:)                  # finishes stopped payouts; the only finisher for automatic ones
+Payouts::Flows::CREATE / CANCEL                                # flows payout.create (RECOVERY_POINTS) and payout.cancel, run by the API
 Payouts.handle_notification(db, notification, clock:) -> :applied | :duplicate | :unknown_payout | :ignored
   # for payout.paid / payout.failed; the notification poller calls it; idempotent
 Payouts.run_scheduled!(db, bank:, clock:) -> [Payout]          # daily sweep, after Availability.release_due!

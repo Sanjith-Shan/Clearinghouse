@@ -4,13 +4,12 @@
 module Clearinghouse
   # Creating a payout, one atomic phase per method.
   #
-  # IDEMPOTENCY FRAMEWORK SEAM. The payments area's framework (idempotency keys,
-  # SERIALIZABLE phases, the completer) is not on main yet. Until it is, these
-  # phases are plain methods and the payout row carries its own recovery point, so
-  # `drive!` can resume a payout from wherever a crash left it and
-  # `resume_incomplete!` plays the completer's part. docs/design/payouts.md,
-  # "Plugging into the idempotency framework", says how each phase maps onto an
-  # atomic phase and what the crash matrix must cover.
+  # POST /v1/payouts runs these as the idempotency framework's phases
+  # (Payouts::Flows::Create). They also stand on their own, with the payout row
+  # carrying its recovery point, because automatic payouts are made by a sweep
+  # with no request and no key: `drive!` resumes a payout from wherever a crash
+  # left it and `resume_incomplete!` finds the stopped ones. docs/design/payouts.md
+  # has the crash matrix.
   #
   #   started           -> reserve!       -> balance_reserved   (one DB transaction)
   #   balance_reserved  -> request_bank!  -> bank_requested     (one DB transaction)
@@ -169,9 +168,11 @@ module Clearinghouse
       end, Payout)
     end
 
-    # The completer's job until the framework's completer exists: drives every
-    # payout whose request stopped mid-way (a crash, or the bank unavailable or
-    # silent) and has not been touched for STALE_AFTER_SECONDS.
+    # Drives every payout that stopped mid-way (a crash, or the bank unavailable
+    # or silent) and has not been touched for STALE_AFTER_SECONDS. Automatic
+    # payouts have no idempotency key, so this is what finishes them. For an API
+    # payout it races the framework's completer, which is safe: the phases
+    # re-check the recovery point under the row lock and the bank dedupes the key.
     sig do
       params(db: Sequel::Database, bank: Acquirer::Client, clock: Clock, events: Balances::EventSink,
              stale_after: Integer).returns(T::Array[Payout])
