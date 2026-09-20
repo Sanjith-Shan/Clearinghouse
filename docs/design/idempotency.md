@@ -215,7 +215,7 @@ first is still the better protocol. Resume never sends a mutation it can't show 
 A status query is a read, so the completer can repeat it on a schedule without an issuer
 counting another authorization attempt. And the decision the resume makes (record this
 answer, or send) is explicit and tested rather than hidden inside the acquirer's replay.
-`spec/api/idempotency_spec.rb` covers each branch against the real simulator:
+`spec/integration/payments/idempotency_spec.rb` covers each branch against the real simulator:
 `pm_card_timeout`, a dropped response on a normal card, a request lost before sending
 (lookup says `NotFound`, then it authorizes, still under attempt 1's key), a status query
 that goes unanswered, a lost decline (resolved to the same 402), a lost capture and a lost
