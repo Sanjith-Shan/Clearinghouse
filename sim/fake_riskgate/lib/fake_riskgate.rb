@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require 'json'
+require 'openssl'
 require 'socket'
 require 'sorbet-runtime'
 
@@ -9,6 +10,9 @@ require 'sorbet-runtime'
 # real Go service is not running. It speaks the contract in docs/design/interfaces.md
 # and misbehaves on command: latency from a lognormal fitted to p50 and p99, a share
 # of 500s, a share of malformed 200s, hanging without answering, and crashing.
+# It also takes Clearinghouse's webhooks at POST /v1/webhooks/clearinghouse, checks
+# the signature against `webhook_secrets`, and counts what arrived, so experiment 8
+# can show events flowing back without the Go service.
 #
 # It is a raw TCP server rather than a Rack app because the misbehaviour that
 # matters is below HTTP: holding a connection open and silent, closing idle
@@ -41,7 +45,11 @@ module FakeRiskgate
       # Close a keep-alive connection after this many requests on it (0: never).
       'close_after' => 0,
       # Read the next N assess requests and close the connection without answering.
-      'drop_next' => 0
+      'drop_next' => 0,
+      # Secrets POST /v1/webhooks/clearinghouse accepts signatures from, and the
+      # allowed timestamp skew in seconds. No secrets: every webhook is rejected.
+      'webhook_secrets' => [],
+      'webhook_tolerance' => 300
     }.freeze, T::Hash[String, T.untyped])
 
     sig { returns(T::Hash[String, T.untyped]) }
@@ -131,6 +139,7 @@ module FakeRiskgate
       @stats = T.let({}, T::Hash[String, Integer])
       @running = true
       @drops_left = T.let(Integer(config['drop_next']), Integer)
+      @webhook_ids = T.let({}, T::Hash[String, String])
     end
 
     sig { returns(T.self_type) }
@@ -161,6 +170,16 @@ module FakeRiskgate
     sig { returns(T::Array[Request]) }
     def requests
       @mutex.synchronize { @requests.dup }
+    end
+
+    # What arrived at POST /v1/webhooks/clearinghouse: accepted events by type (each
+    # event id once), redeliveries of an id already seen, and rejected requests.
+    sig { returns(T::Hash[String, T.untyped]) }
+    def webhooks
+      @mutex.synchronize do
+        { 'accepted' => @webhook_ids.length, 'by_type' => @webhook_ids.values.tally.sort.to_h,
+          'duplicates' => @stats.fetch('webhook_duplicates', 0), 'rejected' => @stats.fetch('webhooks_rejected', 0) }
+      end
     end
 
     # The assessment id stored under an Idempotency-Key, for tests.
@@ -244,6 +263,8 @@ module FakeRiskgate
       end
       case [request.verb, request.path]
       when %w[POST /v1/assess] then assess(socket, request)
+      when %w[POST /v1/webhooks/clearinghouse] then webhook(socket, request)
+      when %w[GET /admin/webhooks] then respond(socket, 200, JSON.generate(webhooks))
       when %w[GET /health] then respond(socket, 200, '{"ok":true}')
       when %w[GET /admin/config] then respond(socket, 200, JSON.generate(@mutex.synchronize { @config.values }))
       when %w[GET /admin/stats] then respond(socket, 200, JSON.generate(stats))
@@ -277,6 +298,45 @@ module FakeRiskgate
       respond(socket, 200, fresh_assessment(config, request, key))
     rescue JSON::ParserError, ArgumentError, TypeError, KeyError => e
       respond(socket, 400, error_body('invalid_request', e.message))
+    end
+
+    # Verifies Clearinghouse-Signature (t=<unix>,v1=<hex HMAC-SHA256(secret, "t.body")>)
+    # the way RiskGate does, against the wall clock, and dedupes by event id.
+    sig { params(socket: TCPSocket, request: Request).returns(T::Boolean) }
+    def webhook(socket, request)
+      config = @mutex.synchronize { @config }
+      unless signed?(request, config)
+        count('webhooks_rejected')
+        return respond(socket, 400, error_body('invalid_signature'))
+      end
+
+      event = JSON.parse(request.body)
+      id = event.fetch('id')
+      type = event.fetch('type')
+      @mutex.synchronize do
+        next bump('webhook_duplicates') if @webhook_ids.key?(id)
+
+        @webhook_ids[id] = type
+      end
+      respond(socket, 200, '{"status":"ok"}')
+    rescue JSON::ParserError, KeyError, TypeError
+      count('webhooks_rejected')
+      respond(socket, 400, error_body('invalid_event'))
+    end
+
+    sig { params(request: Request, config: Config).returns(T::Boolean) }
+    def signed?(request, config)
+      parts = request.headers['clearinghouse-signature'].to_s.split(',').map { |p| p.split('=', 2) }
+      timestamp = parts.find { |k, _| k == 't' }&.last
+      return false unless timestamp&.match?(/\A\d+\z/)
+      # RiskGate checks the timestamp against its own wall clock, and so does the fake.
+      return false if (Time.now.to_i - Integer(timestamp, 10)).abs > Integer(config['webhook_tolerance'])
+
+      given = parts.filter_map { |k, v| v if k == 'v1' }
+      Array(config['webhook_secrets']).any? do |secret|
+        expected = OpenSSL::HMAC.hexdigest('SHA256', secret, "#{timestamp}.#{request.body}")
+        given.any? { |v| v.bytesize == expected.bytesize && OpenSSL.fixed_length_secure_compare(v, expected) }
+      end
     end
 
     sig { params(config: Config, request: Request, key: String).returns(String) }
