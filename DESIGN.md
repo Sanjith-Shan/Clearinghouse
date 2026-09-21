@@ -353,6 +353,7 @@ Payments, idempotency and the retry storm are linked from the sections above:
 - [Balances and payouts](docs/design/payouts.md): availability after the settlement delay, payouts as atomic phases around the bank call, risk-review holds, and negative balances.
 - [Scheduler](docs/design/scheduler.md): the one clock-driven worker, the order of its sweeps (expiry, the acquirer's notifications and settlement files, availability, payouts, the completer, the reaper) and why a failing step doesn't stop the others.
 - [Isolation](docs/design/isolation.md): experiment 3, READ COMMITTED read-then-write against `FOR UPDATE` against SERIALIZABLE with retry, the anomalies each allows, and what ships where.
+- [Replay through RiskGate](docs/design/replay.md): experiment 8, RiskGate's test month through the API under no checks, the model alone and model plus rules, with disputes, the assumed 15.00 USD fee, and what is real and what is simulated.
 - [Model-based testing](docs/design/model-testing.md): experiment 4. A reference model of the domain, random operation sequences checked against the ledger and the API after every step, shrinking to a replay script, and a planted-bug demo.
 
 ## Testing

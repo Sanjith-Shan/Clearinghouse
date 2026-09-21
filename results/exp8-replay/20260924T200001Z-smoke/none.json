@@ -1,0 +1,164 @@
+{
+  "label": "smoke",
+  "command": "bin/exp-replay --replay ~/Documents/RiskGate/data/export_synthetic/test_replay.jsonl --policy none --limit 50 --fake-riskgate sim/experiments/replay/fake_policy.json --db clearinghouse_test_loadgen --reset-db --label smoke --out results/exp8-replay/20260924T200001Z-smoke",
+  "machine": "Apple M3 Pro, 12 cores, 18 GB, Postgres 16 in Docker",
+  "ruby": "ruby 3.3.12 (2026-07-16 revision 0581089df9) [arm64-darwin25]",
+  "started_at": "2026-09-24T20:00:02Z",
+  "finished_at": "2026-09-24T20:00:05Z",
+  "load_average": {
+    "before": [
+      10.23,
+      11.71,
+      15.42
+    ],
+    "after": [
+      10.21,
+      11.68,
+      15.38
+    ]
+  },
+  "replay_file": "~/Documents/RiskGate/data/export_synthetic/test_replay.jsonl",
+  "database": "clearinghouse_test_loadgen",
+  "experiment": "exp8-replay",
+  "policy": "none",
+  "plan": {
+    "policy": "none",
+    "seed": 1,
+    "speed": 0.0,
+    "dispute_after_days": 7,
+    "deadline_ms": 50,
+    "webhooks": true,
+    "webhook_events": [
+      "payment_intent.succeeded",
+      "charge.dispute.created",
+      "charge.dispute.closed"
+    ],
+    "webhook_drain_seconds": 120.0,
+    "api_threads": 4,
+    "webhook_threads": 2
+  },
+  "rows": 50,
+  "simulated": {
+    "first_created": "2018-05-01T00:01:21Z",
+    "clock_at_end": "2018-05-09T00:27:59Z",
+    "rows_created_at_a_later_time": 0
+  },
+  "replay_wall_seconds": 2.2,
+  "rows_per_second": 22.4,
+  "money": {
+    "payments": 50,
+    "fraud_rows": 2,
+    "outcomes": {
+      "approved": 0,
+      "review": 0,
+      "risk_unavailable": 0,
+      "unchecked": 50,
+      "blocked": 0,
+      "declined": 0,
+      "error": 0
+    },
+    "approved": {
+      "count": 50,
+      "volume_cents": 371792
+    },
+    "blocked": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "reviews": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "risk_unavailable": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "declined_or_error": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "fraud_caught": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "fraud_through": {
+      "count": 2,
+      "volume_cents": 2817
+    },
+    "legit_blocked": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "disputes": {
+      "count": 2,
+      "volume_cents": 2817,
+      "on_legit_rows": 0,
+      "on_unknown_payments": 0
+    },
+    "dispute_fee_cents_assumed": 1500,
+    "dispute_losses_cents": 5817,
+    "net": {
+      "saved_cents": 0,
+      "cost_cents": 0,
+      "net_cents": 0
+    }
+  },
+  "disputes_source": "clearinghouse (GET /v1/disputes)",
+  "disputes_in_simulator": {
+    "count": 2,
+    "volume_cents": 2817
+  },
+  "latency": {
+    "confirm_ms": {
+      "n": 50,
+      "p50": 24.827,
+      "p99": 240.349,
+      "p999": 240.349,
+      "max": 240.349
+    },
+    "risk_step_ms": {
+      "n": 0
+    },
+    "risk_share_of_confirm": null,
+    "retried_confirms": 0
+  },
+  "riskgate": {
+    "deadline_ms": 50,
+    "ruleset_versions_seen": {}
+  },
+  "error_codes": {},
+  "holds": {
+    "opened": 0,
+    "open": 0,
+    "amount_cents": 0,
+    "held_cents": 0
+  },
+  "balance": {
+    "object": "balance",
+    "available": [
+      {
+        "amount": -5817,
+        "currency": "usd"
+      }
+    ],
+    "pending": [
+      {
+        "amount": 0,
+        "currency": "usd"
+      }
+    ],
+    "held": [
+      {
+        "amount": 0,
+        "currency": "usd"
+      }
+    ],
+    "livemode": false
+  },
+  "webhooks": {
+    "registered": false,
+    "workers_ran": false
+  },
+  "scheduler_step_errors": {},
+  "ledger_invariant_violations": 0
+}
