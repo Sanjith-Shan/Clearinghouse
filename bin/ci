@@ -9,7 +9,7 @@ export CLEARINGHOUSE_DB="${CLEARINGHOUSE_DB:-clearinghouse_test}"
 echo "== srb tc";   bundle exec srb tc
 echo "== rubocop";  bundle exec rubocop
 echo "== migrate";  bin/migrate
-echo "== rspec";    bundle exec rspec
+echo "== rspec";    COVERAGE_GATE=1 bundle exec rspec  # enforces spec/coverage_groups.rb floors
 if [ -d clients/go ]; then echo "== go test"; (cd clients/go && go test ./...); fi
 if [ -d sim/loadgen ]; then
   echo "== loadgen vet"; (cd sim/loadgen && go vet ./...)

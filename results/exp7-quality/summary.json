@@ -1,0 +1,156 @@
+{
+  "generated_at": "2026-09-24T20:47:08Z",
+  "git_sha": "7091fc6",
+  "machine": "Apple M3 Pro, 12 cores, 18 GB, macOS; Postgres 16 in Docker",
+  "ruby": "ruby 3.3.12 (2026-07-16 revision 0581089df9) [arm64-darwin25]",
+  "mutant": "0.17.0",
+  "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+  "mutant_sessions": [
+    "01a0d0cc-a0ea-72c7-8543-473deedd235d",
+    "01a0d0fc-9500-770a-939c-04296766089d",
+    "01a0d4c9-acc7-730d-8aaf-459ddcb322ad",
+    "01a0d50f-13cd-7d76-a434-f840dc49cd10"
+  ],
+  "mutant_runtime_seconds": 9829.1,
+  "mutant_jobs": null,
+  "mutation": {
+    "groups": [
+      {
+        "group": "Money core",
+        "mutations": 725,
+        "killed": 717,
+        "alive": 8,
+        "equivalent": 8,
+        "accepted": 0,
+        "timeouts": 0,
+        "score": 98.9,
+        "score_excluding_equivalents": 100.0
+      },
+      {
+        "group": "Ledger",
+        "mutations": 5081,
+        "killed": 4981,
+        "alive": 100,
+        "equivalent": 96,
+        "accepted": 4,
+        "timeouts": 0,
+        "score": 98.03,
+        "score_excluding_equivalents": 99.92
+      },
+      {
+        "group": "Webhook signatures",
+        "mutations": 594,
+        "killed": 586,
+        "alive": 8,
+        "equivalent": 8,
+        "accepted": 0,
+        "timeouts": 0,
+        "score": 98.65,
+        "score_excluding_equivalents": 100.0
+      },
+      {
+        "group": "SSRF policy",
+        "mutations": 908,
+        "killed": 878,
+        "alive": 30,
+        "equivalent": 30,
+        "accepted": 0,
+        "timeouts": 0,
+        "score": 96.7,
+        "score_excluding_equivalents": 100.0
+      }
+    ],
+    "totals": {
+      "mutations": 7308,
+      "killed": 7162,
+      "alive": 146,
+      "equivalent": 142,
+      "accepted": 4,
+      "timeouts": 0
+    }
+  },
+  "unexplained_alive": 0,
+  "stale_equivalents": 0,
+  "branch_coverage": {
+    "groups": [
+      {
+        "group": "Ledger",
+        "covered": 104,
+        "branches": 104,
+        "percent": 100.0,
+        "floor": 95.0
+      },
+      {
+        "group": "Money core",
+        "covered": 24,
+        "branches": 24,
+        "percent": 100.0,
+        "floor": 95.0
+      },
+      {
+        "group": "Webhooks",
+        "covered": 105,
+        "branches": 105,
+        "percent": 100.0,
+        "floor": null
+      },
+      {
+        "group": "API",
+        "covered": 124,
+        "branches": 140,
+        "percent": 88.57,
+        "floor": null
+      },
+      {
+        "group": "Versioning",
+        "covered": 56,
+        "branches": 59,
+        "percent": 94.92,
+        "floor": null
+      },
+      {
+        "group": "Acquirer client",
+        "covered": 34,
+        "branches": 40,
+        "percent": 85.0,
+        "floor": null
+      },
+      {
+        "group": "Other lib",
+        "covered": 139,
+        "branches": 152,
+        "percent": 91.45,
+        "floor": null
+      },
+      {
+        "group": "Simulator",
+        "covered": 201,
+        "branches": 214,
+        "percent": 93.93,
+        "floor": null
+      },
+      {
+        "group": "Ruby client",
+        "covered": 99,
+        "branches": 103,
+        "percent": 96.12,
+        "floor": null
+      }
+    ],
+    "global": 94.16,
+    "global_floor": 93.5,
+    "examples": 1118
+  },
+  "srb_tc": "clean",
+  "sigils": {
+    "everything else": {
+      "true": 18,
+      "ignore": 1,
+      "false": 77
+    },
+    "lib": {
+      "strict": 28,
+      "true": 41
+    }
+  }
+}
