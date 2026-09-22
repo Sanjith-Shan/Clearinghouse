@@ -65,6 +65,7 @@ RSpec.describe Clearinghouse::Ledger::Clearing, :db do
     expect(leak.unexplained).to eq([receivable, 'usd'] => 100)
     expect(leak.opened_at).to eq(LedgerHelpers::T0 + day)
     expect(result).not_to be_healthy
+    expect(result.flow_types_without_sla).to eq([])
   end
 
   it 'keeps an in-flight flow open but not overdue' do
@@ -103,6 +104,17 @@ RSpec.describe Clearinghouse::Ledger::Clearing, :db do
       .to eq([['platform:refund_clearing', 'usd', 700, 0, 700]])
   end
 
+  it 'nets an orphan against the open flows behind the same account, and is unhealthy for it alone' do
+    flow_event('re_9', :refund, day: 0, merchant_id: 'm1', amount: usd(100))
+    id = app_db[:ledger_accounts].where(code: 'platform:refund_clearing', currency: 'usd').get(:id)
+    owner_db[:account_balances].where(account_id: id).update(balance: 800)
+    result = described_class.report(app_db, as_of: LedgerHelpers::T0 + day, slas: slas)
+    expect(result.past_sla).to eq([])
+    expect(result.orphan_balances.map { |o| [o.code, o.stored, o.open_flows_total, o.unexplained] })
+      .to eq([['platform:refund_clearing', 800, 100, 700]])
+    expect(result).not_to be_healthy
+  end
+
   it 'is healthy once the leak is corrected and the in-flight payment settles' do
     build_world
     leak = app_db[:ledger_transactions].where(flow_id: 'pi_4', description: 'settlement').get(:id)
@@ -119,6 +131,11 @@ RSpec.describe Clearinghouse::Ledger::Clearing, :db do
     flow_event('re_9', :refund, day: 0, merchant_id: 'm1', amount: usd(100))
     result = described_class.report(app_db, as_of: as_of, slas: {})
     expect(result.flow_types_without_sla).to eq(['refund'])
+    # Flow ids that sort the other way round from their types, so the list is sorted by type.
+    post(Clearinghouse::Ledger::Flows.dispute_opened(merchant_id: 'm1', amount: usd(100), fee: usd(0)),
+         flow_id: 'x_2', flow_type: 'dispute')
+    post(Clearinghouse::Ledger::Flows.refund(merchant_id: 'm1', amount: usd(100)), flow_id: 'x_1', flow_type: 'refund')
+    expect(described_class.report(app_db, as_of: as_of, slas: {}).flow_types_without_sla).to eq(%w[dispute refund])
     expect(result.past_sla).to eq([])
     expect(result.open_flows.first.sla_seconds).to be_nil
   end
@@ -127,6 +144,19 @@ RSpec.describe Clearinghouse::Ledger::Clearing, :db do
     flow_event('po_9', :payout, day: 6, merchant_id: 'm1', amount: usd(100))
     expect(report.past_sla).to eq([])
     expect(described_class.report(app_db, as_of: as_of + 1, slas: slas).past_sla.map(&:flow_id)).to eq(['po_9'])
+  end
+
+  it 'counts only whole seconds of age, so a flow is not overdue until a full second past its SLA' do
+    flow_event('po_9', :payout, day: 6, merchant_id: 'm1', amount: usd(100))
+    expect(described_class.report(app_db, as_of: as_of + 0.5, slas: slas).past_sla).to eq([])
+  end
+
+  it 'lists open flows in byte order of flow id, whatever the database collation says' do
+    # en_US collation puts pi_a before pi_B; byte order, which the report promises, does not.
+    %w[pi_a pi_B].each do |id|
+      flow_event(id, :capture, day: 7, merchant_id: 'm1', gross: usd(100), fee: usd(3))
+    end
+    expect(report.open_flows.map(&:flow_id)).to eq(%w[pi_B pi_a])
   end
 
   it 'reports an empty ledger as healthy with nothing to explain' do
@@ -138,6 +168,6 @@ RSpec.describe Clearinghouse::Ledger::Clearing, :db do
   it 'treats a flow type with no volume as fully explained' do
     empty = described_class::Explainability.new(flow_type: 'payment', currency: 'usd', flows: 0, explained_flows: 0,
                                                 volume: 0, explained_volume: 0)
-    expect(empty.share).to eq(1)
+    expect(empty.share).to eql(Rational(1)) # a Rational like every other share, never an Integer
   end
 end

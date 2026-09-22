@@ -1,0 +1,783 @@
+# Surviving mutants that cannot change behaviour, and why. bin/quality-report matches a
+# survivor to an entry by subject and by the changed lines of its diff (whitespace
+# ignored), counts it as equivalent, and renders this list as the table in
+# docs/design/quality.md. An entry that no longer matches any survivor is reported as
+# stale. Keep the reasons specific: "cannot happen" must say why it cannot.
+#
+# Recurring reasons, referenced below:
+# - [index] `a[i]`, `a.at(i)` and `a.fetch(i)` differ only when i is out of range, and
+#   the array is a fixed-shape tuple built a few lines earlier or a constant.
+# - [sorbet] T.let/T.must/T.cast and generic type arguments only matter to the static
+#   checker. sorbet-runtime erases generic element types, T.must is only reached with a
+#   non-nil value, and srb tc rejects the mutated annotation anyway.
+# - [subclass] `is_a?` vs `instance_of?` differs only for a subclass, and the class has
+#   none; a new subclass would be a design change that brings its own tests.
+
+# ---- money core ------------------------------------------------------------
+- subject: Clearinghouse::Money.parse
+  mutation: |
+    -  minor = (Integer(T.must(match[2]), 10) * Currency.scale(currency)) + (if padded.empty?
+    +  minor = (Integer(match[2], 10) * Currency.scale(currency)) + (if padded.empty?
+  why: "[sorbet] Group 2 is `(\\d+)`, not optional, so it is set whenever the regex matched; T.must is there for srb tc."
+- subject: 'Clearinghouse::Money#<=>'
+  mutation: |
+    -  unless other.is_a?(Money) && other.currency == currency
+    +  unless other.instance_of?(Money) && other.currency == currency
+  why: "[subclass] Money has no subclasses."
+- subject: 'Clearinghouse::Money#=='
+  mutation: |
+    -  unless other.is_a?(Money)
+    +  unless other.instance_of?(Money)
+  why: "[subclass] Money has no subclasses."
+- subject: 'Clearinghouse::Money#=='
+  mutation: |
+    -  unless other.is_a?(Money)
+    -    return false
+    -  end
+    -  other.currency == currency && other.amount == amount
+    +  super
+  why: >-
+    Money includes Comparable, so `super` is Comparable#==, which is false when `<=>` returns
+    nil (not Money, or another currency) and compares amounts otherwise. That is the same
+    relation. The explicit method stays so equality does not depend on `<=>`'s nil rules.
+- subject: 'Clearinghouse::Money#to_s'
+  mutation: |
+    -  sign = if amount.negative?
+    +  sign = if self.negative?
+  why: "Money#negative? is `amount.negative?`."
+- subject: 'Clearinghouse::Money#to_s'
+  mutation: |
+    -  else
+    -    ""
+  why: "Without the else the sign is nil for a non-negative amount, and nil interpolates as an empty string."
+- subject: 'Clearinghouse::Money#to_s'
+  mutation: |
+    -    ""
+    +    nil
+  why: "nil interpolates as an empty string."
+- subject: 'Clearinghouse::Money#to_s'
+  mutation: |
+    -    whole.to_s
+    +    whole
+  why: "The branch value is only interpolated into the result, and interpolation calls the Integer's to_s anyway."
+
+# ---- webhook signatures -----------------------------------------------------
+- subject: Clearinghouse::Webhooks::Signature.compute
+  mutation: |
+    -  OpenSSL::HMAC.hexdigest("SHA256", secret.b, "#{timestamp_text}.".b + payload.b)
+    +  OpenSSL::HMAC.hexdigest("SHA256", secret, "#{timestamp_text}.".b + payload.b)
+  why: "OpenSSL::HMAC reads the key's bytes whatever its encoding; `.b` only relabels the same bytes."
+- subject: Clearinghouse::Webhooks::Signature.compute
+  mutation: |
+    -  OpenSSL::HMAC.hexdigest("SHA256", secret.b, "#{timestamp_text}.".b + payload.b)
+    +  OpenSSL::HMAC.hexdigest("SHA256", secret.b, "#{timestamp_text}." + payload.b)
+  why: >-
+    The prefix is ASCII digits and a dot, and an ASCII-only UTF-8 string concatenates with a
+    binary one to the same bytes. (Dropping `.b` on the payload is not equivalent, and a
+    UTF-16 payload test kills it.)
+- subject: Clearinghouse::Webhooks::Signature.parse
+  mutation: |
+    -  timestamp_text = T.let(nil, T.nilable(String))
+    +  timestamp_text = nil
+  why: "[sorbet]"
+- subject: Clearinghouse::Webhooks::Signature.parse
+  mutation: |
+    -  signatures = T.let([], T::Array[String])
+    +  signatures = T.let([], T::Array[nil])
+  why: "[sorbet] The element type is erased at runtime."
+- subject: Clearinghouse::Webhooks::Signature.parse
+  mutation: |
+    -  header.b.split(",", -1).each { |raw|
+    +  header.b.split(",", -1) { |raw|
+  why: "String#split with a block yields each piece in order, the same as calling each on the array; the return value is unused."
+- subject: Clearinghouse::Webhooks::Signature.parse
+  mutation: |
+    -  header.b.split(",", -1).each { |raw|
+    +  header.b.split(",", -2).each { |raw|
+  why: "Any negative limit means the same thing to String#split: no limit, keep trailing empty fields."
+- subject: Clearinghouse::Webhooks::Signature.verify
+  mutation: |
+    -  Result.new(error: nil, timestamp: parsed.timestamp)
+    +  Result.new(timestamp: parsed.timestamp)
+  why: "`error` is a nilable T::Struct prop, so leaving it out sets it to nil. The explicit nil is there for the reader."
+- subject: Clearinghouse::Webhooks::Signature.verify!
+  mutation: |
+    -  T.must(result.timestamp)
+    +  result.timestamp
+  why: "[sorbet] verify sets the timestamp on every result whose error is nil, and that is the only way to get here."
+
+# ---- SSRF address policy ----------------------------------------------------
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v4
+  mutation: |
+    -  hit && Denial.new(reason: hit[1], detail: "#{address} is in #{cidr(hit[0])}")
+    +  hit && Denial.new(reason: hit.fetch(1), detail: "#{address} is in #{cidr(hit[0])}")
+  why: "[index] `hit` is one of the two-element range tuples."
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v4
+  mutation: |
+    -  hit && Denial.new(reason: hit[1], detail: "#{address} is in #{cidr(hit[0])}")
+    +  hit && Denial.new(reason: hit.at(1), detail: "#{address} is in #{cidr(hit[0])}")
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v4
+  mutation: |
+    -  hit && Denial.new(reason: hit[1], detail: "#{address} is in #{cidr(hit[0])}")
+    +  hit && Denial.new(reason: hit[1], detail: "#{address} is in #{cidr(hit.fetch(0))}")
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v4
+  mutation: |
+    -  hit && Denial.new(reason: hit[1], detail: "#{address} is in #{cidr(hit[0])}")
+    +  hit && Denial.new(reason: hit[1], detail: "#{address} is in #{cidr(hit.at(0))}")
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v6
+  mutation: |
+    -    detail = "#{address} is in #{cidr(hit[0])}"
+    +    detail = "#{address} is in #{cidr(hit.fetch(0))}"
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v6
+  mutation: |
+    -    detail = "#{address} is in #{cidr(hit[0])}"
+    +    detail = "#{address} is in #{cidr(hit.at(0))}"
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v6
+  mutation: |
+    -    if ["ipv4_mapped", "ipv4_compatible"].include?(hit[1])
+    +    if ["ipv4_mapped", "ipv4_compatible"].include?(hit.fetch(1))
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v6
+  mutation: |
+    -    if ["ipv4_mapped", "ipv4_compatible"].include?(hit[1])
+    +    if ["ipv4_mapped", "ipv4_compatible"].include?(hit.at(1))
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v6
+  mutation: |
+    -    return Denial.new(reason: hit[1], detail:)
+    +    return Denial.new(reason: hit.fetch(1), detail:)
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.denial_v6
+  mutation: |
+    -    return Denial.new(reason: hit[1], detail:)
+    +    return Denial.new(reason: hit.at(1), detail:)
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.embedded
+  mutation: |
+    -  IPAddr.new((address.to_i >> shift) & 4294967295, Socket::AF_INET)
+    +  IPAddr.new((address >> shift) & 4294967295, Socket::AF_INET)
+  why: "IPAddr#>> and #& work on the address's integer value, and IPAddr.new accepts the resulting IPAddr; checked by hand for the NAT64 and 6to4 cases, which give the same IPv4 address."
+- subject: Clearinghouse::Webhooks::Egress::IpPolicy.embedded
+  mutation: |
+    -  IPAddr.new((address.to_i >> shift) & 4294967295, Socket::AF_INET)
+    +  IPAddr.new((Integer(address) >> shift) & 4294967295, Socket::AF_INET)
+  why: "Integer() on an IPAddr calls its to_i."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  unless port.is_a?(Integer) && port.between?(1, 65535)
+    +  unless port.between?(1, 65535)
+  why: >-
+    Only http and https URLs reach this line, and URI gives both a default port, so `port` is
+    always an Integer here (the spec's `https://host:/` style cases confirm URI never returns
+    nil for them). The type check is defence in depth against a URI change.
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  unless port.is_a?(Integer) && port.between?(1, 65535)
+    +  unless port && port.between?(1, 65535)
+  why: "As above: port is always an Integer here."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  unless port.is_a?(Integer) && port.between?(1, 65535)
+    +  unless port.instance_of?(Integer) && port.between?(1, 65535)
+  why: "[subclass] Integer has no subclasses in practice; and port is always an Integer here."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  unless port.is_a?(Integer) && port.between?(1, 65535)
+    +  unless true && port.between?(1, 65535)
+  why: "As above: port is always an Integer here."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  unless port.is_a?(Integer) && port.between?(1, 65535)
+    +  unless Integer && port.between?(1, 65535)
+  why: "As above: port is always an Integer here."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -    return refuse("invalid_url", "port #{port.inspect}")
+    +    return refuse("invalid_url", "port #{port}")
+  why: "port is an Integer, whose inspect and to_s are the same string."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  if checked.is_a?(Refusal)
+    +  if checked.instance_of?(Refusal)
+  why: "[subclass] Refusal has no subclasses."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  request_uri = T.cast(uri, URI::HTTP).request_uri.to_s
+    +  request_uri = T.cast(uri, URI::HTTP).request_uri
+  why: "URI::HTTP#request_uri returns a String for any URI with a host, which every URI reaching this line has."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  request_uri = T.cast(uri, URI::HTTP).request_uri.to_s
+    +  request_uri = T.cast(uri, URI::HTTP).request_uri.to_str
+  why: "As above: it is already a String."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  Target.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+    +  self.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+  why: "Inside Target's singleton method `self` is Target."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  Target.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+    +  Target.new(scheme:, host: checked.at(0), port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+  why: "[index] `checked` is the two-element tuple from host_check."
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  Target.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+    +  Target.new(scheme:, host: checked.fetch(0), port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  Target.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+    +  Target.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked.fetch(1), test_mode_localhost: localhost)
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::Target.check_uri
+  mutation: |
+    -  Target.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked[1], test_mode_localhost: localhost)
+    +  Target.new(scheme:, host: checked[0], port:, request_uri:, literal_ip: checked.at(1), test_mode_localhost: localhost)
+  why: "[index]"
+- subject: Clearinghouse::Webhooks::Egress::Target.host_check
+  mutation: |
+    -  labels = host.split(".", -1)
+    +  labels = host.split(".", -2)
+  why: "Any negative limit means the same thing to String#split."
+- subject: Clearinghouse::Webhooks::Egress::Target.host_check
+  mutation: |
+    -  if NUMERIC_LABEL.match?(labels.last.to_s)
+    +  if NUMERIC_LABEL.match?(labels.last.to_str)
+  why: "The host is non-empty (checked earlier), so split returns at least one label and `last` is a String."
+- subject: Clearinghouse::Webhooks::Egress::Target.host_check
+  mutation: |
+    -  if NUMERIC_LABEL.match?(labels.last.to_s)
+    +  if NUMERIC_LABEL.match?(labels.last)
+  why: "As above: `last` is never nil here. The to_s is for srb tc."
+- subject: Clearinghouse::Webhooks::Egress::Target.host_check
+  mutation: |
+    -  [host, nil]
+    +  [host]
+  why: "The caller reads the second element with `[1]`, which is nil for a one-element array too."
+
+# ---- ledger -----------------------------------------------------------------
+# [pg-int] Sequel's pg adapter already returns bigint and count(*) columns as Ruby
+# Integers, so wrapping them in Integer() changes nothing on this adapter. The
+# wrapper is there so the value's type does not depend on the adapter.
+- subject: Clearinghouse::Ledger::AccountCode.build
+  mutation: |
+    -  new(code:, kind: shape[0], normal_side: shape[1], owner_id:)
+    +  new(code:, kind: shape.at(0), normal_side: shape[1], owner_id:)
+  why: "[index] `shape` is a two-element pair from the PLATFORM or MERCHANT constant."
+- subject: Clearinghouse::Ledger::AccountCode.build
+  mutation: |
+    -  new(code:, kind: shape[0], normal_side: shape[1], owner_id:)
+    +  new(code:, kind: shape.fetch(0), normal_side: shape[1], owner_id:)
+  why: "[index]"
+- subject: Clearinghouse::Ledger::AccountCode.build
+  mutation: |
+    -  new(code:, kind: shape[0], normal_side: shape[1], owner_id:)
+    +  new(code:, kind: shape[0], normal_side: shape.at(1), owner_id:)
+  why: "[index]"
+- subject: Clearinghouse::Ledger::AccountCode.build
+  mutation: |
+    -  new(code:, kind: shape[0], normal_side: shape[1], owner_id:)
+    +  new(code:, kind: shape[0], normal_side: shape.fetch(1), owner_id:)
+  why: "[index]"
+- subject: Clearinghouse::Ledger::AccountCode.parse
+  mutation: |
+    -  (scope, *rest) = code.split(":", -1)
+    +  (scope, *rest) = code.split(":", -2)
+  why: "Any negative limit means the same thing to String#split."
+- subject: Clearinghouse::Ledger::AccountCode.parse
+  mutation: |
+    -  (scope, *rest) = code.split(":", -1)
+    +  (scope, *rest) = code.split(":", 167)
+  why: >-
+    A limit only matters for a code with 167 or more fields, and then `rest` has 166
+    elements with either limit, which neither the platform (1) nor the merchant (2) branch
+    accepts. Trailing empty fields are kept by any non-zero limit.
+- subject: Clearinghouse::Ledger::AccountCode.parse
+  mutation: |
+    -    build(code, PLATFORM[rest.fetch(0)], nil)
+    +    build(code, PLATFORM[rest.fetch(-1)], nil)
+  why: "The branch requires `rest.length == 1`, so the first and last element are the same."
+- subject: Clearinghouse::Ledger::Checker.run
+  mutation: |
+    -    row[:id].nil?
+    +    row.fetch(:id).nil?
+  why: "Every row of QUERY has an `id` column (it selects `r.*`), so `[]` and `fetch` agree."
+- subject: Clearinghouse::Ledger::Checker.run
+  mutation: |
+    -    Drift.new(account_id: Integer(row.fetch(:id)), code: row.fetch(:code), currency: row.fetch(:currency), stored: row[:stored]&.then { |v|
+    +    Drift.new(account_id: row.fetch(:id), code: row.fetch(:code), currency: row.fetch(:currency), stored: row[:stored]&.then { |v|
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Checker.run
+  mutation: |
+    -      Integer(v)
+    +      v
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Checker.run
+  mutation: |
+    -  Report.new(accounts_checked: Integer(rows.fetch(0).fetch(:accounts_checked)), drifts:)
+    +  Report.new(accounts_checked: rows.fetch(0).fetch(:accounts_checked), drifts:)
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Checker.run
+  mutation: |
+    -  Report.new(accounts_checked: Integer(rows.fetch(0).fetch(:accounts_checked)), drifts:)
+    +  Report.new(accounts_checked: Integer(rows.fetch(-1).fetch(:accounts_checked)), drifts:)
+  why: "`total` is a single row joined onto every result row, so every row carries the same count."
+- subject: 'Clearinghouse::Ledger::Checker::Drift#to_s'
+  mutation: |
+    -    Money.of(T.must(stored), currency).to_s
+    +    Money.of(T.must(stored), currency)
+  why: "The value is only interpolated into a string, which calls to_s anyway."
+- subject: 'Clearinghouse::Ledger::Checker::Drift#to_s'
+  mutation: |
+    -    Money.of(T.must(stored), currency).to_s
+    +    Money.of(stored, currency).to_s
+  why: "[sorbet] This branch only runs when `stored` is not nil."
+- subject: Clearinghouse::Ledger::Clearing.explainability
+  mutation: |
+    -    [row[0], row[1]]
+    +    [row.at(0), row[1]]
+  why: "[index] Each row is the four-element tuple built two lines above."
+- subject: Clearinghouse::Ledger::Clearing.explainability
+  mutation: |
+    -    [row[0], row[1]]
+    +    [row.fetch(0), row[1]]
+  why: "[index]"
+- subject: Clearinghouse::Ledger::Clearing.explainability
+  mutation: |
+    -    [row[0], row[1]]
+    +    [row[0], row.at(1)]
+  why: "[index]"
+- subject: Clearinghouse::Ledger::Clearing.explainability
+  mutation: |
+    -    [row[0], row[1]]
+    +    [row[0], row.fetch(1)]
+  why: "[index]"
+- subject: Clearinghouse::Ledger::Clearing.explainability
+  mutation: |
+    -      row[2]
+    +      row.at(2)
+  why: "[index] (appears twice: the volume and the explained volume sums)"
+- subject: Clearinghouse::Ledger::Clearing.explainability
+  mutation: |
+    -      row[2]
+    +      row.fetch(2)
+  why: "[index] (appears twice)"
+- subject: Clearinghouse::Ledger::Clearing.flow_nets
+  mutation: |
+    -  nets = T.let({}, T::Hash[String, T::Hash[ClearingKey, Integer]])
+    +  nets = T.let({}, T::Hash[nil, T::Hash[ClearingKey, Integer]])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.flow_nets
+  mutation: |
+    -  nets = T.let({}, T::Hash[String, T::Hash[ClearingKey, Integer]])
+    +  nets = T.let({}, T::Hash[String, nil])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.flow_nets
+  mutation: |
+    -  nets = T.let({}, T::Hash[String, T::Hash[ClearingKey, Integer]])
+    +  nets = T.let({}, T::Hash[String, Hash[ClearingKey, Integer]])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.flow_nets
+  mutation: |
+    -  nets = T.let({}, T::Hash[String, T::Hash[ClearingKey, Integer]])
+    +  nets = T.let({}, T::Hash[String, T::Hash])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.flow_nets
+  mutation: |
+    -  nets = T.let({}, T::Hash[String, T::Hash[ClearingKey, Integer]])
+    +  nets = T.let({}, T::Hash[String, T::Hash[nil, Integer]])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.flow_nets
+  mutation: |
+    -  nets = T.let({}, T::Hash[String, T::Hash[ClearingKey, Integer]])
+    +  nets = T.let({}, T::Hash[String, T::Hash[ClearingKey, nil]])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.flow_nets
+  mutation: |
+    -  db.fetch(FLOW_NETS).each { |row|
+    +  db.fetch(FLOW_NETS) { |row|
+  why: "Sequel's Database#fetch with a block iterates the rows, the same as calling each on the dataset."
+- subject: Clearinghouse::Ledger::Clearing.flow_summaries
+  mutation: |
+    -    first = rows.fetch(0)
+    +    first = rows.fetch(-1)
+  why: >-
+    `first` is only read for flow_type and opened_at, which come from the flow's one first
+    transaction and are the same on every row of the group (the rows differ only by currency).
+- subject: Clearinghouse::Ledger::Clearing.orphans
+  mutation: |
+    -  behind = T.let({}, T::Hash[ClearingKey, Integer])
+    +  behind = T.let({}, T::Hash[nil, Integer])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.orphans
+  mutation: |
+    -  behind = T.let({}, T::Hash[ClearingKey, Integer])
+    +  behind = T.let({}, T::Hash[ClearingKey, nil])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Clearing.orphans
+  mutation: |
+    -    stored = Integer(row.fetch(:balance))
+    +    stored = row.fetch(:balance)
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Clearing.orphans
+  mutation: |
+    -    OrphanBalance.new(code: key[0], currency: key[1], stored:, open_flows_total: behind.fetch(key, 0))
+    +    OrphanBalance.new(code: key.at(0), currency: key[1], stored:, open_flows_total: behind.fetch(key, 0))
+  why: "[index] `key` is the [code, currency] pair built two lines above."
+- subject: Clearinghouse::Ledger::Clearing.orphans
+  mutation: |
+    -    OrphanBalance.new(code: key[0], currency: key[1], stored:, open_flows_total: behind.fetch(key, 0))
+    +    OrphanBalance.new(code: key.fetch(0), currency: key[1], stored:, open_flows_total: behind.fetch(key, 0))
+  why: "[index]"
+- subject: Clearinghouse::Ledger::Clearing.orphans
+  mutation: |
+    -    OrphanBalance.new(code: key[0], currency: key[1], stored:, open_flows_total: behind.fetch(key, 0))
+    +    OrphanBalance.new(code: key[0], currency: key.at(1), stored:, open_flows_total: behind.fetch(key, 0))
+  why: "[index]"
+- subject: Clearinghouse::Ledger::Clearing.orphans
+  mutation: |
+    -    OrphanBalance.new(code: key[0], currency: key[1], stored:, open_flows_total: behind.fetch(key, 0))
+    +    OrphanBalance.new(code: key[0], currency: key.fetch(1), stored:, open_flows_total: behind.fetch(key, 0))
+  why: "[index]"
+- subject: Clearinghouse::Ledger::Explain.accumulate
+  mutation: |
+    -  amount = Integer(row.fetch(:amount))
+    +  amount = row.fetch(:amount)
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Explain.run
+  mutation: |
+    -  clearing = T.let({}, T::Hash[ClearingKey, Integer])
+    +  clearing = T.let({}, T::Hash[nil, Integer])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Explain.run
+  mutation: |
+    -  clearing = T.let({}, T::Hash[ClearingKey, Integer])
+    +  clearing = T.let({}, T::Hash[ClearingKey, nil])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Explain.run
+  mutation: |
+    -  Explanation.new(flow_id:, flow_type: rows.fetch(0).fetch(:flow_type), steps:)
+    +  Explanation.new(flow_id:, flow_type: rows.fetch(1).fetch(:flow_type), steps:)
+  why: >-
+    Every row is one entry of the flow, a flow has at least one transaction of at least two
+    entries (enforced by the database), and posting refuses a second flow_type for a flow_id,
+    so every row has the same flow_type and there is always a second row.
+- subject: Clearinghouse::Ledger::Explain.run
+  mutation: |
+    -  Explanation.new(flow_id:, flow_type: rows.fetch(0).fetch(:flow_type), steps:)
+    +  Explanation.new(flow_id:, flow_type: rows.fetch(-1).fetch(:flow_type), steps:)
+  why: "As above: every row has the same flow_type."
+
+# ---- ledger: posting, explain and the printer ------------------------------
+# Entries with `kind: accepted` are not equivalent. They are survivors I could not kill
+# with a deterministic test; they stay counted as alive, and the reason says why.
+- subject: Clearinghouse::Ledger::Explain.step
+  mutation: |
+    -first = rows.fetch(0)
+    +first = rows.fetch(1)
+  why: All rows of one chunk belong to the same transaction, so they share id, description, times and reversal links, and a transaction has at least two entries, so there is a second row.
+- subject: Clearinghouse::Ledger::Explain.step
+  mutation: |
+    -first = rows.fetch(0)
+    +first = rows.fetch(-1)
+  why: All rows of one chunk belong to the same transaction, so they share id, description, times and reversal links, and a transaction has at least two entries, so there is a second row.
+- subject: Clearinghouse::Ledger::Explain.step
+  mutation: |
+    -Line.new(account: row.fetch(:code), kind: row.fetch(:kind).to_sym, side: Entry.side_from_column(row.fetch(:side)), amount: Money.of(Integer(row.fetch(:amount)), row.fetch(:currency)))
+    +Line.new(account: row.fetch(:code), kind: row.fetch(:kind).to_sym, side: Entry.side_from_column(row.fetch(:side)), amount: Money.of(row.fetch(:amount), row.fetch(:currency)))
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Explain.step
+  mutation: |
+    -Step.new(transaction_id: Integer(first.fetch(:id)), description: first.fetch(:description), effective_at: first.fetch(:effective_at), reverses_transaction_id: first[:reverses_transaction_id], reversed_by: first[:reversed_by], lines:, clearing_after: clearing)
+    +Step.new(transaction_id: first.fetch(:id), description: first.fetch(:description), effective_at: first.fetch(:effective_at), reverses_transaction_id: first[:reverses_transaction_id], reversed_by: first[:reversed_by], lines:, clearing_after: clearing)
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Explain.step
+  mutation: |
+    -Step.new(transaction_id: Integer(first.fetch(:id)), description: first.fetch(:description), effective_at: first.fetch(:effective_at), reverses_transaction_id: first[:reverses_transaction_id], reversed_by: first[:reversed_by], lines:, clearing_after: clearing)
+    +Step.new(transaction_id: Integer(first.fetch(:id)), description: first.fetch(:description), effective_at: first.fetch(:effective_at), reverses_transaction_id: first.fetch(:reverses_transaction_id), reversed_by: first[:reversed_by], lines:, clearing_after: clearing)
+  why: QUERY always selects both columns, so `[]` and `fetch` agree.
+- subject: Clearinghouse::Ledger::Explain.step
+  mutation: |
+    -Step.new(transaction_id: Integer(first.fetch(:id)), description: first.fetch(:description), effective_at: first.fetch(:effective_at), reverses_transaction_id: first[:reverses_transaction_id], reversed_by: first[:reversed_by], lines:, clearing_after: clearing)
+    +Step.new(transaction_id: Integer(first.fetch(:id)), description: first.fetch(:description), effective_at: first.fetch(:effective_at), reverses_transaction_id: first[:reverses_transaction_id], reversed_by: first.fetch(:reversed_by), lines:, clearing_after: clearing)
+  why: QUERY always selects both columns, so `[]` and `fetch` agree.
+- subject: Clearinghouse::Ledger::ExplainPrinter.describe
+  mutation: |
+    -"#{step.description} (#{notes.join(", ")})"
+    +"#{step.description} (#{notes.join})"
+  why: 'A step has at most one note: a reversal cannot itself be reversed (NotReversibleError), so "reverses" and "reversed by" never appear together and the separator is never used.'
+- subject: Clearinghouse::Ledger::ExplainPrinter.describe
+  mutation: |
+    -"#{step.description} (#{notes.join(", ")})"
+    +"#{step.description} (#{notes.join(nil)})"
+  why: 'A step has at most one note: a reversal cannot itself be reversed (NotReversibleError), so "reverses" and "reversed by" never appear together and the separator is never used.'
+- subject: Clearinghouse::Ledger::ExplainPrinter.describe
+  mutation: |
+    -"#{step.description} (#{notes.join(", ")})"
+    +"#{step.description} (#{notes.join("")})"
+  why: 'A step has at most one note: a reversal cannot itself be reversed (NotReversibleError), so "reverses" and "reversed by" never appear together and the separator is never used.'
+- subject: Clearinghouse::Ledger::ExplainPrinter.line
+  mutation: |
+    -paint(text, styles[i], color)
+    +paint(text, styles.at(i), color)
+  why: "`Array#[]` with an Integer and `Array#at` are the same, including out of range."
+- subject: Clearinghouse::Ledger::ExplainPrinter.render
+  mutation: |
+    -lines = title(explanation, color), "", render_table(explanation, color:), "", *verdict(explanation, color)
+    +lines = title(explanation, color), nil, render_table(explanation, color:), "", *verdict(explanation, color)
+  why: Array#join renders nil as an empty string and flattens a nested array, so the lines join to the same text.
+- subject: Clearinghouse::Ledger::ExplainPrinter.render
+  mutation: |
+    -lines = title(explanation, color), "", render_table(explanation, color:), "", *verdict(explanation, color)
+    +lines = title(explanation, color), "", render_table(explanation, color:), nil, *verdict(explanation, color)
+  why: Array#join renders nil as an empty string and flattens a nested array, so the lines join to the same text.
+- subject: Clearinghouse::Ledger::ExplainPrinter.render
+  mutation: |
+    -lines = title(explanation, color), "", render_table(explanation, color:), "", *verdict(explanation, color)
+    +lines = title(explanation, color), "", render_table(explanation, color:), "", verdict(explanation, color)
+  why: Array#join renders nil as an empty string and flattens a nested array, so the lines join to the same text.
+- subject: Clearinghouse::Ledger::ExplainPrinter.step_rows
+  mutation: |
+    -if net.nil?
+    -nil
+    -else
+    +unless net.nil?
+  why: "`net.nil? ? nil : clearing_style(net)` and `clearing_style(net) unless net.nil?` are the same expression."
+- subject: Clearinghouse::Ledger::ExplainPrinter.table
+  mutation: |
+    -}).map(&:length).max.to_i
+    +}).map(&:length).max
+  why: The list is never empty here (a table always has a header; the verdict branch only runs with at least one open account), so `max` is an Integer and to_i, to_int and Integer() return it unchanged.
+- subject: Clearinghouse::Ledger::ExplainPrinter.table
+  mutation: |
+    -}).map(&:length).max.to_i
+    +}).map(&:length).max.to_int
+  why: The list is never empty here (a table always has a header; the verdict branch only runs with at least one open account), so `max` is an Integer and to_i, to_int and Integer() return it unchanged.
+- subject: Clearinghouse::Ledger::ExplainPrinter.table
+  mutation: |
+    -([headers.fetch(i)] + rows.map { |r|
+    +Integer(([headers.fetch(i)] + rows.map { |r|
+    -}).map(&:length).max.to_i
+    +}).map(&:length).max)
+  why: The list is never empty here (a table always has a header; the verdict branch only runs with at least one open account), so `max` is an Integer and to_i, to_int and Integer() return it unchanged.
+- subject: Clearinghouse::Ledger::ExplainPrinter.verdict
+  mutation: |
+    -["#{paint("Explained", :green, color)}: this flow never touched a clearing account."]
+    +"#{paint("Explained", :green, color)}: this flow never touched a clearing account."
+  why: render splats the verdict into its lines; a bare String splats to itself, so one line either way.
+- subject: Clearinghouse::Ledger::ExplainPrinter.verdict
+  mutation: |
+    -["#{paint("Explained", :green, color)}: every clearing account this flow touched is back at zero."]
+    +"#{paint("Explained", :green, color)}: every clearing account this flow touched is back at zero."
+  why: render splats the verdict into its lines; a bare String splats to itself, so one line either way.
+- subject: Clearinghouse::Ledger::ExplainPrinter.verdict
+  mutation: |
+    -}.max.to_i
+    +}.max
+  why: The list is never empty here (a table always has a header; the verdict branch only runs with at least one open account), so `max` is an Integer and to_i, to_int and Integer() return it unchanged.
+- subject: Clearinghouse::Ledger::ExplainPrinter.verdict
+  mutation: |
+    -}.max.to_i
+    +}.max.to_int
+  why: The list is never empty here (a table always has a header; the verdict branch only runs with at least one open account), so `max` is an Integer and to_i, to_int and Integer() return it unchanged.
+- subject: Clearinghouse::Ledger::ExplainPrinter.verdict
+  mutation: |
+    -width = open.keys.map { |code, _|
+    +width = Integer(open.keys.map { |code, _|
+    -}.max.to_i
+    +}.max)
+  why: The list is never empty here (a table always has a header; the verdict branch only runs with at least one open account), so `max` is an Integer and to_i, to_int and Integer() return it unchanged.
+- subject: Clearinghouse::Ledger::ExplainPrinter.verdict
+  mutation: |
+    -["#{paint("Not explained", :red, color)}: money is still sitting in clearing.", *open.map { |(code, currency), net|
+    +["#{paint("Not explained", :red, color)}: money is still sitting in clearing.", open.map { |(code, currency), net|
+  why: 'Without the splat the lines are a nested array, and Array#join flattens it: same text.'
+- subject: Clearinghouse::Ledger::Posting#apply_balances
+  mutation: |
+    -deltas = T.let({}, T::Hash[Integer, Integer])
+    +deltas = T.let({}, T::Hash[nil, Integer])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Posting#apply_balances
+  mutation: |
+    -deltas = T.let({}, T::Hash[Integer, Integer])
+    +deltas = T.let({}, T::Hash[Integer, nil])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Posting#balance
+  mutation: |
+    -Money.of(Integer(amount || 0), currency)
+    +Money.of(amount || 0, currency)
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  kind: accepted
+  mutation: |
+    -accounts.keys.sort.each { |key|
+    +accounts.keys.each { |key|
+  why: 'Not equivalent: the sort makes concurrent first postings that create the same new accounts take their row locks in one order, so they cannot deadlock. Killing it needs two sessions paused between their account inserts, and nothing in posting exposes that point. The six-thread spec exercises the balance-row order but not this one reliably. Left alive and counted as a survivor.'
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key[0], key[1], parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+    +VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key.at(0), key[1], parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+  why: "[index] `key` is a [code, currency] pair."
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key[0], key[1], parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+    +VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key.fetch(0), key[1], parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+  why: "[index] `key` is a [code, currency] pair."
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key[0], key[1], parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+    +VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key[0], key.at(1), parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+  why: "[index] `key` is a [code, currency] pair."
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key[0], key[1], parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+    +VALUES (?, ?, ?, ?, ?) ON CONFLICT (code, currency) DO NOTHING RETURNING id\n", key[0], key.fetch(1), parsed.kind.to_s, parsed.normal_side_column, parsed.owner_id).all
+  why: "[index] `key` is a [code, currency] pair."
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -id = if inserted.empty?
+    +id = if inserted
+  why: Always looking the account up after the insert finds the row this transaction just inserted, so the id is the same; the RETURNING id only saves a query.
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -id = if inserted.empty?
+    +id = if true
+  why: Always looking the account up after the insert finds the row this transaction just inserted, so the id is the same; the RETURNING id only saves a query.
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -id = if inserted.empty?
+    -lookup_accounts([key]).fetch(key)
+    -else
+    -inserted.fetch(0).fetch(:id)
+    -end
+    +id = lookup_accounts([key]).fetch(key)
+  why: Always looking the account up after the insert finds the row this transaction just inserted, so the id is the same; the RETURNING id only saves a query.
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -inserted.fetch(0).fetch(:id)
+    +inserted.fetch(-1).fetch(:id)
+  why: The insert is one row, so RETURNING gives at most one.
+- subject: Clearinghouse::Ledger::Posting#ensure_accounts
+  mutation: |
+    -ids[key] = Integer(id)
+    +ids[key] = id
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  mutation: |
+    -@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+    +@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).map { |row|
+  why: 'Selecting every column (or unqualified `code`) gives the same values: `code` exists only in ledger_accounts, and the entry''s currency equals its account''s by the composite foreign key, so the duplicate `currency` column cannot differ.'
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  kind: accepted
+  mutation: |
+    -@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+    +@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+  why: 'Not equivalent: without ORDER BY, Postgres may return a reversal''s entries in any order. On these small tables it returns them in insertion order every time, so no test can see the difference. The entries still mirror the original and balance, only their order in the reversal could change. Left alive and counted as a survivor.'
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  kind: accepted
+  mutation: |
+    -@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+    +@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order.select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+  why: 'Not equivalent: without ORDER BY, Postgres may return a reversal''s entries in any order. On these small tables it returns them in insertion order every time, so no test can see the difference. The entries still mirror the original and balance, only their order in the reversal could change. Left alive and counted as a survivor.'
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  kind: accepted
+  mutation: |
+    -@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+    +@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(nil).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+  why: 'Not equivalent: without ORDER BY, Postgres may return a reversal''s entries in any order. On these small tables it returns them in insertion order every time, so no test can see the difference. The entries still mirror the original and balance, only their order in the reversal could change. Left alive and counted as a survivor.'
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  mutation: |
+    -@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+    +@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+  why: Ordering by the whole ledger_entries row compares its first column, id, first, and ids are unique.
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  mutation: |
+    -@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+    +@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select.map { |row|
+  why: 'Selecting every column (or unqualified `code`) gives the same values: `code` exists only in ledger_accounts, and the entry''s currency equals its account''s by the composite foreign key, so the duplicate `currency` column cannot differ.'
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  mutation: |
+    -@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+    +@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { |row|
+  why: 'Selecting every column (or unqualified `code`) gives the same values: `code` exists only in ledger_accounts, and the entry''s currency equals its account''s by the composite foreign key, so the duplicate `currency` column cannot differ.'
+- subject: Clearinghouse::Ledger::Posting#entries_of
+  mutation: |
+    -Entry.new(account: row.fetch(:code), side: Entry.side_from_column(row.fetch(:side)), amount: Money.of(Integer(row.fetch(:amount)), row.fetch(:currency)))
+    +Entry.new(account: row.fetch(:code), side: Entry.side_from_column(row.fetch(:side)), amount: Money.of(row.fetch(:amount), row.fetch(:currency)))
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Posting#insert_transaction
+  mutation: |
+    -Integer(@db[:ledger_transactions].insert(flow_type:, flow_id:, description:, effective_at:, reverses_transaction_id: reverses))
+    +@db[:ledger_transactions].insert(flow_type:, flow_id:, description:, effective_at:, reverses_transaction_id: reverses)
+  why: "[pg-int] Sequel returns the new primary key as an Integer."
+- subject: Clearinghouse::Ledger::Posting#load_reversible!
+  mutation: |
+    -if original[:reverses_transaction_id]
+    +if original.fetch(:reverses_transaction_id)
+  why: The row comes from a full select of ledger_transactions, which always has the column.
+- subject: Clearinghouse::Ledger::Posting#lookup_accounts
+  mutation: |
+    -found = T.let({}, T::Hash[AccountKey, Integer])
+    +found = T.let({}, T::Hash[nil, Integer])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Posting#lookup_accounts
+  mutation: |
+    -found = T.let({}, T::Hash[AccountKey, Integer])
+    +found = T.let({}, T::Hash[AccountKey, nil])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Posting#lookup_accounts
+  mutation: |
+    -@db[:ledger_accounts].where([:code, :currency] => keys).select(:id, :code, :currency).each { |row|
+    +@db[:ledger_accounts].where([:code, :currency] => keys).each { |row|
+  why: Selecting every column instead of three gives the same id, code and currency.
+- subject: Clearinghouse::Ledger::Posting#lookup_accounts
+  mutation: |
+    -@db[:ledger_accounts].where([:code, :currency] => keys).select(:id, :code, :currency).each { |row|
+    +@db[:ledger_accounts].select(:id, :code, :currency).each { |row|
+  why: 'Without the filter the result is a superset: every caller only reads the keys it asked for, so the extra accounts are never used. It costs a scan, not correctness.'
+- subject: Clearinghouse::Ledger::Posting#lookup_accounts
+  mutation: |
+    -@db[:ledger_accounts].where([:code, :currency] => keys).select(:id, :code, :currency).each { |row|
+    +@db[:ledger_accounts].where([:code, :currency] => keys).select.each { |row|
+  why: Selecting every column instead of three gives the same id, code and currency.
+- subject: Clearinghouse::Ledger::Posting#lookup_accounts
+  mutation: |
+    -found[[row.fetch(:code), row.fetch(:currency)]] = Integer(row.fetch(:id))
+    +found[[row.fetch(:code), row.fetch(:currency)]] = row.fetch(:id)
+  why: "[pg-int]"
+- subject: Clearinghouse::Ledger::Posting#reverse
+  mutation: |
+    -if reason.strip.empty?
+    +if reason.lstrip.empty?
+  why: A string is empty after strip exactly when it is all whitespace, and then lstrip and rstrip empty it too.
+- subject: Clearinghouse::Ledger::Posting#reverse
+  mutation: |
+    -if reason.strip.empty?
+    +if reason.rstrip.empty?
+  why: A string is empty after strip exactly when it is all whitespace, and then lstrip and rstrip empty it too.
+- subject: Clearinghouse::Ledger::Posting#validate!
+  mutation: |
+    -accounts = T.let({}, T::Hash[AccountKey, AccountCode])
+    +accounts = T.let({}, T::Hash[nil, AccountCode])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Posting#validate!
+  mutation: |
+    -accounts = T.let({}, T::Hash[AccountKey, AccountCode])
+    +accounts = T.let({}, T::Hash[AccountKey, nil])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Posting#validate!
+  mutation: |
+    -nets = T.let({}, T::Hash[String, Integer])
+    +nets = T.let({}, T::Hash[nil, Integer])
+  why: "[sorbet]"
+- subject: Clearinghouse::Ledger::Posting#validate!
+  mutation: |
+    -nets = T.let({}, T::Hash[String, Integer])
+    +nets = T.let({}, T::Hash[String, nil])
+  why: "[sorbet]"

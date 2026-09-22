@@ -50,6 +50,10 @@ RSpec.describe Clearinghouse::Ledger::Invariants, :db do
     smuggle([['platform:cash', 'D', 5, 'usd'], ['merchant:m1:available', 'C', 5, 'usd']])
     expect(described_class.zero_sum(app_db)).to be_empty
     expect(described_class.check(app_db).map(&:invariant)).to eq(%i[balances_match_entries balances_match_entries])
+    expect(described_class.check(app_db).map(&:detail)).to contain_exactly(
+      'platform:cash (usd): stored 10.00 USD, entries say 10.05 USD',
+      'merchant:m1:available (usd): stored 10.00 USD, entries say 10.05 USD'
+    )
   end
 
   it 'raises with every violation listed' do
@@ -57,6 +61,8 @@ RSpec.describe Clearinghouse::Ledger::Invariants, :db do
     expect { described_class.check!(app_db) }.to raise_error(described_class::ViolationError) { |e|
       expect(e.violations.map(&:invariant).uniq).to eq(%i[zero_sum balanced_transactions balances_match_entries])
       expect(e.message).to start_with("ledger invariants violated:\n  zero_sum: usd debits minus credits is -0.03 USD")
+      # One violation per line, so a log shows each on its own.
+      expect(e.message.lines.length).to eq(1 + e.violations.length)
     }
   end
 end

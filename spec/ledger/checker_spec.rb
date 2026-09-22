@@ -38,7 +38,9 @@ RSpec.describe Clearinghouse::Ledger::Checker, :db do
     seed
     owner_db[:account_balances].where(account_id: account_id(available))
                                .update(balance: Sequel[:balance] + 1)
-    drifts = described_class.run(app_db).drifts
+    report = described_class.run(app_db)
+    expect(report).not_to be_clean
+    drifts = report.drifts
     expect(drifts.length).to eq(1)
     drift = drifts.first
     expect([drift.code, drift.currency, drift.stored, drift.computed, drift.difference])

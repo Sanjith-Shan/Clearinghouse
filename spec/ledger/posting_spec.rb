@@ -64,6 +64,47 @@ RSpec.describe Clearinghouse::Ledger, :db,
       expect(app_db[:account_balances].select_map(:version)).to all(eq(1))
     end
 
+    it 'creates a new account in a posting whose other accounts already exist' do
+      capture
+      # merchant:m1:pending exists and sorts before platform:cash, which does not.
+      post([debit(pending, money(100)), credit(cash, money(100))], flow_id: 'pi_1')
+      expect([balance_of(pending), balance_of(cash)]).to eq([9580, -100])
+    end
+
+    it 'lets different flows have different flow types' do
+      capture
+      post([debit(available, money(1)), credit(cash, money(1))], flow_id: 're_1', flow_type: 'refund')
+      expect(app_db[:ledger_transactions].select_map(%i[flow_id flow_type]).sort)
+        .to eq([%w[pi_1 payment], %w[re_1 refund]])
+    end
+
+    it 'uses the account another session created while this one was about to' do
+      # Session B inserts platform:cash and holds its transaction open. Our posting does
+      # not see the row, so it tries to insert it too, and ON CONFLICT DO NOTHING waits
+      # for B. When B commits, our insert returns nothing and the account is looked up.
+      other = Clearinghouse::DB.connect(role: :app, max_connections: 1)
+      inserted = Queue.new
+      finish = Queue.new
+      creator = Thread.new do
+        other.transaction do
+          other[:ledger_accounts].insert(code: cash, currency: 'usd', kind: 'asset', normal_side: 'D')
+          inserted << true
+          finish.pop
+        end
+      end
+      inserted.pop
+      poster = Thread.new { post([debit(cash, money(5)), credit(available, money(5))]) }
+      waiting = app_db[:pg_stat_activity].where(wait_event_type: 'Lock', datname: Sequel.function(:current_database))
+      sleep 0.01 until waiting.any?
+      finish << true
+      creator.join
+      poster.join
+      expect(app_db[:ledger_accounts].where(code: cash).count).to eq(1)
+      expect(balance_of(cash)).to eq(5)
+    ensure
+      other&.disconnect
+    end
+
     it 'keeps each currency in its own accounts, even within one transaction' do
       post([debit(cash, money(500, 'jpy')), credit(available, money(500, 'jpy')),
             debit(cash, money(1234, 'kwd')), credit(available, money(1234, 'kwd'))])
@@ -99,13 +140,15 @@ RSpec.describe Clearinghouse::Ledger, :db,
       it 'rejects zero and negative amounts' do
         [0, -100].each do |amount|
           expect_rejected([debit(cash, money(amount)), credit(available, money(amount))],
-                          Clearinghouse::Ledger::InvalidPostingError, /must be positive, got .* on platform:cash/)
+                          Clearinghouse::Ledger::InvalidPostingError,
+                          "entry amounts must be positive, got #{money(amount)} on platform:cash")
         end
       end
 
       it 'rejects a side that is neither debit nor credit' do
         odd = Clearinghouse::Ledger::Entry.new(account: cash, side: :sideways, amount: money(1))
-        expect_rejected([odd, credit(available, money(1))], Clearinghouse::Ledger::InvalidPostingError, /:sideways/)
+        expect_rejected([odd, credit(available, money(1))], Clearinghouse::Ledger::InvalidPostingError,
+                        'side must be :debit or :credit, got :sideways')
       end
 
       it 'rejects fewer than two entries' do
@@ -147,7 +190,9 @@ RSpec.describe Clearinghouse::Ledger, :db,
       it 'is atomic with the balance update when the database refuses the write' do
         capture
         owner_db[:account_balances].where(account_id: owner_db[:ledger_accounts].where(code: pending).get(:id)).delete
-        expect { capture }.to raise_error(Clearinghouse::Ledger::BalanceStateError, /has no balance row/)
+        pending_id = app_db[:ledger_accounts].where(code: pending).get(:id)
+        expect { capture }.to raise_error(Clearinghouse::Ledger::BalanceStateError,
+                                          "account #{pending_id} has no balance row")
         expect(counts).to eq([1, 3, 3])
         expect(balance_of(receivable)).to eq(10_000)
       end
@@ -187,6 +232,14 @@ RSpec.describe Clearinghouse::Ledger, :db,
       expect { ledger.balance_for_update(app_db, cash, 'usd') }.to raise_error(Clearinghouse::Ledger::Error, /open/)
     end
 
+    it 'locks and reads the balance of the account asked for, not another one' do
+      capture
+      app_db.transaction do
+        expect(ledger.balance_for_update(app_db, fees, 'usd')).to eq(money(320))
+        expect(ledger.balance_for_update(app_db, pending, 'usd')).to eq(money(9680))
+      end
+    end
+
     it 'creates a missing account so there is a row to lock' do
       app_db.transaction do
         expect(ledger.balance_for_update(app_db, available, 'usd')).to eq(money(0))
@@ -216,7 +269,7 @@ RSpec.describe Clearinghouse::Ledger, :db,
       capture
       owner_db[:account_balances].delete
       expect { app_db.transaction { ledger.balance_for_update(app_db, pending, 'usd') } }
-        .to raise_error(Clearinghouse::Ledger::BalanceStateError)
+        .to raise_error(Clearinghouse::Ledger::BalanceStateError, 'account merchant:m1:pending usd has no balance row')
     end
   end
 
@@ -237,17 +290,31 @@ RSpec.describe Clearinghouse::Ledger, :db,
       expect([receivable, pending, fees].map { |a| balance_of(a) }).to eq([0, 0, 0])
     end
 
+    it 'mirrors only the transaction asked for, entry by entry in its order, when the flow has others' do
+      later = post([debit(pending, money(700)), credit(available, money(700))], flow_id: 'pi_1')
+      id = reverse(later)
+      rows = app_db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id: id)
+                                    .order(Sequel[:ledger_entries][:id]).select_map(%i[code side amount])
+      expect(rows).to eq([[pending, 'C', 700], [available, 'D', 700]])
+      expect([balance_of(pending), balance_of(available)]).to eq([9680, 0])
+    end
+
     it 'refuses to reverse the same transaction twice' do
       first = reverse
-      expect { reverse }.to raise_error(Clearinghouse::Ledger::AlreadyReversedError, /already reversed by #{first}/)
+      expect { reverse }.to raise_error(Clearinghouse::Ledger::AlreadyReversedError,
+                                        "transaction #{original} was already reversed by #{first}")
     end
 
     it 'refuses to reverse a reversal' do
-      expect { reverse(reverse) }.to raise_error(Clearinghouse::Ledger::NotReversibleError, /is a reversal/)
+      reversal = reverse
+      expect { reverse(reversal) }
+        .to raise_error(Clearinghouse::Ledger::NotReversibleError,
+                        "transaction #{reversal} is a reversal; post a new transaction instead")
     end
 
     it 'refuses an unknown transaction and an empty reason' do
-      expect { reverse(original + 99) }.to raise_error(Clearinghouse::Ledger::TransactionNotFoundError)
+      expect { reverse(original + 99) }
+        .to raise_error(Clearinghouse::Ledger::TransactionNotFoundError, "no ledger transaction #{original + 99}")
       expect { reverse(reason: ' ') }.to raise_error(Clearinghouse::Ledger::InvalidPostingError, /needs a reason/)
     end
 
@@ -271,7 +338,8 @@ RSpec.describe Clearinghouse::Ledger, :db,
       sleep 0.01 until waiting.any?
       finish << true
       winner.join
-      expect { loser.value }.to raise_error(Clearinghouse::Ledger::AlreadyReversedError, /concurrently/)
+      expect { loser.value }.to raise_error(Clearinghouse::Ledger::AlreadyReversedError,
+                                            "transaction #{original} was reversed concurrently")
       expect(app_db[:ledger_transactions].exclude(reverses_transaction_id: nil).count).to eq(1)
     end
 
