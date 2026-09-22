@@ -24,14 +24,21 @@ module Clearinghouse
         ACQUIRER_RATE_SCALED = 150_000 # 1.5%
         ACQUIRER_FIXED_MINOR = 10
 
-        # Interpretation: funds become available payout_delay_days (the merchant
-        # default, 2) after capture, like Stripe's available_on, whether or not the
-        # settlement line has arrived.
+        # Funds become available at the start of the UTC day payout_delay_days (the
+        # merchant default, 2) after the day of capture, whether or not the
+        # settlement line has arrived: Stripe's available_on is a date
+        # (docs/design/payouts.md, Balances::Availability.available_on).
         PAYOUT_DELAY_DAYS = 2
 
-        # Interpretation: the ledger doc prices the dispute fee at $15.00 and says
-        # nothing for other currencies.
-        DISPUTE_FEE = T.let({ 'usd' => 1500, 'jpy' => 1500, 'kwd' => 5000 }.freeze, T::Hash[String, Integer])
+        # The dispute fee per currency, from Disputes::FeePolicy: 15.00 USD and a
+        # round local price near it elsewhere (2200 JPY, 4.600 KWD).
+        DISPUTE_FEE = T.let({ 'usd' => 1500, 'jpy' => 2200, 'kwd' => 4600 }.freeze, T::Hash[String, Integer])
+
+        sig { params(captured_at: Time).returns(Time) }
+        def self.available_on(captured_at)
+          day = captured_at.utc
+          Time.utc(day.year, day.month, day.day) + (PAYOUT_DELAY_DAYS * DAY)
+        end
 
         # Payments refuses an amount smaller than our fee on it (amount_too_small), at
         # create and at capture, so the merchant's share is never negative
