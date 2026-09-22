@@ -118,18 +118,41 @@ RSpec.describe Clearinghouse::Testing::Model::ReferenceModel, :model do
     expect(model.disputes.fetch('dp_1').status).to eq('open')
     expect(bal('merchant:m1:available')).to eq(-11_500)
     expect(bal('platform:dispute_fee_revenue')).to eq(1500)
-    expect(model.refund(refund: 're_1', intent: 'pi_1').code).to eq('charge_disputed')
+    expect(model.refund(refund: 're_1', intent: 'pi_1')).to eq(success(amount: 10_000, status: 'failed'))
+    expect(bal('merchant:m1:available')).to eq(-11_500)
     model.availability_sweep
     expect(bal('merchant:m1:available')).to eq(9680 - 11_500)
     expect(model.payout(payout: 'po_1', merchant: 'm1', currency: 'usd').code).to eq('balance_insufficient')
   end
 
-  it 'refuses a refund once the dispute has opened at the acquirer, before the notification is processed' do
+  # The acquirer refuses with charge_disputed; payments records the refund as failed
+  # and releases its reservation (docs/design/payments.md), so nothing moves.
+  it 'fails a refund once the dispute has opened at the acquirer, before the notification is processed' do
     pay('pi_1', 10_000, card: 'pm_card_disputeFraudulent')
     model.advance_clock(hours: (7 * 24) - 1)
-    expect(model.refund(refund: 're_1', intent: 'pi_1', amount: 100)).to be_ok
+    expect(model.refund(refund: 're_1', intent: 'pi_1', amount: 100)).to eq(success(amount: 100, status: 'succeeded'))
     model.advance_clock(hours: 1)
-    expect(model.refund(refund: 're_2', intent: 'pi_1', amount: 100).code).to eq('charge_disputed')
+    expect(model.refund(refund: 're_2', intent: 'pi_1', amount: 100)).to eq(success(amount: 100, status: 'failed'))
+    expect(model.intents.fetch('pi_1').refunded).to eq(100)
+    expect(model.open_flows.keys).not_to include('re_2')
+  end
+
+  it 'charges the dispute fee Disputes::FeePolicy sets per currency' do
+    model.apply(intent_cmd('pi_1', 10_000, currency: 'jpy'))
+    model.confirm(intent: 'pi_1', payment_method: 'pm_card_disputeFraudulent')
+    model.apply(intent_cmd('pi_2', 10_000, currency: 'kwd'))
+    model.confirm(intent: 'pi_2', payment_method: 'pm_card_disputeFraudulent')
+    advance_days(7)
+    expect([bal('platform:dispute_fee_revenue', 'jpy'), bal('platform:dispute_fee_revenue', 'kwd')])
+      .to eq([2200, 4600])
+  end
+
+  it 'makes funds available at the start of the UTC day two days after the capture day' do
+    model.advance_clock(hours: 23) # 23:00 on day 0
+    pay('pi_1', 10_000)
+    model.advance_clock(hours: 25) # 00:00 on day 2: 25 hours after the capture, not 48
+    model.availability_sweep
+    expect(bal('merchant:m1:available')).to eq(9680)
   end
 
   it 'returns the amount but keeps the fee when a dispute is won, and clears once both lines settle' do

@@ -77,14 +77,14 @@ module Clearinghouse
           prop :status, String, default: 'scheduled'
         end
 
-        # A payout, pending until the bank answers.
+        # A payout, in transit until the bank answers.
         class PayoutState < T::Struct
           const :name, String
           const :merchant, String
           const :currency, String
           const :amount, Integer
           const :arrives_at, Time
-          prop :status, String, default: 'pending'
+          prop :status, String, default: 'in_transit'
         end
 
         # A line the acquirer will put in a settlement file.
@@ -259,15 +259,21 @@ module Clearinghouse
           return Outcome.error('resource_missing') unless pi
           return Outcome.error('parameter_invalid') if @refunds.key?(refund)
           return Outcome.error('payment_intent_unexpected_state') unless pi.status == 'succeeded'
-          # The acquirer refuses once the dispute has opened on its side, whether or
-          # not Clearinghouse has processed the notification yet (docs/design/sim.md).
-          return Outcome.error('charge_disputed') if disputed_at_acquirer?(pi)
 
           remaining = pi.received - pi.refunded
           return Outcome.error('charge_already_refunded') if remaining.zero?
 
           amount ||= remaining
           return Outcome.error('parameter_invalid') unless amount.positive? && amount <= remaining
+
+          # The acquirer refuses (charge_disputed) once the dispute has opened on its
+          # side, whether or not Clearinghouse has processed the notification yet
+          # (docs/design/sim.md). A refused refund is still created: it is `failed`,
+          # its reservation released, so no money moves (docs/design/payments.md).
+          if disputed_at_acquirer?(pi)
+            @refunds[refund] = intent
+            return Outcome.success(amount: amount, status: 'failed')
+          end
 
           pi.refunded += amount
           @refunds[refund] = intent
@@ -297,7 +303,9 @@ module Clearinghouse
           @payouts[payout] = PayoutState.new(name: payout, merchant: merchant, currency: currency, amount: amount,
                                              arrives_at: @now + Policy::PAYOUT_ARRIVAL_SECONDS)
           book(payout, :payout, currency, amount, merchant: merchant)
-          Outcome.success(amount: amount, status: 'pending')
+          # The bank accepted it; paid or failed arrives a day later
+          # (docs/design/payouts.md: pending is only a payout not yet sent).
+          Outcome.success(amount: amount, status: 'in_transit')
         end
 
         sig { override.params(hours: Integer).returns(Outcome) }
@@ -387,7 +395,7 @@ module Clearinghouse
             return !pending && !dispute.nil? && %w[won lost].include?(dispute.status)
           end
           payout = @payouts[flow_id]
-          payout.nil? || payout.status != 'pending'
+          payout.nil? || payout.status != 'in_transit'
         end
 
         private
@@ -433,7 +441,7 @@ module Clearinghouse
           payment.capturable = 0
           payment.received = amount
           payment.fee = Policy.fee(amount, merchant.fee_rate_scaled, merchant.fee_fixed.fetch(payment.currency, 0))
-          payment.available_on = @now + (Policy::PAYOUT_DELAY_DAYS * Policy::DAY)
+          payment.available_on = Policy.available_on(@now)
           book(payment.name, :capture, payment.currency, amount, merchant: payment.merchant)
           schedule_movement(:capture, payment.name, payment.currency, amount, @now)
           return unless payment.payment_method == Policy::DISPUTING_CARD
@@ -459,7 +467,7 @@ module Clearinghouse
         def deliver_notifications
           due = @disputes.values.select { |d| d.status == 'scheduled' && d.opens_at <= @now }
                          .map { |d| [d.opens_at, 0, d.name] } +
-                @payouts.values.select { |p| p.status == 'pending' && p.arrives_at <= @now }
+                @payouts.values.select { |p| p.status == 'in_transit' && p.arrives_at <= @now }
                         .map { |p| [p.arrives_at, 1, p.name] }
           due.sort.each do |_, kind, name|
             kind.zero? ? open_dispute(@disputes.fetch(name)) : finish_payout(@payouts.fetch(name))

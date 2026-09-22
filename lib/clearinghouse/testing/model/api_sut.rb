@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require 'json'
+require 'net/http'
 require 'rack/test'
 require 'puma'
 require 'puma/server'
@@ -16,30 +17,27 @@ module Clearinghouse
       # shadowed: outcomes come from the responses and the snapshot from the database
       # the app wrote.
       #
-      # Wired today (payments M2): create_merchant, create_intent, confirm, capture,
-      # cancel, refund, advance_clock (the test clock, then the authorization expiry
-      # sweep). Still to wire, each raising NotImplementedError until its area lands:
+      # Every operation is wired. Those that no endpoint performs call the pieces
+      # bin/scheduler runs, directly and at the test clock, in the scheduler's order:
       #
-      # - payout               POST /v1/payouts {amount, currency}      (payouts)
-      # - availability_sweep   the payouts area's availability worker    (payouts)
-      # - resolve_dispute      simulator POST /admin/disputes/:id/resolve, then
-      #                        the notification poller                   (disputes)
-      # - settle               simulator POST /settlement_files for today, then the
-      #                        reconciler                                (reconciler)
-      # - advance_clock        must also run the notification poller (dispute.opened,
-      #                        payout.paid, payout.failed)               (disputes, payouts)
+      # - advance_clock        the clock, then the authorization expiry sweep, then
+      #                        the notification poller (dispute.opened, payout.paid,
+      #                        payout.failed)
+      # - availability_sweep   Balances::Availability.release_due!
+      # - resolve_dispute      the simulator's POST /admin/disputes/:id/resolve (the
+      #                        card network's ruling), then the poller
+      # - settle               Reconciliation::Ingestor#ingest for today's date
       #
-      # and two cards the generator leaves out until then:
-      #
-      # - pm_card_disputeFraudulent  its dispute opens through notifications
-      # - pm_card_timeout            the payment stays `processing` behind a 503 until
-      #                              M3's ambiguous-call handling resolves it
+      # One card is still left out: pm_card_timeout, whose confirm answers 503 and
+      # leaves the payment `processing` until a retry resumes it, which a sequence
+      # step does not do.
       class ApiSut
         extend T::Sig
         include Sut
 
         ADMIN_TOKEN = 'model_test_admin'
-        API_TABLES = %w[refunds events payment_intents merchants].freeze
+        # Tables the reset leaves alone: the migrator's.
+        KEEP_TABLES = %w[schema_migrations schema_info].freeze
 
         sig do
           params(db: Sequel::Database, owner_db: Sequel::Database, acquirer_url: String,
@@ -60,17 +58,19 @@ module Clearinghouse
 
         sig { override.returns(T::Array[Symbol]) }
         def unsupported_operations
-          %i[payout availability_sweep resolve_dispute settle]
+          []
         end
 
         sig { override.returns(T::Array[String]) }
         def unsupported_payment_methods
-          %w[pm_card_disputeFraudulent pm_card_timeout]
+          %w[pm_card_timeout]
         end
 
+        # Empties every table the API, the poller and the reconciler write.
         sig { override.void }
         def reset!
-          DbReset.ledger!(@owner_db, extra_tables: API_TABLES)
+          tables = @owner_db.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").map(:tablename)
+          DbReset.ledger!(@owner_db, extra_tables: tables - KEEP_TABLES - DbReset::LEDGER_TABLES)
           @reset_acquirer.call
           @clock = Clock::Test.new(start: Policy::START)
           @deps = build_deps
@@ -143,8 +143,14 @@ module Clearinghouse
                   .returns(Outcome)
         end
         def payout(payout:, merchant:, currency:, amount: nil)
-          raise NotImplementedError, 'TODO(payouts): POST /v1/payouts {amount, currency} as the merchant, ' \
-                                     "record the po_ id under #{payout.inspect}"
+          key = @keys[merchant]
+          return Outcome.error('resource_missing') unless key
+
+          status, json = request(:post, '/v1/payouts', { amount: amount, currency: currency }.compact, auth: key)
+          return error(json) unless status == 200
+
+          @ids[payout] = json.fetch('id')
+          Outcome.success(amount: json.fetch('amount'), status: json.fetch('status'))
         end
 
         sig { override.params(hours: Integer).returns(Outcome) }
@@ -153,28 +159,42 @@ module Clearinghouse
 
           @clock.advance(hours * Policy::HOUR)
           Payments::Expiry.sweep!(@deps)
-          # TODO(disputes, payouts): run the notification poller here so dispute.opened,
-          # payout.paid and payout.failed are delivered, as the model's advance_clock does.
+          poll!
           Outcome.success
         end
 
+        # The card network rules on the payment's dispute: the simulator's admin
+        # endpoint, at the test clock, then a poll so dispute.closed is applied.
         sig { override.params(intent: String, outcome: String).returns(Outcome) }
         def resolve_dispute(intent:, outcome:)
-          raise NotImplementedError, 'TODO(disputes): find the dispute on the simulator by the intent\'s ' \
-                                     "acquirer_reference, POST /admin/disputes/:id/resolve {outcome: #{outcome}}, " \
-                                     "then run the notification poller (intent #{intent})"
+          dispute = acquirer_dispute(intent)
+          return Outcome.error('resource_missing') unless dispute
+
+          resolve = Net::HTTP::Post.new("/admin/disputes/#{dispute.fetch('id')}/resolve")
+          resolve['Content-Type'] = 'application/json'
+          resolve.body = JSON.generate('outcome' => outcome)
+          code, json = acquirer_json(resolve)
+          # The simulator's errors are {"error": "<code>", "message": ...}.
+          return Outcome.error(json.fetch('error').to_s) unless code == 200
+
+          poll!
+          Outcome.success(status: @db[:disputes].where(payment_intent: @ids.fetch(intent)).get(:status))
         end
 
+        # Today's settlement file, reconciled.
         sig { override.returns(Outcome) }
         def settle
-          raise NotImplementedError, 'TODO(reconciler): POST /settlement_files {date: today} on the simulator ' \
-                                     'and reconcile the file'
+          result = Reconciliation::Ingestor.new(db: @db, client: T.must(@deps.acquirer), clock: @clock)
+                                           .ingest(@clock.now.utc.to_date)
+          raise Clearinghouse::Error, "settlement file unavailable: #{result.detail}" if result.status == 'unavailable'
+
+          Outcome.success
         end
 
         sig { override.returns(Outcome) }
         def availability_sweep
-          raise NotImplementedError, 'TODO(payouts): run the availability worker (Balances::Availability) ' \
-                                     'at the test clock'
+          Balances::Availability.release_due!(@db, clock: @clock)
+          Outcome.success
         end
 
         sig { override.returns(Snapshot) }
@@ -194,6 +214,42 @@ module Clearinghouse
         def build_deps
           Api::Dependencies.new(db: @db, clock: @clock, admin_token: ADMIN_TOKEN,
                                 acquirer: Acquirer::Client.new(clock: @clock, base_url: @acquirer_url))
+        end
+
+        # bin/poller's work, once, at the test clock. New disputes are named after
+        # their payment, as the model names them (pi_3's is dp_3).
+        sig { void }
+        def poll!
+          result = Acquirer::NotificationPoller.new(
+            db: @db, client: T.must(@deps.acquirer), clock: @clock,
+            handlers: Settlement.notification_handlers(clock: @clock)
+          ).poll
+          raise Clearinghouse::Error, "the acquirer's feed is unavailable: #{result.unavailable}" if result.unavailable
+
+          names = @ids.invert
+          @db[:disputes].select_map(%i[id payment_intent]).each do |id, payment|
+            name = names[payment]
+            @ids[name.sub(/\Api_/, 'dp_')] ||= id if name
+          end
+        end
+
+        # The simulator's record of the dispute on this payment, nil if it has none.
+        sig { params(intent: String).returns(T.nilable(T::Hash[String, T.untyped])) }
+        def acquirer_dispute(intent)
+          reference = @ids[intent] && @db[:payment_intents].where(id: @ids[intent]).get(:acquirer_reference)
+          return nil unless reference
+
+          _, books = acquirer_json(Net::HTTP::Get.new('/admin/operations'))
+          books.fetch('disputes').find { |d| d['acquirer_reference'] == reference }
+        end
+
+        # A request to the simulator's own endpoints, with the test clock as Sim-Time.
+        sig { params(request: Net::HTTPRequest).returns([Integer, T::Hash[String, T.untyped]]) }
+        def acquirer_json(request)
+          uri = URI.parse(@acquirer_url)
+          request['Sim-Time'] = @clock.now.utc.iso8601(6)
+          response = Net::HTTP.start(T.must(uri.host), uri.port) { |http| http.request(request) }
+          [Integer(response.code), JSON.parse(response.body.to_s)]
         end
 
         sig { returns(T.untyped) }

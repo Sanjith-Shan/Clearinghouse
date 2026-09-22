@@ -193,7 +193,7 @@ module Clearinghouse
 
           post(payout, 'payout', @flows.payout(merchant_id: merchant, amount: value))
           @payouts << payout
-          Outcome.success(amount: value.amount, status: 'pending')
+          Outcome.success(amount: value.amount, status: 'in_transit')
         end
 
         # rubocop:disable Metrics/CyclomaticComplexity
