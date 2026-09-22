@@ -40,7 +40,7 @@ RSpec.describe 'Experiment 2 crash matrix, end to end' do
     expect(report['cases'].map { |c| c['name'] }).to eq(names)
     failures = report['cases'].reject { |c| c['passed'] }
                               .map { |c| [c['name'], c['error'], c['checks'].reject { |ch| ch['ok'] }] }
-    expect(failures).to eq([])
+    expect(failures).to eq([]), -> { "failed cases (untruncated): #{failures.inspect}" }
 
     capture, ambiguous = report['cases']
     expect(capture['checks'].map { |c| c['name'] })
