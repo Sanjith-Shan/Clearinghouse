@@ -65,8 +65,10 @@ module Experiments
                                                      pgroup: true, unsetenv_others: false)
         deadline = started + timeout
         until healthy?
-          raise BootError, "#{@label} exited with #{exit_status} while booting; see #{@log}" if exited?
-          raise BootError, "#{@label} did not come up at #{@url} within #{timeout}s" if CrashMatrix.monotonic > deadline
+          raise BootError, "#{@label} exited with #{exit_status} while booting: #{log_tail}" if exited?
+          if CrashMatrix.monotonic > deadline
+            raise BootError, "#{@label} did not come up at #{@url} within #{timeout}s: #{log_tail}"
+          end
 
           sleep 0.05
         end
@@ -123,6 +125,13 @@ module Experiments
       end
 
       private
+
+      # The end of the process's log, so a boot failure explains itself even when
+      # the log lived in a temporary directory that is gone by the time anyone looks.
+      sig { returns(String) }
+      def log_tail
+        "#{@log}: #{File.exist?(@log) ? File.read(@log).lines.last(5).join.strip : '(no log)'}"
+      end
 
       sig { returns(T::Boolean) }
       def healthy?
