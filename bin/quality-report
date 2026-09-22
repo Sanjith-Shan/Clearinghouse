@@ -1,0 +1,296 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Experiment 7 in one command: mutation score per subject group, branch coverage per
+# group, srb tc status and the sigil counts, written to results/exp7-quality/.
+#
+#   bin/quality-report                  full mutant run, then the report (hours at 1 job)
+#   bin/quality-report --reuse-mutant   report on the sessions already in .mutant/results
+#   bin/quality-report --tables-only    only regenerate the tables in docs/design/quality.md
+#
+# With --reuse-mutant the report merges every session in .mutant/results, keeping the
+# newest result for each subject, so runs split by area add up to one report. The
+# README lists the sessions it used. Clear .mutant/results before a final run.
+#
+# Run it through the shared slot script on this machine: _coord/heavy.sh bin/quality-report
+# It also regenerates the tables of equivalent and accepted survivors in
+# docs/design/quality.md from docs/design/quality_equivalents.yml, so the doc and the
+# numbers come from one list. An entry with `kind: accepted` is a survivor that is not
+# equivalent but could not be killed deterministically; it still counts as alive.
+require 'bundler/setup'
+require 'fileutils'
+require 'json'
+require 'open3'
+require 'time'
+require 'yaml'
+require_relative '../spec/coverage_groups'
+
+ROOT = File.expand_path('..', __dir__)
+OUT = File.join(ROOT, 'results', 'exp7-quality')
+RAW = File.join(ROOT, 'results', 'raw', 'exp7-quality')
+EQUIVALENTS = File.join(ROOT, 'docs', 'design', 'quality_equivalents.yml')
+DESIGN_DOC = File.join(ROOT, 'docs', 'design', 'quality.md')
+JOBS = Integer(ENV.fetch('MUTANT_JOBS', '1'), 10) # bin/mutation's default
+MACHINE = 'Apple M3 Pro, 12 cores, 18 GB, macOS; Postgres 16 in Docker'
+
+# Mutation subject groups, by the subject's expression. First match wins.
+MUTATION_GROUPS = {
+  'Money core' => /\AClearinghouse::(Money|Currency|FeeSchedule)\b/,
+  'Ledger' => /\AClearinghouse::Ledger\b/,
+  'Webhook signatures' => /\AClearinghouse::Webhooks::Signature\b/,
+  'SSRF policy' => /\AClearinghouse::Webhooks::Egress::(IpPolicy|Target)\b/
+}.freeze
+
+Dir.chdir(ROOT)
+ENV['CLEARINGHOUSE_ENV'] = 'test'
+ENV['CLEARINGHOUSE_DB'] ||= 'clearinghouse_test'
+FileUtils.mkdir_p([OUT, RAW])
+
+def run!(label, *cmd, env: {}, allow_failure: false)
+  warn "== #{label}: #{cmd.join(' ')}"
+  output, status = Open3.capture2e(env, *cmd)
+  File.write(File.join(RAW, "#{label}.log"), output)
+  abort "#{label} failed (exit #{status.exitstatus}), see #{RAW}/#{label}.log" unless status.success? || allow_failure
+  [output, status]
+end
+
+# The changed lines of a mutant diff, which identify a mutation independently of the
+# absolute path and line number mutant bakes into its own ids.
+def mutation_key(subject, diff)
+  changed = diff.lines.map(&:rstrip).grep(/\A[-+](?![-+]{2})/).map { |line| line[0] + line[1..].strip }
+  "#{subject}\n#{changed.join("\n")}"
+end
+
+def load_equivalents
+  YAML.safe_load_file(EQUIVALENTS).map do |entry|
+    entry.merge('key' => mutation_key(entry.fetch('subject'), entry.fetch('mutation')))
+  end
+end
+
+def table_for(entries, heading)
+  table = "| Subject | Mutation | #{heading} |\n|---|---|---|\n"
+  entries.each do |e|
+    diff = e.fetch('mutation').lines.map(&:rstrip).reject(&:empty?).map { |l| "`#{l.gsub('|', '\\|')}`" }.join('<br>')
+    table << "| `#{e.fetch('subject')}` | #{diff} | #{e.fetch('why').strip.gsub("\n", ' ')} |\n"
+  end
+  table
+end
+
+def write_tables(entries)
+  accepted, equivalent = entries.partition { |e| e['kind'] == 'accepted' }
+  doc = File.read(DESIGN_DOC)
+  { 'equivalents' => table_for(equivalent, 'Why it is equivalent'),
+    'accepted' => table_for(accepted, 'Why it is not killed') }.each do |name, table|
+    doc = doc.sub(/<!-- #{name}:start -->.*<!-- #{name}:end -->/m,
+                  "<!-- #{name}:start -->\n#{table}<!-- #{name}:end -->")
+  end
+  File.write(DESIGN_DOC, doc)
+end
+
+if ARGV.include?('--tables-only')
+  write_tables(load_equivalents)
+  exit
+end
+
+# ---- mutation ---------------------------------------------------------------
+mutant_cmd = %w[bin/mutation]
+unless ARGV.include?('--reuse-mutant')
+  _, status = run!('mutant', *mutant_cmd, allow_failure: true)
+  warn "mutant exited #{status.exitstatus} (nonzero whenever any mutation is alive)"
+end
+session_paths = Dir[File.join(ROOT, '.mutant', 'results', '*.json')].sort_by { |f| File.mtime(f) }
+abort 'no mutant session found in .mutant/results' if session_paths.empty?
+sessions = session_paths.map { |path| [File.basename(path, '.json'), JSON.parse(File.read(path))] }
+# Newest result per subject wins, so a rerun of one area replaces its older numbers.
+subjects = {}
+used_sessions = {}
+sessions.each do |id, data|
+  data.fetch('subject_results').each { |subject| subjects[subject.fetch('expression_syntax')] = [id, subject] }
+end
+subjects.each_value { |id, _| used_sessions[id] = true }
+sessions.select! { |id, _| used_sessions.key?(id) }
+
+equivalents = load_equivalents
+equivalent_keys = equivalents.to_h { |e| [e.fetch('key'), e] }
+used_equivalents = {}
+groups = MUTATION_GROUPS.keys.to_h { |g| [g, Hash.new(0)] }
+unexplained = []
+
+subjects.each_value do |_, subject|
+  name = subject.fetch('expression_syntax')
+  group = MUTATION_GROUPS.find { |_, pattern| pattern.match?(name) }&.first or next
+  subject.fetch('coverage_results').each do |coverage|
+    mutation = coverage.fetch('mutation_result')
+    next unless mutation.fetch('mutation_type') == 'evil'
+
+    criteria = coverage.fetch('criteria_result')
+    counts = groups.fetch(group)
+    counts['total'] += 1
+    counts['timeouts'] += 1 if criteria.fetch('timeout')
+    if criteria.fetch('test_result') || criteria.fetch('process_abort')
+      counts['killed'] += 1
+      next
+    end
+
+    counts['alive'] += 1
+    key = mutation_key(name, mutation.fetch('mutation_diff'))
+    if equivalent_keys.key?(key)
+      counts[equivalent_keys.fetch(key)['kind'] == 'accepted' ? 'accepted' : 'equivalent'] += 1
+      used_equivalents[key] = true
+    else
+      unexplained << [name, mutation.fetch('mutation_diff')]
+    end
+  end
+end
+stale = equivalents.reject { |e| used_equivalents.key?(e.fetch('key')) }
+
+mutation_rows = groups.map do |group, c|
+  scored = c['total'] - c['equivalent']
+  { 'group' => group, 'mutations' => c['total'], 'killed' => c['killed'], 'alive' => c['alive'],
+    'equivalent' => c['equivalent'], 'accepted' => c['accepted'], 'timeouts' => c['timeouts'],
+    'score' => c['total'].zero? ? nil : (100.0 * c['killed'] / c['total']).round(2),
+    'score_excluding_equivalents' => scored.zero? ? nil : (100.0 * c['killed'] / scored).round(2) }
+end
+totals = mutation_rows.each_with_object(Hash.new(0)) do |row, sum|
+  %w[mutations killed alive equivalent accepted timeouts].each { |k| sum[k] += row.fetch(k) }
+end
+
+# ---- coverage ---------------------------------------------------------------
+rspec_output, = run!('rspec', 'bundle', 'exec', 'rspec', env: { 'COVERAGE_GATE' => nil, 'NO_COVERAGE' => nil })
+examples = rspec_output[/(\d+) examples?, 0 failures/, 1]
+resultset = JSON.parse(File.read(File.join(ROOT, 'coverage', '.resultset.json')))
+raw = resultset.values.first.fetch('coverage')
+hits = raw.to_h do |path, data|
+  [path.delete_prefix("#{ROOT}/"), (data['branches'] || {}).values.flat_map(&:values)]
+end
+coverage_totals = CoverageGroups.branch_totals(hits)
+coverage_rows = CoverageGroups::GROUPS.keys.filter_map do |group|
+  covered, total = coverage_totals[group]
+  next if total.zero?
+
+  { 'group' => group, 'covered' => covered, 'branches' => total,
+    'percent' => CoverageGroups.percent(covered, total).round(2),
+    'floor' => CoverageGroups::GROUP_FLOORS[group] }
+end
+all_covered = coverage_totals.values.sum(&:first)
+all_branches = coverage_totals.values.sum(&:last)
+global_percent = CoverageGroups.percent(all_covered, all_branches).round(2)
+
+# ---- sorbet -----------------------------------------------------------------
+srb_output, srb_status = run!('srb', 'bundle', 'exec', 'srb', 'tc', allow_failure: true)
+sigils = Hash.new { |h, k| h[k] = Hash.new(0) }
+Open3.capture2('git', 'ls-files', '*.rb').first.split("\n").each do |file|
+  next if file.start_with?('sorbet/', 'vendor/')
+
+  level = File.foreach(file).first(3).join[/^# typed: (\w+)/, 1] || 'none'
+  area = file.start_with?('lib/') ? 'lib' : 'everything else'
+  sigils[area][level] += 1
+end
+
+# ---- versions and write-out -------------------------------------------------
+version_sql = 'require "./lib/clearinghouse"; require "./lib/clearinghouse/db"; ' \
+              'puts Clearinghouse::DB.connect(role: :owner, max_connections: 1).get(Sequel.lit("version()"))'
+postgres = Open3.capture2('bundle', 'exec', 'ruby', '-e', version_sql).first.strip
+mutant_version = sessions.map { |_, data| data.fetch('mutant_version') }.uniq.join(', ')
+sha = Open3.capture2('git', 'rev-parse', '--short', 'HEAD').first.strip
+summary = {
+  'generated_at' => Time.now.utc.iso8601, 'git_sha' => sha, 'machine' => MACHINE,
+  'ruby' => RUBY_DESCRIPTION, 'mutant' => mutant_version, 'postgres' => postgres,
+  'mutant_sessions' => sessions.map(&:first),
+  'mutant_runtime_seconds' => sessions.sum { |_, data| data.fetch('runtime') }.round(1),
+  'mutant_jobs' => ARGV.include?('--reuse-mutant') ? nil : JOBS,
+  'mutation' => { 'groups' => mutation_rows, 'totals' => totals },
+  'unexplained_alive' => unexplained.length, 'stale_equivalents' => stale.length,
+  'branch_coverage' => { 'groups' => coverage_rows, 'global' => global_percent,
+                         'global_floor' => CoverageGroups::GLOBAL_FLOOR, 'examples' => examples&.to_i },
+  'srb_tc' => srb_status.success? ? 'clean' : 'errors', 'sigils' => sigils
+}
+File.write(File.join(OUT, 'summary.json'), "#{JSON.pretty_generate(summary)}\n")
+
+pct = ->(v) { v.nil? ? 'n/a' : format('%.2f%%', v) }
+readme = <<~MD
+  # Experiment 7: code quality, measured
+
+  Generated by `bin/quality-report` at #{summary['generated_at']} on commit `#{sha}`.
+  Machine: #{MACHINE}. #{RUBY_DESCRIPTION}. mutant #{mutant_version} (`--usage opensource`),
+  #{ARGV.include?('--reuse-mutant') ? 'reused sessions (their job counts are not recorded)' : "#{JOBS} jobs"}, one Postgres database per job. #{postgres.split(' on ').first}.
+
+  ## Mutation score
+
+  Subjects: the money core (`Money`, `Currency`, `FeeSchedule`), the ledger, webhook signatures and
+  the SSRF address policy (`IpPolicy`, `Target`). Operators: mutant's default (light). A mutation
+  whose tests time out counts as alive. Mutant sessions #{summary['mutant_sessions'].map { |id| "`#{id}`" }.join(', ')},
+  #{summary['mutant_runtime_seconds']}s of mutant runtime in total.
+  #{if sessions.length > 1
+      "These numbers merge #{sessions.length} sessions run separately, by area, while specs were " \
+        'still being added, so a subject counts from the newest session that ran it. ' \
+        'For a single-run number, clear .mutant/results and run bin/quality-report on a quiet machine.'
+    end}
+
+  | Group | Mutations | Killed | Alive | Of which equivalent | Of which accepted | Score (killed / all) | Score, equivalents excluded |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+MD
+mutation_rows.each do |r|
+  readme << "| #{r['group']} | #{r['mutations']} | #{r['killed']} | #{r['alive']} | #{r['equivalent']} | " \
+            "#{r['accepted']} | " \
+            "#{pct[r['score']]} | #{pct[r['score_excluding_equivalents']]} |\n"
+end
+all_score = 100.0 * totals['killed'] / totals['mutations']
+all_scored = 100.0 * totals['killed'] / (totals['mutations'] - totals['equivalent'])
+readme << "| **All** | #{totals['mutations']} | #{totals['killed']} | #{totals['alive']} | #{totals['equivalent']} | " \
+          "#{totals['accepted']} | " \
+          "#{pct[all_score]} | #{pct[all_scored]} |\n"
+readme << <<~MD
+
+  "Score, equivalents excluded" is killed / (all − equivalent): it leaves out the survivors written
+  up as equivalent in `docs/design/quality.md`, and it is stated as such. "Accepted" survivors are
+  not equivalent, only not killed (the doc says why for each), and they stay in both scores as
+  alive. Alive mutations on neither list: **#{unexplained.length}**. Timed-out mutations: #{totals['timeouts']}.
+
+  ## Branch coverage
+
+  Full suite (#{examples} examples), SimpleCov with branch coverage. bin/ci fails if a floor is missed.
+
+  | Group | Branches covered | Branch coverage | Floor in bin/ci |
+  |---|---:|---:|---:|
+MD
+coverage_rows.each do |r|
+  readme << "| #{r['group']} | #{r['covered']} / #{r['branches']} | #{pct[r['percent']]} | " \
+            "#{pct[r['floor']] if r['floor']} |\n"
+end
+readme << "| **All tracked code** | #{all_covered} / #{all_branches} | #{pct[global_percent]} | " \
+          "#{pct[CoverageGroups::GLOBAL_FLOOR]} |\n"
+readme << <<~MD
+
+  ## Sorbet
+
+  `srb tc`: **#{summary['srb_tc']}**#{" (#{srb_output.lines.last&.strip})" unless srb_status.success?}.
+
+  | Files | typed: strict | typed: true | typed: false | no sigil |
+  |---|---:|---:|---:|---:|
+MD
+sigils.sort.each do |area, counts|
+  readme << "| #{area} | #{counts['strict']} | #{counts['true']} | #{counts['false']} | #{counts['none']} |\n"
+end
+readme << <<~MD
+
+  ## Commands
+
+  ```
+  bin/quality-report             # this file and summary.json
+  #{mutant_cmd.join(' ')}                   # bundle exec mutant run --jobs #{JOBS} (config in .mutant.yml)
+  bundle exec rspec              # coverage/.resultset.json, groups in spec/coverage_groups.rb
+  bundle exec srb tc
+  ```
+MD
+File.write(File.join(OUT, 'README.md'), readme)
+
+write_tables(equivalents)
+
+warn "wrote #{OUT}/README.md and summary.json"
+unless unexplained.empty?
+  warn "#{unexplained.length} alive mutations are neither killed nor listed as equivalent:"
+  unexplained.each { |name, diff| warn "#{name}\n#{diff}" }
+end
+stale.each { |e| warn "equivalent no longer seen (remove it from the YAML?): #{e['subject']}\n#{e['mutation']}" }
+exit(unexplained.empty? ? 0 : 1)
