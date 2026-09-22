@@ -72,8 +72,10 @@ From `docs/design/sim.md` (the acquirer's behaviour the model has to predict):
   A decline puts the intent back to `requires_payment_method`.
 - `pm_card_disputeFraudulent` opens a dispute for the **captured** amount 7 days after
   capture. Refunds made before it opens do not shrink it.
-- **Refunds fail `charge_disputed` once the dispute has opened at the acquirer**, even if
-  Clearinghouse has not processed the notification yet.
+- **The acquirer refuses a refund (`charge_disputed`) once the dispute has opened on its
+  side**, even if Clearinghouse has not processed the notification yet. Payments records
+  the refund as `failed` and releases its reservation (`docs/design/payments.md`), so the
+  API answers 200 with a failed refund and no money moves.
 - A payout is paid one simulated day after it is sent, and fails if its amount in minor
   units ends in 13.
 - Every movement settles `settlement_lag_days` (2) after the UTC date it happened, in the
@@ -99,17 +101,18 @@ landed):
 Each of these is a decision the model makes that another area might make differently.
 When the real API is wired in and disagrees, one of the two changes, on purpose.
 
-1. **Availability is by date, not by settlement.** Funds become available
-   `payout_delay_days` (2, the merchant default) after capture, like Stripe's
-   `available_on`, whether or not the settlement line has arrived. The money-flow table
-   lists "funds become available" after settlement but does not say it waits for it.
-   Payments' `Seams.schedule_availability` passes exactly this date, so the payouts work
-   is likely to agree.
-2. **Dispute fee per currency.** $15.00 comes from the ledger doc; 1500 JPY and 5.000 KWD
-   are mine.
-3. **Error codes for areas not built yet** follow Stripe's names: `charge_disputed` (refund
-   after a dispute opened), `balance_insufficient` (payouts), `dispute_not_open` and
-   `dispute_already_closed` (the simulator's codes for resolving a dispute).
+1. **Availability is by date, not by settlement.** Funds become available whether or not
+   the settlement line has arrived. The payouts work has since decided the date: the start
+   of the UTC day `payout_delay_days` (2) after the day of capture
+   (`Balances::Availability.available_on`). The model first used capture time plus 48
+   hours and now follows the documented rule.
+2. **Dispute fee per currency.** $15.00 comes from the ledger doc. The model's first guess
+   for other currencies (1500 JPY, 5.000 KWD) was wrong against `Disputes::FeePolicy`
+   (2200 JPY, 4.600 KWD). The first API run with disputes wired shrank that to 6 steps: a
+   KWD payment on the disputing card, then 7 days.
+3. **Error codes** follow Stripe's names: `balance_insufficient` (payouts, as built),
+   `dispute_not_open` and `dispute_already_closed` (the simulator's codes for resolving a
+   dispute).
 4. **`pm_card_timeout` succeeds.** The acquirer commits and drops the connection. The
    model expects the confirm to end as `pm_card_visa` does, which is where M3's
    ambiguous-call handling has to get it. Payments M2 answers 503 and leaves the intent in
@@ -185,18 +188,19 @@ the sequence's names. Nothing is shadowed.
 | capture | `POST /v1/payment_intents/:id/capture` (`amount_to_capture`) | wired |
 | cancel | `POST /v1/payment_intents/:id/cancel` | wired |
 | refund | `POST /v1/refunds` | wired |
-| advance_clock | advance the test clock, run `Payments::Expiry.sweep!` | wired; TODO: run the notification poller |
-| payout | `POST /v1/payouts` | TODO (payouts) |
-| availability_sweep | the availability worker | TODO (payouts) |
-| resolve_dispute | simulator `POST /admin/disputes/:id/resolve`, then the poller | TODO (disputes) |
-| settle | simulator `POST /settlement_files`, then the reconciler | TODO (reconciler) |
+| advance_clock | advance the test clock, run `Payments::Expiry.sweep!`, then one `NotificationPoller#poll` | wired |
+| payout | `POST /v1/payouts` (`amount`, `currency`) | wired |
+| availability_sweep | `Balances::Availability.release_due!` at the test clock | wired |
+| resolve_dispute | simulator `POST /admin/disputes/:id/resolve` (the network's ruling) at the test clock, then one poll | wired |
+| settle | `Reconciliation::Ingestor#ingest` for the test clock's UTC date | wired |
 
-Unwired operations raise `NotImplementedError` naming what to call, and the adapter
-declares them in `unsupported_operations`, so the generator leaves them out rather than
-failing. It also declares `pm_card_disputeFraudulent` (its dispute arrives by
-notification) and `pm_card_timeout` (interpretation 4) in
-`unsupported_payment_methods`. Wiring an area is filling in its methods and deleting it
-from those two lists.
+The clock-driven operations call the pieces `bin/scheduler` runs, in the scheduler's order
+(expiry, then notifications), rather than a whole tick. The model gives each of them its own
+operation, and a tick would also run automatic payouts and the missing-line check, which
+the model doesn't have. A dispute the poller creates is named after its payment (`pi_3`'s is
+`dp_3`), as the model names it. Only `pm_card_timeout` is still in
+`unsupported_payment_methods` (interpretation 4): its confirm answers 503 and leaves the
+payment `processing` until a retry resumes it, which one sequence step does not do.
 
 ## Checks after every step
 
@@ -290,12 +294,16 @@ test suites running on the same machine (so the times are loose). The run files 
 | `--sut ledger --sequences 300 --max-length 80 --seed 1`, before the model followed payments' fee rule | 300 | 17,826 | every check passed, 260s |
 | `--sut api --sequences 150 --max-length 60 --seed 1` | 150 | 6,714 | every check passed, 669s |
 | `--sut ledger --sequences 300 --max-length 80 --seed 1`, after | 130 | 7,660 | **failed** on sequence 130: the settlement bug under Findings |
+| `--sut api --sequences 40 --max-length 80 --seed 1`, every operation wired | 40 | 2,269 | every check passed, 26s (smoke run on a shared machine) |
 
 The model and ledger runs execute the same sequences, since generation depends only on the
-seed and the model. The API run leaves out the operations and cards its adapter cannot
-run yet, so it covers create, confirm (every declining card), capture (partial, over the
-authorization), authorizations expiring, cancel, refund (partial, full, over what is left) and the
-clock. Each run's `.md` lists how many times each operation reached each outcome.
+seed and the model. The first API run (150 sequences) left out payouts, disputes,
+settlement and the availability sweep. The 40-sequence run with everything wired reached 20
+payouts (10 paid and 1 failed by the time the sequences ended), 8 disputes opened and 4
+resolved, 86 settlement postings and 82 refund settlements. Only `pm_card_timeout` is still
+left out. Each run's `.md` lists how many times each operation reached each outcome. The
+larger runs for a quiet machine are `bin/model-test --sut api --sequences 300 --max-length 80
+--seed 1` and the same with `--seed 2`.
 
 ## Planted-bug demo (deliberate, not a real bug)
 
@@ -383,6 +391,22 @@ settlement line whose acquirer fee (10 fils) exceeds its amount, and `Flows.sett
 built a negative cash debit that `post!` refused. It shrank from 56 steps to 5. Fixed in
 `Flows.settlement`.
 
-**Against the real API (payments M2), no disagreement so far.** Every difference the first
+**Against the whole API (payouts, disputes and the reconciler wired), no system bug so
+far.** The first run with every operation wired disagreed four times, and each time the
+model was wrong, not the system. Each system behaviour is a documented decision:
+
+| model's guess | the system, and where it is decided |
+|---|---|
+| dispute fee 1500 JPY, 5000 KWD | 2200 JPY, 4600 KWD (`Disputes::FeePolicy`) |
+| available 48 hours after capture | at the start of the UTC day two days after the capture day (`docs/design/payouts.md`) |
+| a new payout is `pending` | `in_transit` once the bank accepted it; `pending` is only a payout not yet sent (`docs/design/payouts.md`) |
+| a refund after the dispute opened at the acquirer is an error, `charge_disputed` | a 200 with a `failed` refund, its reservation released (`docs/design/payments.md`) |
+
+Only the first showed up as a shrunk failure: rerunning the old model against the wired
+API with `--sequences 40 --max-length 80 --seed 1` stopped there. The other three were
+found by reading the payouts and payments docs while wiring the adapter, and each is now
+pinned by a spec in `spec/model/reference_model_spec.rb` and `spec/model/api_sut_spec.rb`.
+
+**Against the real API (payments M2), no disagreement either.** Every difference the first
 API run found was the model's guess against a documented payments decision (see
 "Policies encoded").
