@@ -80,6 +80,8 @@ module Experiments
        "#{report['lock_timeout_s']} s",
        "- Registry: #{report['registry_crash_points']} crash points in #{report['registry_flows'].length} flows " \
        "(#{report['registry_flows'].join(', ')})",
+       "- Background (bin/poller): #{report['background_crash_points']} crash points in " \
+       "#{Array(report['background_flows']).length} flows (#{Array(report['background_flows']).join(', ')})",
        "- Flows with no scenario yet (their cases fail): #{missing.empty? ? 'none' : missing.join(', ')}"]
     end
 

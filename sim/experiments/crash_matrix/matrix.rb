@@ -13,20 +13,24 @@ module Experiments
     ].freeze, T::Array[T::Hash[Symbol, T.untyped]])
 
     # Every case to run, in registry order: one per Registry#crash_points entry,
-    # then the variants. Enumerated from the registry and nothing else, so a new
-    # flow or a new phase is in the matrix the moment it is registered, with no
-    # change here. A flow nobody has written a scenario for is still planned:
+    # then one per background crash point (Settlement.background_crash_points,
+    # bin/poller's points per notification type), then the variants. Enumerated
+    # from the two registries and nothing else, so a new flow, a new phase or a
+    # new notification handler is in the matrix the moment it is registered, with
+    # no change here. A flow nobody has written a scenario for is still planned:
     # its cases fail with MissingScenarioError when run, so they count against
     # the headline instead of disappearing from it. `only`
     # narrows it for development (substring match on the case name); a narrowed
     # run is reported as partial and makes no headline claim.
     sig do
       params(registry: Clearinghouse::Idempotency::Registry, only: T.nilable(T::Array[String]),
-             variants: T::Boolean).returns(T::Array[Case])
+             variants: T::Boolean,
+             background: T::Array[Clearinghouse::Idempotency::Registry::CrashPoint]).returns(T::Array[Case])
     end
-    def self.plan(registry, only: nil, variants: true)
+    def self.plan(registry, only: nil, variants: true, background: Clearinghouse::Settlement.background_crash_points)
       points = registry.flows.to_h { |f| [f.name, f.recovery_points] }
       cases = registry.crash_points.map { |cp| case_for(points, cp.flow, cp.point, cp.moment) }
+      cases += background_cases(background)
       if variants
         cases += VARIANTS.map do |v|
           unless points.fetch(v[:flow], []).include?(v[:point])
@@ -39,13 +43,29 @@ module Experiments
       only ? cases.select { |c| only.any? { |o| c.name.include?(o) } } : cases
     end
 
-    # Registered flows the harness cannot set up yet.
+    # Registered flows the harness cannot set up yet, requests and background jobs.
     sig do
-      params(registry: Clearinghouse::Idempotency::Registry, scenarios: T::Hash[String, Scenario])
+      params(registry: Clearinghouse::Idempotency::Registry, scenarios: T::Hash[String, Scenario],
+             background: T::Array[Clearinghouse::Idempotency::Registry::CrashPoint])
         .returns(T::Array[String])
     end
-    def self.flows_without_scenario(registry, scenarios = SCENARIOS)
-      registry.flows.map(&:name).reject { |name| scenarios.key?(name) }
+    def self.flows_without_scenario(registry, scenarios = SCENARIOS,
+                                    background: Clearinghouse::Settlement.background_crash_points)
+      registry.flows.map(&:name).reject { |name| scenarios.key?(name) } +
+        background.map(&:flow).uniq.reject { |name| BACKGROUND_SCENARIOS.key?(name) }
+    end
+
+    # One case per background crash point. A background point is a single crash
+    # moment whose name already says which side of the commit it is on, so
+    # `previous` is only the point before it in the job's own order.
+    sig { params(points: T::Array[Clearinghouse::Idempotency::Registry::CrashPoint]).returns(T::Array[Case]) }
+    def self.background_cases(points)
+      points.group_by(&:flow).flat_map do |flow, flow_points|
+        flow_points.each_with_index.map do |cp, i|
+          Case.new(flow: flow, point: cp.point, moment: cp.moment, background: true,
+                   previous: i.zero? ? nil : T.must(flow_points[i - 1]).point)
+        end
+      end
     end
 
     sig do

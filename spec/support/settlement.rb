@@ -35,10 +35,11 @@ module SettlementHelpers
     outcome.operation.acquirer_reference
   end
 
-  # A hook that crashes once, the first time `point` is reached.
+  # A hook that crashes once, the first time `point` is reached. The poller also
+  # passes the notification type, the disputes service does not.
   def crash_once_at(point)
     fired = false
-    lambda do |reached|
+    lambda do |reached, _type = nil|
       next if fired || reached != point
 
       fired = true

@@ -8,8 +8,10 @@
 #                    [--lock-timeout 1] [--db clearinghouse_exp2] [--completer "bin/completer --once"]
 #                    [--out results/exp2-crash-matrix]
 #
-# The cases come from Clearinghouse::Payments::Flows.registry.crash_points, never from a list
-# here. --only narrows the run by substring for development; such a run is marked partial.
+# The cases come from Clearinghouse::Payments::Flows.registry.crash_points and
+# Clearinghouse::Settlement.background_crash_points (bin/poller, per notification type), never
+# from a list here. --only narrows the run by substring for development (`--only notification.`
+# runs just the background cases); such a run is marked partial.
 # Writes <out>/<timestamp>-<mode>/report.json and report.md, and each process's log under
 # tmp/crash-matrix/. Exits 1 if any case failed.
 
@@ -47,7 +49,8 @@ settings = Experiments::CrashMatrix::Settings.new(
   db_name: opts[:db], recovery: opts[:recovery], lock_timeout: opts[:lock_timeout], completer_command: completer,
   log_dir: File.join(root, 'tmp/crash-matrix', File.basename(dir))
 )
-warn "#{cases.length} cases (#{registry.crash_points.length} registry crash points), recovery: #{opts[:recovery]}"
+warn "#{cases.length} cases (#{registry.crash_points.length} registry crash points, " \
+     "#{Clearinghouse::Settlement.background_crash_points.length} background), recovery: #{opts[:recovery]}"
 session = Experiments::CrashMatrix::Session.new(settings: settings, cases: cases, full: opts[:only].nil?,
                                                 progress: ->(line) { warn line })
 report = session.run(command: COMMAND)

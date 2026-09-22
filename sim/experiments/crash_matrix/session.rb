@@ -34,9 +34,9 @@ module Experiments
         load_before = CrashMatrix.load_average
         started_at = Clearinghouse::Clock::Real.new.now
         started = CrashMatrix.monotonic
-        with_world do |runner|
+        with_world do |runner, background|
           @cases.each_with_index do |kase, i|
-            result = runner.run(kase, i + 1)
+            result = (kase.background ? background : runner).run(kase, i + 1)
             @results << result
             @progress&.call(format('%<i>3d/%<n>d %<r>-4s %<t>6.1fs %<name>s%<err>s',
                                    i: i + 1, n: @cases.length, r: result.passed? ? 'ok' : 'FAIL',
@@ -50,7 +50,7 @@ module Experiments
 
       private
 
-      sig { params(blk: T.proc.params(runner: CaseRunner).void).void }
+      sig { params(blk: T.proc.params(runner: CaseRunner, background: BackgroundRunner).void).void }
       def with_world(&blk)
         sim = Processes.sim(port: CrashMatrix.free_port, log: File.join(@settings.log_dir, 'sim.log'))
         risk = Processes.fake_riskgate(port: CrashMatrix.free_port, log: File.join(@settings.log_dir, 'riskgate.log'))
@@ -61,8 +61,9 @@ module Experiments
         owner = Clearinghouse::DB.connect(role: :owner, database: @settings.db_name, max_connections: 1)
         Clearinghouse::DB.migrate!(database: @settings.db_name)
         begin
-          blk.call(CaseRunner.new(settings: @settings, sim_url: sim.url, proxy: proxy, riskgate_url: risk.url,
-                                  db: db, owner_db: owner))
+          world = { settings: @settings, sim_url: sim.url, proxy: proxy, riskgate_url: risk.url, db: db,
+                    owner_db: owner }
+          blk.call(CaseRunner.new(**world), BackgroundRunner.new(**world))
         ensure
           db.disconnect
           owner.disconnect
@@ -93,6 +94,7 @@ module Experiments
       end
       def meta(command, started_at, started, load_before)
         registry = Clearinghouse::Payments::Flows.registry
+        background = Clearinghouse::Settlement.background_crash_points
         db = Clearinghouse::DB.connect(role: :app, database: @settings.db_name, max_connections: 1)
         postgres = db.fetch('SHOW server_version').single_value
         db.disconnect
@@ -104,7 +106,8 @@ module Experiments
           'load_average' => { 'before' => load_before, 'after' => CrashMatrix.load_average },
           'full_matrix' => @full, 'registry_flows' => registry.flows.map(&:name),
           'flows_without_scenario' => CrashMatrix.flows_without_scenario(registry),
-          'registry_crash_points' => registry.crash_points.length }
+          'registry_crash_points' => registry.crash_points.length,
+          'background_flows' => background.map(&:flow).uniq, 'background_crash_points' => background.length }
       end
     end
   end

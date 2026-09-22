@@ -8,6 +8,11 @@
 #   bin/poller                 poll every 5 seconds until interrupted
 #   bin/poller --once          one poll, then exit (non-zero if it failed)
 #   bin/poller --interval 1 --name acquirer
+#
+# In a test or experiment environment (CLEARINGHOUSE_ENV), CLEARINGHOUSE_CRASH_AT names a
+# point to crash at (`notification.<type>:<point>`, see Settlement.background_crash_points)
+# and CLEARINGHOUSE_CLOCK_AHEAD_S runs the poller that many seconds in the future.
+# Experiment 2 uses both; anywhere else they are refused or do nothing.
 
 require 'bundler/setup'
 require 'json'
@@ -22,10 +27,11 @@ OptionParser.new do |opts|
 end.parse!
 
 db = Clearinghouse::DB.connect(role: :app, max_connections: 2)
-clock = Clearinghouse::Clock::Real.new
+clock = Clearinghouse::Clock.from_env
 poller = Clearinghouse::Acquirer::NotificationPoller.new(
   db: db, client: Clearinghouse::Acquirer::Client.new(clock: clock), clock: clock,
-  handlers: Clearinghouse::Settlement.notification_handlers(clock: clock), name: options[:name]
+  handlers: Clearinghouse::Settlement.notification_handlers(clock: clock), name: options[:name],
+  crash_hook: Clearinghouse::Acquirer::NotificationPoller.crash_hook(Clearinghouse::Idempotency::CrashHook.from_env)
 )
 
 def log(fields)

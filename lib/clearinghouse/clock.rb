@@ -62,5 +62,42 @@ module Clearinghouse
     end
 
     SECONDS_PER_DAY = 86_400
+
+    # The wall clock, a fixed distance ahead. Experiment 2 runs bin/poller on one so
+    # that a dispute the acquirer opens seven days after capture is due now, without
+    # a test clock (a separate process cannot share one) and without waiting a week.
+    class Ahead
+      extend T::Sig
+      include Clock
+
+      sig { params(seconds: Numeric).void }
+      def initialize(seconds)
+        @seconds = seconds
+        @real = T.let(Real.new, Real)
+      end
+
+      sig { override.returns(Time) }
+      def now
+        @real.now + @seconds
+      end
+    end
+
+    class NotAllowedError < Clearinghouse::Error; end
+
+    # The clock a background process runs on: the wall clock, unless
+    # CLEARINGHOUSE_CLOCK_AHEAD_S asks for one ahead of it. That is refused unless
+    # CLEARINGHOUSE_ENV is test or experiment, loudly rather than ignored, because a
+    # production process on a shifted clock would book money on the wrong dates.
+    sig { params(env: T::Hash[String, String]).returns(Clock) }
+    def self.from_env(env = ENV.to_h)
+      ahead = env['CLEARINGHOUSE_CLOCK_AHEAD_S'].to_s
+      return Real.new if ahead.empty?
+      unless %w[test experiment].include?(env['CLEARINGHOUSE_ENV'])
+        raise NotAllowedError,
+              'CLEARINGHOUSE_CLOCK_AHEAD_S is only allowed when CLEARINGHOUSE_ENV is test or experiment'
+      end
+
+      Ahead.new(Float(ahead))
+    end
   end
 end

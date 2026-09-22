@@ -77,4 +77,22 @@ RSpec.describe 'Experiment 2 crash matrix, end to end' do
                                     'completer pass 2: exit 0, key at finished',
                                     'retry after completer: 200 succeeded (replayed)'])
   end
+
+  # One background case: a real bin/poller killed inside the transaction that
+  # opens a dispute, then a clean one, then the control dispute.
+  it 'crashes bin/poller inside a dispute.opened and applies it exactly once after the restart' do
+    cases = cm.plan(Clearinghouse::Payments::Flows.registry, only: ['notification.dispute.opened:effects_written'])
+    report = Dir.mktmpdir('crash-matrix') do |dir|
+      settings = cm::Settings.new(db_name: ENV.fetch('CLEARINGHOUSE_DB', 'clearinghouse_test'), log_dir: dir)
+      cm::Session.new(settings: settings, cases: cases, full: false).run(command: 'spec')
+    end
+
+    expect(report['cases'].length).to eq(1)
+    kase = report['cases'].first
+    expect([kase['error'], kase['checks'].reject { |c| c['ok'] }]).to eq([nil, []])
+    expect(kase['checks'].map { |c| c['name'] })
+      .to include('crashed', 'state_at_crash', 'poller_recovered', 'second_poll_changes_nothing', 'exactly_once',
+                  'cursor_at_end', 'dispute_clearing', 'same_outcome_as_control')
+    expect(kase['acquirer_exchanges']['crashed_poll']).to eq(['GET /notifications?after=0 -> 200'])
+  end
 end

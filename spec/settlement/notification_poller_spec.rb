@@ -159,5 +159,24 @@ RSpec.describe Clearinghouse::Acquirer::NotificationPoller, :db do
         expect(Clearinghouse::Ledger::Invariants.check(app_db)).to be_empty
       end
     end
+
+    # Experiment 2 crashes a real bin/poller at `notification.<type>:<point>`, so the
+    # hook must know the type: a crash aimed at payout.failed must pass payout.paid by.
+    it 'tells the hook which notification type it is at, so a crash can aim at one type' do
+      send_payouts(1_000, 1_013, 2_000)
+      clock.advance(SettlementHelpers::DAY)
+      reached = []
+      hook = lambda do |point, type|
+        reached << [type, point]
+        raise SettlementHelpers::SimulatedCrash if [type, point] == %w[payout.failed effects_written]
+      end
+      expect { poller(hook: hook).poll }.to raise_error(SettlementHelpers::SimulatedCrash)
+
+      expect(reached).to eq([%w[payout.paid notification_fetched], %w[payout.paid effects_written],
+                             %w[payout.paid committed], %w[payout.failed notification_fetched],
+                             %w[payout.failed effects_written]])
+      expect(effects.length).to eq(1)
+      expect(poller.cursor).to eq('1')
+    end
   end
 end

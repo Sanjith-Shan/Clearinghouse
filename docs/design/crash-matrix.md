@@ -2,8 +2,8 @@
 
 Code: `bin/crash-matrix`, `sim/experiments/crash_matrix/`. Specs:
 `spec/experiments/crash_matrix_plan_spec.rb` (the plan is the registry) and
-`spec/experiments/crash_matrix_run_spec.rb` (three cases end to end against real processes,
-one of them in completer mode).
+`spec/experiments/crash_matrix_run_spec.rb` (four cases end to end against real processes,
+one of them in completer mode and one a background `bin/poller` case).
 Results: `results/exp2-crash-matrix/`.
 
 `idempotency.md` argues that a request can stop at any recovery point and be finished later
@@ -38,6 +38,11 @@ run, never typed in.
 
 On top of the registry there is one variant (see below): `confirm:authorization_requested`
 with the acquirer dropping its answers. The headline doesn't count variants.
+
+After the request cases come the background cases, one per
+`Settlement.background_crash_points` entry: `bin/poller`'s three recovery points for every
+notification type a handler is registered for. They are counted in the headline like any
+other point. See "Background crash points" below.
 
 ## One case, step by step
 
@@ -172,6 +177,78 @@ list for every stage of every case, which also shows, for example, that a resume
   stored answer as a replay (`completer_finished_it`). `--completer "<command>"` swaps the
   command.
 
+## Background crash points
+
+Some money moves without any request. A dispute opens, a dispute is ruled on, and the bank
+pays or rejects a payout, and each of these reaches Clearinghouse as a notification that
+`bin/poller` applies. None of them is in `Payments::Flows.registry`, so the request matrix
+never crashed them. `spec/settlement/notification_poller_spec.rb` and
+`disputes_recovery_spec.rb` crash them in process by raising from the hook. That aborts the
+transaction, but `ensure` blocks and Sequel's cleanup still run, which is the gap this
+experiment exists to close.
+
+**The registry.** `Settlement.background_crash_points` is `notification_handlers.types` times
+`NotificationPoller::RECOVERY_POINTS`: 4 types (`dispute.opened`, `dispute.closed`,
+`payout.paid`, `payout.failed`) and 3 points, so 12 cases. It is built from the registered
+handlers, so a new notification type is in the matrix as soon as its handler is registered.
+Until it has a scenario in `sim/experiments/crash_matrix/background.rb`, its cases fail with
+`MissingScenarioError`. The names are `notification.<type>:<point>`, and they are the value
+`CLEARINGHOUSE_CRASH_AT` takes. `bin/poller` arms the same `Idempotency::CrashHook` as the
+API, and the poller passes the hook the type of the notification it is handling, so a crash
+aims at one type and lets the others go by. Each poller point is a single crash moment whose
+name already says which side of the commit it is on. `notification_fetched` comes before the
+transaction, `effects_written` is inside it, and `committed` is after it. So there is no
+`:before_commit` twin.
+
+**The clock.** The acquirer opens a `pm_card_disputeFraudulent` dispute 7 simulated days after
+capture and answers a payout a day after it is sent. A separate process can't share a test
+clock, so `bin/poller` takes `CLEARINGHOUSE_CLOCK_AHEAD_S` and runs that far ahead of the wall
+clock (8 days here). `Clock.from_env` refuses the variable unless `CLEARINGHOUSE_ENV` is `test`
+or `experiment`. It raises rather than ignoring the variable, because a production poller on
+a shifted clock would book disputes on the wrong dates.
+
+**One case, step by step.**
+
+1. **Fresh world**, as for a request case, plus one clean API process for the setup.
+2. **Setup until exactly one notification of the type is due**, through the API and the
+   harness's own unarmed in-process poll on the same shifted clock:
+   - `dispute.opened`: a 2000 `pm_card_disputeFraudulent` payment, confirmed, with its funds
+     released by the availability sweep.
+   - `dispute.closed`: the same, then the harness polls the dispute open, then the acquirer
+     rules `won` (`POST /admin/disputes/:id/resolve` on the simulator).
+   - `payout.paid` / `payout.failed`: a `pm_card_visa` payment, funds released, and
+     `POST /v1/payouts` for 1000 or for 1013 (the simulator fails amounts ending in 13).
+3. **Armed poller.** Snapshot, then `bin/poller --once` with `CLEARINGHOUSE_CRASH_AT` set. It
+   must exit with status 86.
+4. **Clean poller.** `bin/poller --once` again, unarmed. It must exit 0 and apply exactly the
+   notifications that had not committed: one, or none after `committed`.
+5. **Poll again.** One more poll must apply nothing and change nothing.
+6. **Control.** Set up the same situation again and run a clean `bin/poller --once`.
+7. **Verify.**
+
+| Check | What it asserts |
+|---|---|
+| `crashed` | `bin/poller` exited with status 86 |
+| `state_at_crash` | before the commit (`notification_fetched`, `effects_written`): the snapshot (cursor, processed notifications, disputes, payouts, events, ledger) equals the one taken before the poll. At `committed`: exactly one more notification is processed and the cursor is on it |
+| `poller_recovered` | the clean poller exited 0 and processed 1 (0 after `committed`) |
+| `second_poll_changes_nothing` | a further poll processes nothing, repeats nothing, and changes no row |
+| `control_polled` | the control's poller exited 0 and processed its one notification |
+| `resting_state` | the dispute is `needs_response` (opened) or `won` by the acquirer (closed) for 2000 with the 1500 fee, or the payout is `paid` / `failed` for its amount |
+| `ledger_invariants` | `Ledger::Invariants.check` and `Ledger::Checker.run`, as for requests |
+| `acquirer_equals_ledger` | the request matrix's per-PaymentIntent rule, for every payment in the database |
+| `exactly_once` | `processed_notifications` is exactly the simulator's due feed, in order, once each; no object has the same event type twice; the dispute has exactly `charge.dispute.created` (then `charge.dispute.closed`), the payout `payout.created` then `payout.paid` or `payout.failed` |
+| `cursor_at_end` | the stored cursor is the last cursor in the due feed |
+| `dispute_clearing` | `platform:dispute_clearing` holds exactly the amounts of the disputes not won (nothing settles in this experiment) |
+| `same_outcome_as_control` | the object's row, its events with payloads, its ledger transactions with amounts and the notifications applied to it equal the control's, under the same id and time normalisation (plus the notification data's `*_at` timestamps) |
+
+**First runs.** `bin/crash-matrix --only notification.` at 20260924T194455Z, and again at
+20260924T195951Z after rebasing onto the scheduler and payout flows (partial runs, so
+the report makes no headline claim; shared machine, smoke timing only): all 12 background
+cases passed both times (2.6 to 6.3 s each in the first run). They found no bug. The one failure while I was building it was
+the harness's own: a poller inserts its cursor row (`"0"`) before it reads, which the
+first `state_at_crash` comparison counted as a trace of the rolled-back poll. The snapshot
+now reads a missing cursor as `"0"`. The full matrix with these cases has not been run yet.
+
 ## What this does not cover
 
 - **Crashes at recovery points only.** The hook fires on either side of a phase's commit, not
@@ -186,7 +263,18 @@ list for every stage of every case, which also shows, for example, that a resume
 - **Happy-path scenarios.** Every scenario uses `pm_card_visa`. A declined or risk-blocked
   confirm ends early: its phase goes straight to `finished`, so it reaches the same crash names
   by a different path. The matrix doesn't crash a declining request.
-- **One request at a time.** Concurrency is experiment 1 and experiment 3.
+- **One request at a time.** Concurrency is experiment 1 and experiment 3. Two pollers racing
+  on one notification is covered in process by `notification_poller_spec.rb`, not here.
+- **Settlement-file ingestion.** `Reconciliation::Ingestor#ingest_csv` stores the file and
+  reconciles every line in one transaction, and it has no crash hook. A crash anywhere in it
+  leaves nothing, and ingesting the date again is the recovery. The matrix doesn't prove that
+  with a real process yet, because there is nothing to name as a point until the ingestor
+  (or `bin/scheduler`, which runs it) declares its points.
+- **The poller inside `bin/scheduler`.** The scheduler's tick builds its own `NotificationPoller`
+  without a crash hook. The poller code is the same, but the matrix only kills `bin/poller`.
+- **The merchant accepting a dispute.** `POST /v1/disputes/:id/close` is not a registered
+  idempotency flow, and the API does not arm `Disputes::Service`'s hook from the environment.
+  `disputes_recovery_spec.rb` crashes it in process only.
 - **A fake RiskGate.** The risk step is a real HTTP call to `bin/fake-riskgate`, which replays
   by key like RiskGate, with a 5 s deadline so a loaded machine can't turn an allow into a
   fail-open in one run and not the other. The real RiskGate isn't in the loop.
