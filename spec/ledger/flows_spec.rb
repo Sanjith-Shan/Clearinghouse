@@ -52,5 +52,7 @@ RSpec.describe Clearinghouse::Ledger::Flows do
     settlement = described_class.settlement(gross: usd[500], acquirer_fee: usd[0])
     expect(lines(capture)).to eq([['Dr', 'platform:processor_receivable', 500], ['Cr', 'merchant:m1:pending', 500]])
     expect(lines(settlement)).to eq([['Dr', 'platform:cash', 500], ['Cr', 'platform:processor_receivable', 500]])
+    opened = described_class.dispute_opened(merchant_id: 'm1', amount: usd[700], fee: usd[0])
+    expect(lines(opened)).to eq([['Dr', 'merchant:m1:available', 700], ['Cr', 'platform:dispute_clearing', 700]])
   end
 end

@@ -32,7 +32,7 @@ RSpec.describe Clearinghouse::FeeSchedule do
   end
 
   it 'refuses negative amounts' do
-    expect { schedule.fee_for(usd(-1)) }.to raise_error(ArgumentError)
+    expect { schedule.fee_for(usd(-1)) }.to raise_error(ArgumentError, 'fee on a negative amount')
   end
 
   it 'keeps gross == net + fee to the minor unit for random amounts and rates' do

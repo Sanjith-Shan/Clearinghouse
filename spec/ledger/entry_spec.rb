@@ -4,6 +4,12 @@
 RSpec.describe Clearinghouse::Ledger::Entry do
   let(:amount) { Clearinghouse::Money.of(500, 'usd') }
 
+  it 'builds entries on the two sides the ledger accepts' do
+    expect(described_class.debit('platform:cash', amount).side).to eq(:debit)
+    expect(described_class.credit('platform:cash', amount).side).to eq(:credit)
+    expect(described_class::SIDES).to eq(%i[debit credit])
+  end
+
   it 'signs debits positive and credits negative' do
     expect(described_class.debit('platform:cash', amount).signed_amount).to eq(500)
     expect(described_class.credit('platform:cash', amount).signed_amount).to eq(-500)

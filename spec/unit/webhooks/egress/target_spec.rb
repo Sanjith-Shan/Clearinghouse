@@ -114,6 +114,33 @@ RSpec.describe Clearinghouse::Webhooks::Egress::Target do
     expect(described_class.send(:ipv6_literal, '[fe80::1%en0]')).to have_attributes(reason: 'invalid_host')
   end
 
+  it 'says what was wrong in each refusal, quoting what it saw' do
+    {
+      'ftp://hooks.merchant.example/' => 'scheme "ftp"',
+      '//hooks.merchant.example/' => 'scheme ""',
+      'https://user@hooks.merchant.example/' => 'credentials in the URL are not allowed',
+      'https:///path' => 'no host',
+      'https://hooks.merchant.example:0/' => 'port 0',
+      'http://hooks.merchant.example/' => 'http is only allowed for localhost in test mode',
+      'https://127.1/' => '127.1 is an IPv4 address in a non-canonical form',
+      'https://-hooks.example/' => '-hooks.example is not a valid hostname',
+      'https://[v1.fe]/' => '[v1.fe] is not an IPv6 address'
+    }.each do |url, detail|
+      expect(described_class.parse(url, test_mode: false).detail).to eq(detail), url
+    end
+    expect(described_class.send(:ipv6_literal, '[fe80::1%en0]').detail).to eq('IPv6 zone IDs are not allowed')
+  end
+
+  it 'reports a numeric last label as an IP encoding however many labels come before it' do
+    long = "https://#{'a.' * 200}1/"
+    expect(described_class.parse(long, test_mode: false).reason).to eq('ambiguous_ip_encoding')
+  end
+
+  it 'is https? only for https' do
+    expect(described_class.parse('http://localhost:1/', test_mode: true)).not_to be_https
+    expect(described_class.parse('https://localhost:1/', test_mode: true)).to be_https
+  end
+
   it 'marks only the test-mode localhost exception' do
     expect(described_class.parse('http://localhost:1/', test_mode: true).test_mode_localhost).to be(true)
     expect(described_class.parse('https://localhost:1/', test_mode: true).test_mode_localhost).to be(true)

@@ -1,7 +1,8 @@
 # typed: false
 # frozen_string_literal: true
 
-RSpec.describe Clearinghouse::Ledger::Explain, :db do
+RSpec.describe Clearinghouse::Ledger::Explain, :db,
+               mutant_expression: %w[Clearinghouse::Ledger::Explain Clearinghouse::Ledger.explain] do
   let(:receivable) { 'platform:processor_receivable' }
 
   def payment(flow_id = 'pi_1', settle_gross: 10_000)
@@ -49,11 +50,18 @@ RSpec.describe Clearinghouse::Ledger::Explain, :db do
 
     it 'refuses a flow with no transactions' do
       expect { Clearinghouse::Ledger.explain(app_db, 'pi_none') }
-        .to raise_error(described_class::FlowNotFoundError, /pi_none/)
+        .to raise_error(described_class::FlowNotFoundError, 'no ledger transactions for flow "pi_none"')
+    end
+
+    it 'treats an explanation with no steps as touching no clearing account' do
+      empty = described_class::Explanation.new(flow_id: 'pi_1', flow_type: 'payment', steps: [])
+      expect(empty.clearing).to eq({})
+      expect(empty).to be_explained
     end
   end
 
-  describe Clearinghouse::Ledger::ExplainPrinter do
+  # Nested under Explain, so without the tag mutant would not pick these for the printer.
+  describe Clearinghouse::Ledger::ExplainPrinter, mutant_expression: 'Clearinghouse::Ledger::ExplainPrinter' do
     it 'renders a payment as a table with a running clearing column' do
       payment
       expect(render('pi_1')).to eq(<<~TEXT)
@@ -104,6 +112,67 @@ RSpec.describe Clearinghouse::Ledger::Explain, :db do
       text = render('pi_1')
       expect(text.lines.first).to eq("Flow pi_1 · payment · 1 transaction · EXPLAINED\n")
       expect(text).to end_with("Explained: this flow never touched a clearing account.\n")
+    end
+
+    # Four clearing accounts in one flow: three left open, one back at zero. The longest
+    # open code is neither first nor last, so the verdict has to find the widest one.
+    def mixed_flow
+      post([debit('merchant:m1:available', money(50)), credit('platform:refund_clearing', money(50))], flow_id: 'pi_9')
+      post([debit(receivable, money(100)), credit('merchant:m1:pending', money(100))], flow_id: 'pi_9')
+      post([debit('merchant:m1:available', money(10)), credit('platform:dispute_clearing', money(10))], flow_id: 'pi_9')
+      post([debit('platform:dispute_clearing', money(10)), credit('merchant:m1:available', money(10))], flow_id: 'pi_9')
+      post([debit('merchant:m1:available', money(20)), credit('platform:payout_clearing', money(20))], flow_id: 'pi_9')
+      Clearinghouse::Ledger.explain(app_db, 'pi_9')
+    end
+
+    it 'gives each clearing account its own column and lists only the open ones, aligned' do
+      text = described_class.render(mixed_flow)
+      header = text.lines[3]
+      expect(header).to start_with('│ txn │ effective (UTC)     │ transaction / account           │')
+      expect(header)
+        .to end_with("│ refund_clearing │ processor_receivable │ dispute_clearing │ payout_clearing │\n")
+      expect(text).to end_with(<<~TEXT)
+        Not explained: money is still sitting in clearing.
+          platform:refund_clearing       0.50 USD
+          platform:processor_receivable  1.00 USD
+          platform:payout_clearing       0.20 USD
+      TEXT
+    end
+
+    it 'styles titles, headers and clearing cells when colored' do
+      text = described_class.render(mixed_flow, color: true)
+      expect(text).to include(
+        "\e[1mFlow pi_9\e[0m", "│ \e[1mtxn\e[0m │",
+        "│ \e[1m#1 \e[0m │ \e[2m2026-01-01 00:00:00\e[0m │ \e[1mtest",
+        "\e[31m            1.00 USD\e[0m", "\e[32m        0.00 USD\e[0m",
+        "\e[31mNot explained\e[0m: money is still sitting in clearing."
+      )
+    end
+
+    it 'paints the explained verdicts green' do
+      flow_event('pi_1', :funds_available, day: 0, merchant_id: 'm1', net: money(100))
+      payment('pi_2')
+      expect(render('pi_1', color: true))
+        .to include("\e[32mExplained\e[0m: this flow never touched a clearing account.")
+      expect(render('pi_2', color: true))
+        .to include("\e[32mExplained\e[0m: every clearing account this flow touched is back at zero.")
+    end
+
+    it 'is plain text unless color is asked for' do
+      payment
+      explanation = Clearinghouse::Ledger.explain(app_db, 'pi_1')
+      expect(described_class.render(explanation)).not_to include("\e[")
+      expect(described_class.render_table(explanation)).not_to include("\e[")
+    end
+
+    it 'prints effective times in UTC, as the column header says, whatever zone the Time is in' do
+      step = Clearinghouse::Ledger::Explain::Step.new(
+        transaction_id: 1, description: 'capture', effective_at: Time.new(2026, 1, 1, 9, 0, 0, '+09:00'),
+        reverses_transaction_id: nil, reversed_by: nil, lines: [], clearing_after: {}
+      )
+      explanation = Clearinghouse::Ledger::Explain::Explanation.new(flow_id: 'pi_1', flow_type: 'payment',
+                                                                    steps: [step])
+      expect(described_class.render_table(explanation)).to include('2026-01-01 00:00:00')
     end
 
     it 'colors open clearing red and cleared clearing green when asked' do

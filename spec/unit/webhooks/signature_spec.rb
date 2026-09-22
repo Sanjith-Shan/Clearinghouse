@@ -51,12 +51,18 @@ RSpec.describe Clearinghouse::Webhooks::Signature do
       utf8 = '{"name":"café"}'
       expect(described_class.sign(payload: utf8, secrets: [secret], timestamp: now))
         .to eq(described_class.sign(payload: utf8.b, secrets: [secret], timestamp: now))
+      # UTF-16 is not ASCII-compatible, so it only works if the payload is taken as bytes.
+      utf16 = payload.encode('UTF-16LE')
+      expect(described_class.sign(payload: utf16, secrets: [secret], timestamp: now))
+        .to eq(described_class.sign(payload: utf16.b, secrets: [secret], timestamp: now))
     end
 
     it 'refuses no secrets, empty secrets and negative timestamps' do
       expect { described_class.sign(payload: payload, secrets: [], timestamp: now) }
         .to raise_error(ArgumentError, 'at least one secret is required')
       expect { described_class.sign(payload: payload, secrets: [''], timestamp: now) }
+        .to raise_error(ArgumentError, 'secrets must not be empty strings')
+      expect { described_class.sign(payload: payload, secrets: [secret, ''], timestamp: now) }
         .to raise_error(ArgumentError, 'secrets must not be empty strings')
       expect { described_class.sign(payload: payload, secrets: [secret], timestamp: -1) }
         .to raise_error(ArgumentError, 'timestamp must be non-negative, got -1')
@@ -119,6 +125,13 @@ RSpec.describe Clearinghouse::Webhooks::Signature do
         .to raise_error(ArgumentError, 'tolerance must be non-negative, got -1')
       expect { described_class.verify(payload: payload, header: header, secrets: [], now: now) }
         .to raise_error(ArgumentError)
+    end
+
+    it 'finds the valid signature after any number of elements in schemes it does not know' do
+      unknown = Array.new(200) { |i| "v0=#{format('%064x', i)}" }
+      long = ([header] + unknown).join(',').sub(/,(v1=\h+)/, '') + ",#{header[/v1=\h+/]}"
+      expect(long.count(',')).to eq(201)
+      expect(described_class.verify(payload: payload, header: long, secrets: [secret], now: now)).to be_valid
     end
 
     it 'does not choke on a header that is not valid UTF-8' do

@@ -41,10 +41,21 @@ RSpec.describe Clearinghouse::Money do
       expect(money(-5).to_s).to eq('-0.05 USD')
     end
 
-    it 'rejects junk and floats in scientific notation' do
+    it 'rejects junk and floats in scientific notation, quoting the input' do
       ['1e3', '', '1.2.3', 'abc', ' 1'].each do |junk|
-        expect { described_class.parse(junk, 'usd') }.to raise_error(ArgumentError)
+        expect { described_class.parse(junk, 'usd') }
+          .to raise_error(ArgumentError, "not a decimal amount: #{junk.inspect}")
       end
+    end
+
+    it 'says which amount had too many decimal places for which exponent' do
+      expect { described_class.parse('1.2345', 'kwd') }
+        .to raise_error(ArgumentError, '1.2345 has more than 3 decimal places')
+    end
+
+    it 'reads leading zeros as decimal, never octal' do
+      expect(described_class.parse('010.50', 'usd').amount).to eq(1050)
+      expect(described_class.parse('09', 'jpy').amount).to eq(9)
     end
 
     it 'rejects unknown currencies' do
@@ -53,6 +64,12 @@ RSpec.describe Clearinghouse::Money do
 
     it 'normalizes case' do
       expect(money(1, 'USD').currency).to eq('usd')
+    end
+
+    it 'builds a zero in any known currency' do
+      zero = described_class.zero('JPY')
+      expect([zero.amount, zero.currency, zero.frozen?]).to eq([0, 'jpy', true])
+      expect { described_class.zero('xyz') }.to raise_error(Clearinghouse::Currency::UnknownCurrencyError)
     end
   end
 
@@ -63,9 +80,21 @@ RSpec.describe Clearinghouse::Money do
       expect(-money(7)).to eq(money(-7))
     end
 
-    it 'raises when currencies are mixed' do
-      expect { money(1, 'usd') + money(1, 'eur') }.to raise_error(described_class::CurrencyMismatchError)
-      expect { money(1, 'usd') - money(1, 'jpy') }.to raise_error(described_class::CurrencyMismatchError)
+    it 'raises when currencies are mixed, naming both' do
+      expect { money(1, 'usd') + money(1, 'eur') }.to raise_error(described_class::CurrencyMismatchError, 'usd vs eur')
+      expect { money(1, 'usd') - money(1, 'jpy') }.to raise_error(described_class::CurrencyMismatchError, 'usd vs jpy')
+    end
+
+    it 'is equal only to Money of the same amount and currency' do
+      expect(money(1)).not_to eq(money(2))
+      expect(money(1) == 1).to be(false)
+      expect(money(0) == nil).to be(false) # rubocop:disable Style/NilComparison
+      expect(money(1).eql?(money(2))).to be(false)
+    end
+
+    it 'spreads distinct values over distinct hashes, so it works as a hash key at scale' do
+      values = [money(1), money(2), money(1, 'eur'), money(0, 'jpy'), money(-1)]
+      expect(values.map(&:hash).uniq.length).to eq(values.length)
     end
 
     it 'does not compare across currencies' do

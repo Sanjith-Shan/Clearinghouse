@@ -27,11 +27,22 @@ RSpec.describe Clearinghouse::Ledger::AccountCode do
   [
     'cash', 'platform:', 'platform:bank', 'platform:cash:usd', 'Platform:cash', 'merchant:m1',
     'merchant::pending', 'merchant:m1:savings', 'merchant:m-1:pending', 'merchant:m1:pending:x',
-    "merchant:#{'a' * 65}:pending", ''
+    "merchant:#{'a' * 65}:pending", '',
+    # A trailing colon must not name a new account next to the real one.
+    'platform:cash:', 'merchant:m1:available:',
+    # Only the merchant scope has an owner segment.
+    'platform:m1:available', 'bank:m1:available'
   ].each do |code|
     it "rejects #{code.inspect}" do
       expect { described_class.parse(code) }.to raise_error(Clearinghouse::Ledger::UnknownAccountError)
     end
+  end
+
+  it 'quotes the rejected code, so an empty or padded one is visible in the error' do
+    expect { described_class.parse('') }
+      .to raise_error(Clearinghouse::Ledger::UnknownAccountError, 'unknown ledger account code ""')
+    expect { described_class.parse('platform:bank ') }
+      .to raise_error(Clearinghouse::Ledger::UnknownAccountError, 'unknown ledger account code "platform:bank "')
   end
 
   it 'builds codes through the parser, so a typo cannot produce an account' do
