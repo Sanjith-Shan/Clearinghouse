@@ -1,7 +1,14 @@
 # typed: false
 # frozen_string_literal: true
 
-RSpec.describe Clearinghouse::Ledger, :db do
+# mutant_expression: these examples exercise Ledger::Posting through the module's
+# facade, so mutant should run them for Posting's methods and for the facade (it
+# matches on names). Without the method names the facade would fall back to every
+# ledger spec, property tests included.
+RSpec.describe Clearinghouse::Ledger, :db,
+               mutant_expression: %w[Clearinghouse::Ledger.post! Clearinghouse::Ledger.reverse!
+                                     Clearinghouse::Ledger.balance Clearinghouse::Ledger.balance_for_update
+                                     Clearinghouse::Ledger::Posting Clearinghouse::Ledger::UnbalancedError] do
   let(:ledger) { described_class }
   let(:receivable) { 'platform:processor_receivable' }
   let(:fees) { 'platform:fee_revenue' }

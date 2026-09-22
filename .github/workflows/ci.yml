@@ -22,6 +22,9 @@ jobs:
       PGPASSWORD: owner
     steps:
       - uses: actions/checkout@v4
+        with:
+          # mutant --since diffs against the base branch, so it needs history.
+          fetch-depth: 0
       - uses: ruby/setup-ruby@v1
         with:
           bundler-cache: true
@@ -31,3 +34,10 @@ jobs:
       - name: roles and test database
         run: psql -h localhost -p 54329 -U clearinghouse_owner -d clearinghouse_dev -f db/init/00_databases.sql
       - run: bin/ci
+      # Mutation testing on the subjects this PR touched. Too slow for bin/ci; the
+      # full run is bin/mutation, and its numbers live in results/exp7-quality.
+      - name: mutation (changed subjects)
+        if: github.event_name == 'pull_request'
+        env:
+          MUTANT_JOBS: "4"
+        run: bin/mutation --since origin/${{ github.base_ref }}

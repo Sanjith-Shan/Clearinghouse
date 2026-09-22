@@ -347,6 +347,7 @@ Payments, idempotency and the retry storm are linked from the sections above:
 - [Acquirer simulator](docs/design/sim.md): the simulated card acquirer, how it drops responses after committing, and why the client separates Unknown from Unavailable.
 - [Client library](docs/design/client.md): the Ruby client, and why it reuses one idempotency key across every retry of a call.
 - [bin/explain](docs/design/explain.md): a readable trace of every ledger entry behind a payment, refund, dispute or payout.
+- [Code quality](docs/design/quality.md): mutation testing with one database per mutant job, the coverage gates, and every surviving mutant explained.
 - [Load generator](docs/design/loadgen.md): open-loop load at fixed rates, latency from the intended send time (coordinated omission), scenarios and rate sweeps.
 - [Experiment 2, crash matrix](docs/design/crash-matrix.md): killing the server at every recovery point of every registered flow, recovering, and checking the outcome against an uninterrupted request.
 - [RiskGate integration](docs/design/risk-integration.md): the deadline, keep-alive pool and circuit breaker, fail-open and what it costs, review holds on payouts, and where the risk step sits in confirm.

@@ -1,0 +1,37 @@
+# Mutation testing for the core: money, fees, the ledger, webhook signatures and the
+# SSRF address policy. Run it with bin/mutation, which creates one database per job.
+usage: opensource
+integration:
+  name: rspec
+includes:
+  - lib
+requires:
+  - clearinghouse
+environment_variables:
+  # SimpleCov must not run inside mutant: it would rewrite coverage/ on every kill.
+  NO_COVERAGE: '1'
+  CLEARINGHOUSE_ENV: test
+hooks:
+  - spec/mutant_hooks.rb
+matcher:
+  subjects:
+    - Clearinghouse::Money*
+    - Clearinghouse::Currency*
+    - Clearinghouse::FeeSchedule*
+    - Clearinghouse::Ledger*
+    - Clearinghouse::Webhooks::Signature*
+    - Clearinghouse::Webhooks::Egress::IpPolicy*
+    - Clearinghouse::Webhooks::Egress::Target*
+  ignore:
+    # Only called while ip_policy.rb loads, to build the range constants. Mutant
+    # swaps the method in after that, so no test can ever see a mutation of it.
+    # The constants it builds are checked range by range in ip_policy_spec.
+    - Clearinghouse::Webhooks::Egress::IpPolicy.range
+mutation:
+  # Generous, so a loaded machine does not produce timeouts. The slowest selection
+  # (posting_spec) takes a few seconds, more on a busy machine.
+  timeout: 60.0
+# A mutation whose tests time out counts as alive, not killed. Mutant's default
+# counts it as killed, which would credit a slow test run as a detection.
+coverage_criteria:
+  timeout: false

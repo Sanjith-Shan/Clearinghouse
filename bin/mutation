@@ -1,0 +1,48 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Runs mutant over the subjects in .mutant.yml.
+#
+#   bin/mutation                     every subject (the full report)
+#   bin/mutation --since main        only subjects changed since main (what CI runs on a PR)
+#
+# Other arguments go to `mutant run` unchanged. MUTANT_JOBS sets the job count. The
+# default is 1 because this laptop is shared with other work; each job is a Ruby
+# process plus a Postgres backend. On a quiet machine use MUTANT_JOBS=12.
+#
+# Each mutant job is a forked worker running ledger specs that truncate and write
+# tables, so every job gets its own database, `$CLEARINGHOUSE_DB_<index>`, created and
+# migrated here. spec/mutant_hooks.rb points each worker at its database. The script
+# only ever creates and migrates them; it never drops a database.
+require 'bundler/setup'
+
+ENV['CLEARINGHOUSE_ENV'] = 'test'
+ENV['CLEARINGHOUSE_DB'] ||= 'clearinghouse_test'
+require_relative '../lib/clearinghouse'
+require_relative '../lib/clearinghouse/db'
+
+args = ARGV.dup
+jobs = Integer(ENV.fetch('MUTANT_JOBS', '1'), 10)
+base = ENV.fetch('CLEARINGHOUSE_DB')
+
+admin = Clearinghouse::DB.connect(role: :owner, database: 'postgres', max_connections: 1)
+jobs.times do |index|
+  name = "#{base}_#{index}"
+  quoted = admin.literal(Sequel.identifier(name))
+  exists = admin.fetch('SELECT 1 FROM pg_database WHERE datname = ?', name).any?
+  admin.run("CREATE DATABASE #{quoted} OWNER clearinghouse_owner") unless exists
+  Clearinghouse::DB.migrate!(database: name)
+end
+admin.disconnect
+warn "mutation: #{jobs} jobs, databases #{base}_0..#{jobs - 1} migrated"
+
+# Mutant forks a worker per mutation. On macOS, libpq's first connection in a forked
+# child loads the Kerberos framework to try GSSAPI encryption, which initialises
+# Objective-C classes, and the Objective-C runtime kills a child that does that after
+# fork(). Every DB-backed kill then crashes and mutant reports the mutation alive
+# (the first full run said 38% because of this). The database is local and never
+# uses GSSAPI, so switch it off. It has to be in the environment before libpq loads.
+ENV['PGGSSENCMODE'] ||= 'disable'
+
+Dir.chdir(File.expand_path('..', __dir__))
+exec('bundle', 'exec', 'mutant', 'run', '--jobs', jobs.to_s, *args)
