@@ -46,5 +46,5 @@ release of its batch, locks all their accounts, then posts. The refund calls
 locks held, available and refund_clearing together. `reserve!` locks available and
 payout_clearing together before reading the balance. Ingestion locks every existing
 settlement account before its first line. The rule and the alternatives I did not take are
-in `docs/design/ledger.md`, "One lock order per database transaction". Fix commit: FIXCOMMIT
+in `docs/design/ledger.md`, "One lock order per database transaction". Fix commit: a30100f
 (branch `pr/deadlock-holds-sweep`). After it, the racing spec passed 20 of 20 runs.
