@@ -43,6 +43,13 @@ module Clearinghouse
         end
       end
 
+      # Every account a settlement line, or the reversal of a written-off one, posts
+      # to. All platform accounts, each shared with the online paths: captures post
+      # to the receivable, refunds and disputes to their clearing accounts.
+      SETTLEMENT_ACCOUNTS = T.let([Ledger::Flows::CASH, Ledger::Flows::PROCESSING_EXPENSE, Ledger::Flows::RECEIVABLE,
+                                   Ledger::Flows::REFUND_CLEARING, Ledger::Flows::DISPUTE_CLEARING].freeze,
+                                  T::Array[String])
+
       LATE_EVIDENCE = <<~SQL
         SELECT settled_on FROM settlement_files
          WHERE settled_on < ? AND settled_on >= ? AND requested_at >= ? AND fetched_at > ?
@@ -92,6 +99,7 @@ module Clearinghouse
           file_id = @db[:settlement_files].insert(settled_on: date, sha256: sha, raw: csv, line_count: lines.length,
                                                   requested_at: requested_at, fetched_at: fetched_at,
                                                   ingested_at: @clock.now)
+          lock_settlement_balances
           lines.each { |line| reconcile(file_id, line) }
           matched = match_pending(before_file: file_id)
           summary(date, file_id, matched)
@@ -104,6 +112,7 @@ module Clearinghouse
       def match_pending(before_file: nil)
         @db.transaction do
           Reconciliation.lock!(@db)
+          lock_settlement_balances
           scope = @db[:settlement_lines].where(outcome: 'pending').order(:id)
           scope = scope.where(Sequel.lit('file_id < ?', before_file)) if before_file
           scope.all.count do |row|
@@ -118,6 +127,21 @@ module Clearinghouse
       end
 
       private
+
+      # One run posts once per line, all in one transaction, and each posting only
+      # sorts its own accounts. So the run locks every settlement balance up front,
+      # in account id order, as every other writer takes them. Otherwise a run that
+      # had booked a dispute line (dispute_clearing) and then wanted refund_clearing
+      # could close a cycle with a refund and a dispute win of one merchant
+      # (docs/bugs/payouts-sweep-lock-order-deadlock.md). Only accounts that exist
+      # are locked, so a run creates nothing it does not post to. A line's clearing
+      # account always exists (the flow it matched posted to it); cash and
+      # processing_expense are missing only before the first file or payout.
+      sig { void }
+      def lock_settlement_balances
+        existing = @db[:ledger_accounts].where(code: SETTLEMENT_ACCOUNTS).select_map(%i[code currency])
+        Ledger.lock_balances!(@db, existing.map { |code, currency| [String(code), String(currency)] })
+      end
 
       sig { params(file_id: Integer, line: SettlementCsv::Line).void }
       def reconcile(file_id, line)

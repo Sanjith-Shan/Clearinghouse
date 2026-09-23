@@ -276,6 +276,27 @@ RSpec.describe Clearinghouse::Payouts, :db do
     end
   end
 
+  describe 'a payout racing a cancel of an earlier one (real threads, real Postgres)' do
+    # reserve! locked available, then took payout_clearing when it posted. A cancel
+    # (or a failure) posts to the same two accounts, locked in account id order, and
+    # here payout_clearing has the lower id: it was created by another merchant's
+    # payout before this merchant had an available balance.
+    it 'does not deadlock' do
+      other = new_merchant(clock: clock, payout_delay_days: 0)
+      fund!(other, 10_000)
+      payouts.reserve!(app_db, merchant_id: other.id, currency: 'usd', clock: clock, events: events)
+      fund!(merchant, 10_000)
+      first = reserve(amount: 1_000)
+
+      pause = pause_at(Clearinghouse::Ledger, :balance_for_update)
+      cancel = -> { payouts.cancel!(app_db, first.id, merchant_id: merchant.id, clock: clock, events: events) }
+      _, canceled = interleave(pause, -> { reserve(amount: 2_000) }, cancel)
+      expect(canceled.status).to eq('canceled')
+      expect(merchant_balance(merchant, 'available')).to eq(9_680 - 2_000)
+      expect(platform_balance('payout_clearing')).to eq(9_680 + 2_000)
+    end
+  end
+
   describe 'concurrent payouts against one balance (real threads, real Postgres)' do
     it 'never overdraws: exactly as many succeed as the balance covers' do
       fund!(merchant, 10_000) # 9,680 available

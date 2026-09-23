@@ -112,6 +112,20 @@ RSpec.describe Clearinghouse::Reconciliation::Ingestor, :db do
         .to raise_error(Clearinghouse::Reconciliation::Error, /open transaction/)
     end
 
+    # A run posts once per line in one transaction. It must hold every settlement
+    # balance before its first posting, or its locks are taken in line order.
+    it 'locks every settlement balance before it posts anything' do
+      pi, = visa
+      refunded(pi, 4_000)
+      seen = nil
+      allow(Clearinghouse::Ledger).to receive(:post!).and_wrap_original do |original, *args, **kwargs|
+        seen ||= %w[refund_clearing processor_receivable].map { |a| balance_locked?("platform:#{a}") }
+        original.call(*args, **kwargs)
+      end
+      expect(ingest(due_day).outcomes).to eq('cleared' => 2)
+      expect(seen).to eq([true, true])
+    end
+
     it 'reports an unreachable acquirer' do
       down = Clearinghouse::Acquirer::Client.new(clock: clock, base_url: "http://127.0.0.1:#{SimServer.closed_port}")
       result = described_class.new(db: app_db, client: down, clock: clock).ingest(first_day)

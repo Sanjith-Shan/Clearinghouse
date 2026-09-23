@@ -65,8 +65,8 @@ DBHelper.clean_tables('risk_holds')
 
 # Stand-in for the payments area's refunds, behind Balances::RefundRequester.
 # request_refund! only records the request, as the real one only starts the
-# refund. post_refund! is what the real refund must do when it posts: its ledger
-# entries and Holds.release_after_refund! in one transaction.
+# refund. post_refund! is what the real refund must do when it posts:
+# Holds.release_after_refund! and then its ledger entries, in one transaction.
 class StandInRefunds
   include Clearinghouse::Balances::RefundRequester
 
@@ -85,12 +85,12 @@ class StandInRefunds
   end
 
   def post_refund!(db, refund_id:, payment_intent_id:, merchant_id:, amount:, clock:)
+    entries = Clearinghouse::Ledger::Flows.refund(merchant_id: merchant_id, amount: amount)
     db.transaction do
+      Clearinghouse::Balances::Holds.release_after_refund!(db, flow_id: payment_intent_id, clock: clock,
+                                                               refund_entries: entries)
       Clearinghouse::Ledger.post!(db, flow_type: 'refund', flow_id: refund_id, description: 'refund',
-                                      effective_at: clock.now,
-                                      entries: Clearinghouse::Ledger::Flows.refund(merchant_id: merchant_id,
-                                                                                   amount: amount))
-      Clearinghouse::Balances::Holds.release_after_refund!(db, flow_id: payment_intent_id, clock: clock)
+                                      effective_at: clock.now, entries: entries)
     end
   end
 end

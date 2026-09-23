@@ -36,7 +36,9 @@ merchant, net amount, currency, `available_on`, and once released, `released_at`
 
 Each batch is one database transaction that claims due rows with
 `SELECT ... WHERE released_at IS NULL ... FOR UPDATE SKIP LOCKED`, posts one ledger
-transaction per row, and sets `released_at` on the row. The posting and the mark commit
+transaction per row, and sets `released_at` on the row. Before posting anything it decides
+where each row's money goes and locks every balance row the batch will touch, in account id
+order (`Ledger.lock_balances!`, see "Races" below). The posting and the mark commit
 together. That gives three properties, each with a test in
 `spec/balances/availability_spec.rb`:
 
@@ -306,8 +308,8 @@ The rows are also in the ledger's money-flow table.
   refund debits merchant available (the ledger's refund row), so the held money has to go
   back to available at the same moment, or the merchant would be charged twice. It
   can't go earlier, or a payout could pay out a payment we just called fraud. So the refund
-  calls `Holds.release_after_refund!` in the transaction that posts its own entries, and
-  the two postings cancel on `available`. Until that refund posts, `withholds?` stays true,
+  calls `Holds.release_after_refund!` in the transaction that posts its own entries, just
+  before posting them, and the two postings cancel on `available`. Until that refund posts, `withholds?` stays true,
   so a sweep in between still sends the money to held.
 
 `amount` on a hold is the payment amount under review, for display. The money actually held
@@ -318,16 +320,32 @@ is the payment's net, `held_amount`, which is what approve and release move.
 Every path that touches one payment's money locks its `scheduled_availabilities` row first
 and its `risk_holds` row second, in the same order as the sweep. So approve, reject,
 open-after-release and release-after-refund each either run entirely before a sweep's
-release of that payment or entirely after it, and none can deadlock with it. The database
+release of that payment or entirely after it. The database
 also refuses the states a lost race would produce: an approved hold, or one whose refund
 has posted, with money still counted as held (`CHECK`s on `risk_holds`).
 
-Two specs cover it. A random one runs a sweep and four approvers over 16 reviewed payments
-at once. In the deterministic one, the sweep pauses after deciding "held" while still
+The balance rows are the other half. An approval posts once (held -> available), and
+`post!` sorts its rows. A sweep batch posts once per payment, and the refund of a rejected
+review posts the release and the refund, so both lock every balance row they will post to
+up front, in account id order (the rule and the alternatives are in `docs/design/ledger.md`,
+"One lock order per database transaction"). Before that, a batch that released one payment
+to available and the next to held took `available` then `held`, an approval of a third
+payment took `held` then `available`, and the two deadlocked. The random spec below failed
+14 of 36 runs on the old sweep, every failure I checked being `deadlock detected`
+(`docs/bugs/payouts-sweep-lock-order-deadlock.md`).
+The refund also releases the hold *before* posting itself, because the release locks the
+payment's availability row, which must come before any balance lock.
+
+Two specs cover the availability-row order. A random one runs a sweep and four approvers
+over 16 reviewed payments at once. In the deterministic one, the sweep pauses after deciding "held" while still
 holding the availability lock. The approval has to wait for it, and afterwards the money is
 in available and nothing is held. Removing the availability lock from the approve path made
 the deterministic spec fail. The random spec passed with the same lock removed, because
 the window is too narrow to hit by chance, and that is why the deterministic spec exists.
+Three more force the balance-lock interleavings: a batch releasing to both available and held
+against an approval, and the refund of a rejected payment against an approval and against a
+sweep that has claimed the payment. All three failed with `deadlock detected` on every run
+before the fix.
 
 ### Reviews API
 
@@ -363,8 +381,8 @@ started -> refund_created -> refund_requested -> refund_recorded -> finished
    (`Payments::Flows::Base#refund_phases`, shared with `refund.create`): commit the promise,
    call the acquirer under the refund's id, record the answer. A resumed phase asks the
    acquirer about that id before sending anything.
-3. `Refunds.mark_succeeded` posts `Flows.refund` and calls `Holds.release_after_refund!` in the
-   same transaction. That call is a no-op for a payment without a rejected review, so every
+3. `Refunds.mark_succeeded` calls `Holds.release_after_refund!` and then posts `Flows.refund`,
+   in the same transaction. That call is a no-op for a payment without a rejected review, so every
    refund makes it.
 
 `spec/api/reviews_spec.rb` runs this end to end: a real card payment, a hold, the sweep,

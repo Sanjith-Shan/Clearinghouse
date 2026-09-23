@@ -13,10 +13,12 @@ module Clearinghouse
     #   returning the refund id. The acquirer call happens in the refund's own later
     #   phases, as for any refund.
     # - When the refund posts its ledger entries (merchant available -> refund
-    #   clearing), it calls `Holds.release_after_refund!(db, flow_id:, clock:)` in
-    #   that same transaction. That moves the payment's held money back to available
-    #   at the exact moment the refund takes it out, so the held money is never
-    #   payable on its own.
+    #   clearing), it first calls `Holds.release_after_refund!(db, flow_id:, clock:,
+    #   refund_entries:)` in that same transaction, with those entries. That moves
+    #   the payment's held money back to available in the transaction that takes it
+    #   out, so the held money is never payable on its own. Calling it before the
+    #   refund's own posting keeps the transaction's locks in the one order the rest
+    #   of the system uses (docs/design/payouts.md, Races).
     module RefundRequester
       extend T::Sig
       extend T::Helpers

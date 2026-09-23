@@ -16,6 +16,8 @@ Ledger.post!(db, flow_type:, flow_id:, description:, effective_at:, entries:) ->
 Ledger.reverse!(db, transaction_id, reason:, effective_at:) -> transaction id
 Ledger.balance(db, account, currency) -> Money       # signed on the account's normal side
 Ledger.balance_for_update(db, account, currency) -> Money   # SELECT ... FOR UPDATE on account_balances
+Ledger.lock_balances!(db, [[code, currency], ...])           # locks them all in account id order
+Ledger.accounts_of(entries) -> [[code, currency], ...]
 Ledger::Checker.run(db) -> drift report (account_balances vs sum of entries)
 Ledger::Clearing.report(db, as_of:, slas:) -> open flows past SLA, orphan clearing balances,
                                               explainability by flow type
@@ -34,6 +36,10 @@ As built (M1). Everything above holds; these are the details it left open:
   `NotReversibleError` (a reversal can't be reversed; post the original again instead).
 - `balance_for_update` must run inside a database transaction and creates the account if
   it doesn't exist, so there is always a row to lock.
+- **A database transaction that posts more than once, or locks a balance and then posts,
+  calls `lock_balances!` first** with every account it will touch. Balance rows must be
+  locked in ascending account id across the whole transaction, and `post!` only sorts its
+  own (`docs/design/ledger.md`, "One lock order per database transaction").
 - `Checker.run(db) -> Checker::Report(accounts_checked, drifts: [Drift(code, currency, stored, computed)])`.
 - `Clearing.report(db, as_of:, slas: {flow_type => seconds})` returns `Clearing::Report`
   with `open_flows`, `past_sla`, `orphan_balances`, `explainability` (per flow type and
@@ -231,7 +237,7 @@ Risk-review holds (`lib/clearinghouse/balances/holds.rb`):
 ```ruby
 Balances::Holds.open_hold!(db, flow_id:, merchant_id:, amount:, reason:, clock:) -> Hold   # RiskGate said review
 Balances::Holds.close_hold!(db, id, merchant_id:, decision: :approve | :reject, clock:) -> Hold
-Balances::Holds.release_after_refund!(db, flow_id:, clock:)   # Refunds.mark_succeeded calls it with Flows.refund
+Balances::Holds.release_after_refund!(db, flow_id:, clock:, refund_entries:)   # Refunds.mark_succeeded, before posting refund_entries
 Balances::RefundRequester#request_refund!(db, payment_intent_id:, reason:, clock:) -> refund id
 Balances::PaymentsRefundRequester.new(ctx)   # Payments::Refunds.reserve! inside the reject's first phase
 Balances::ReviewFlows::REJECT                # flow review.reject; its later phases are the refund's (refund_phases)

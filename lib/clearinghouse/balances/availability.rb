@@ -129,21 +129,37 @@ module Clearinghouse
         ReleaseReport.new(released: released)
       end
 
+      # One claimed row and where its money goes, decided before anything posts.
+      class Release < T::Struct
+        const :scheduled, Scheduled
+        const :held, T::Boolean
+        const :entries, T::Array[Ledger::Entry]
+      end
+      private_constant :Release
+
+      # Decides every release of the batch, locks every balance row the batch will
+      # post to in account id order, and only then posts. Each posting sorts its
+      # own rows, but a batch posts several: without the up-front lock, a batch
+      # releasing one payment to available and the next to held takes `available`
+      # before `held`, while an approval (held -> available) of another payment
+      # takes them in id order, and each can end up waiting on the other
+      # (docs/bugs/payouts-sweep-lock-order-deadlock.md).
       sig { params(db: Sequel::Database, now: Time, batch_size: Integer).returns(T::Array[Scheduled]) }
       def self.release_batch(db, now, batch_size)
         rows = db[TABLE].where(released_at: nil).where(Sequel.lit('available_on <= ?', now))
                         .order(:available_on, :id).limit(batch_size).for_update.skip_locked.all
-        rows.map { |row| release(db, from_row(row), now) }
+        releases = rows.map { |row| decide(db, from_row(row)) }
+        Ledger.lock_balances!(db, releases.flat_map { |r| Ledger.accounts_of(r.entries) }.uniq)
+        releases.map { |r| release(db, r, now) }
       end
       private_class_method :release_batch
 
-      # Posts the availability transaction for one claimed row and marks it. The
-      # posting is dated at the row's `available_on`, not at the sweep's now: the
-      # money became available on that day even if the sweep ran late. A payment
-      # under risk review goes to held instead (see Holds), and its hold records
-      # the amount in the same transaction.
-      sig { params(db: Sequel::Database, scheduled: Scheduled, now: Time).returns(Scheduled) }
-      def self.release(db, scheduled, now)
+      # Where one claimed row's money goes. A payment under risk review goes to held
+      # instead of available (see Holds). The decision stands until the batch
+      # commits: every path that changes a hold locks this row first, and the sweep
+      # holds it.
+      sig { params(db: Sequel::Database, scheduled: Scheduled).returns(Release) }
+      def self.decide(db, scheduled)
         held = Holds.withholds?(db, scheduled.flow_id)
         merchant_id = scheduled.merchant_id
         entries = if held
@@ -151,9 +167,21 @@ module Clearinghouse
                   else
                     Ledger::Flows.funds_available(merchant_id: merchant_id, net: scheduled.net)
                   end
+        Release.new(scheduled: scheduled, held: held, entries: entries)
+      end
+      private_class_method :decide
+
+      # Posts the availability transaction for one claimed row and marks it. The
+      # posting is dated at the row's `available_on`, not at the sweep's now: the
+      # money became available on that day even if the sweep ran late. A held
+      # release records the amount on the hold in the same transaction.
+      sig { params(db: Sequel::Database, release: Release, now: Time).returns(Scheduled) }
+      def self.release(db, release, now)
+        scheduled = release.scheduled
+        held = release.held
         txn = Ledger.post!(db, flow_type: Ledger::Flows::PAYMENT, flow_id: scheduled.flow_id,
                                description: held ? 'funds held for review' : 'funds available',
-                               effective_at: scheduled.available_on, entries: entries)
+                               effective_at: scheduled.available_on, entries: release.entries)
         Holds.record_held!(db, scheduled.flow_id, scheduled.net) if held
         mark_released(db, scheduled, now, held ? 'held' : 'available', txn)
       end

@@ -45,6 +45,23 @@ module Clearinghouse
       Posting.new(db).balance(account, currency, lock: true)
     end
 
+    # Locks the balance rows of `accounts` ([code, currency] pairs) until the
+    # caller's transaction ends, in ascending account id: the order every posting
+    # updates them in. A transaction that posts more than once, or locks a balance
+    # before posting, calls this first with every account it will touch. Otherwise
+    # its first posting can hold a row that a concurrent posting has to take before
+    # one the second posting needs, and the two deadlock (docs/design/ledger.md).
+    sig { params(db: Sequel::Database, accounts: T::Array[[String, String]]).void }
+    def self.lock_balances!(db, accounts)
+      Posting.new(db).lock_balances(accounts)
+    end
+
+    # The [code, currency] pairs these entries touch, for lock_balances!.
+    sig { params(entries: T::Array[Entry]).returns(T::Array[[String, String]]) }
+    def self.accounts_of(entries)
+      entries.map { |e| [e.account, e.amount.currency] }.uniq
+    end
+
     # Every transaction and entry of one flow, with the running clearing state.
     # Render it with ExplainPrinter.render.
     sig { params(db: Sequel::Database, flow_id: String).returns(Explain::Explanation) }

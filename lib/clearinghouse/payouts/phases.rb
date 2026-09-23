@@ -43,6 +43,13 @@ module Clearinghouse
 
       currency = Currency.normalize(currency)
       T.let(db.transaction do
+        # Both rows the payout posts to, in account id order, before the balance is
+        # read. Locking available alone and payout_clearing later, at the posting,
+        # deadlocked with a failure or cancel of this merchant's earlier payout,
+        # which posts to the same two in id order
+        # (docs/bugs/payouts-sweep-lock-order-deadlock.md).
+        Ledger.lock_balances!(db, [[available_account(merchant_id), currency],
+                                   [Ledger::Flows::PAYOUT_CLEARING, currency]])
         available = Ledger.balance_for_update(db, available_account(merchant_id), currency)
         existing = scheduled_for && db[:payouts].where(merchant_id: merchant_id, currency: currency,
                                                        scheduled_for: scheduled_for, automatic: true).first
