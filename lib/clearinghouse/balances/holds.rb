@@ -13,12 +13,12 @@ module Clearinghouse
     #              if it was already available, open_hold! moves it (available -> held)
     #   approve  : held -> available, or nothing yet if the sweep has not run
     #   reject   : the payment is refunded; the held money goes back to available in
-    #              the refund's own transaction (release_after_refund!), which is the
-    #              one that takes the refunded amount out of available
+    #              the refund's own transaction (release_after_refund!, just before
+    #              the refund takes the refunded amount out of available)
     #
     # Lock order, everywhere: the payment's scheduled_availabilities row first, then
-    # its risk_holds row. The sweep takes them in that order too, so none of these
-    # can deadlock with it.
+    # its risk_holds row, then balance rows in account id order. The sweep takes
+    # them in that order too.
     module Holds
       extend T::Sig
 
@@ -95,8 +95,8 @@ module Clearinghouse
 
       # Closes an open hold. `approve` releases whatever the hold has in held.
       # `reject` starts a refund of the payment through `refunds` and releases
-      # nothing: the money stays held until that refund posts and calls
-      # release_after_refund!.
+      # nothing: the money stays held until that refund calls
+      # release_after_refund! in the transaction that posts it.
       sig do
         params(db: Sequel::Database, id: String, merchant_id: String, decision: Symbol, clock: Clock,
                events: EventSink, refunds: RefundRequester).returns(Hold)
@@ -121,12 +121,23 @@ module Clearinghouse
         end, Hold)
       end
 
-      # Called by the refund of a rejected review, in the transaction that posts the
-      # refund's ledger entries. Moves the payment's held money back to available,
-      # where the refund has just debited the same amount. Idempotent, and a no-op
-      # for a payment with no rejected hold. Returns the hold, if there is one.
-      sig { params(db: Sequel::Database, flow_id: String, clock: Clock).returns(T.nilable(Hold)) }
-      def self.release_after_refund!(db, flow_id:, clock:)
+      # Called by the refund of a payment, in the transaction that posts the refund's
+      # ledger entries, *before* it posts them, with those entries. If the payment's
+      # review was rejected, moves its held money back to available, where the
+      # refund is about to debit the same amount. Idempotent, and a no-op for a
+      # payment with no rejected hold. Returns the hold, if there is one.
+      #
+      # Why before: this locks the payment's availability row, and the sweep holds
+      # that row while it takes balance locks. A refund that had already posted
+      # would hold `available` while waiting for the row. And the two postings lock
+      # held, available and refund_clearing up front, in account id order
+      # (Ledger.lock_balances!), so they cannot take them in an order a concurrent
+      # approval or refund does not.
+      sig do
+        params(db: Sequel::Database, flow_id: String, clock: Clock,
+               refund_entries: T::Array[Ledger::Entry]).returns(T.nilable(Hold))
+      end
+      def self.release_after_refund!(db, flow_id:, clock:, refund_entries:)
         T.let(db.transaction do
           hold = find(db, flow_id: flow_id)
           next hold unless hold && hold.resolution == 'rejected' && hold.refund_applied_at.nil?
@@ -134,7 +145,7 @@ module Clearinghouse
           hold = locked(db, hold)
           next hold unless hold.refund_applied_at.nil?
 
-          release_held(db, hold, clock)
+          release_held(db, hold, clock, also_locking: refund_entries)
           update!(db, hold.id, { refund_applied_at: clock.now, held_amount: 0 })
         end, T.nilable(Hold))
       end
@@ -198,14 +209,17 @@ module Clearinghouse
       end
       private_class_method :locked
 
-      sig { params(db: Sequel::Database, hold: Hold, clock: Clock).void }
-      def self.release_held(db, hold, clock)
+      # `also_locking` are the entries of another posting this transaction will
+      # make next; their balance rows are locked with the release's, in one order.
+      sig { params(db: Sequel::Database, hold: Hold, clock: Clock, also_locking: T::Array[Ledger::Entry]).void }
+      def self.release_held(db, hold, clock, also_locking: [])
         return if hold.held_amount.zero?
 
+        entries = Ledger::Flows.hold_released(merchant_id: hold.merchant_id,
+                                              amount: Money.of(hold.held_amount, hold.amount.currency))
+        Ledger.lock_balances!(db, Ledger.accounts_of(entries + also_locking)) unless also_locking.empty?
         Ledger.post!(db, flow_type: Ledger::Flows::PAYMENT, flow_id: hold.flow_id, description: 'hold released',
-                         effective_at: clock.now,
-                         entries: Ledger::Flows.hold_released(merchant_id: hold.merchant_id,
-                                                              amount: Money.of(hold.held_amount, hold.amount.currency)))
+                         effective_at: clock.now, entries: entries)
       end
       private_class_method :release_held
 

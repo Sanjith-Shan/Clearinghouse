@@ -8,6 +8,7 @@
 RSpec.describe Clearinghouse::Ledger, :db,
                mutant_expression: %w[Clearinghouse::Ledger.post! Clearinghouse::Ledger.reverse!
                                      Clearinghouse::Ledger.balance Clearinghouse::Ledger.balance_for_update
+                                     Clearinghouse::Ledger.lock_balances! Clearinghouse::Ledger.accounts_of
                                      Clearinghouse::Ledger::Posting Clearinghouse::Ledger::UnbalancedError] do
   let(:ledger) { described_class }
   let(:receivable) { 'platform:processor_receivable' }
@@ -214,6 +215,51 @@ RSpec.describe Clearinghouse::Ledger, :db,
       threads.each(&:join)
       expect(app_db[:ledger_transactions].count).to eq(241)
       expect(accounts.sum { |a| balance_of(a) * (a == cash ? 1 : -1) }).to eq(0)
+    end
+  end
+
+  describe '.lock_balances!' do
+    it 'refuses to run outside a transaction, where the locks would be released at once' do
+      expect { ledger.lock_balances!(app_db, [[cash, 'usd']]) }.to raise_error(Clearinghouse::Ledger::Error, /open/)
+    end
+
+    it 'creates missing accounts, so there is a row to lock, and locks each one once' do
+      app_db.transaction do
+        ledger.lock_balances!(app_db, [[available, 'usd'], [cash, 'USD'], [available, 'usd']])
+        expect(app_db[:ledger_accounts].order(:code).select_map(%i[code currency]))
+          .to eq([[available, 'usd'], [cash, 'usd']])
+        expect(app_db[:account_balances].count).to eq(2)
+      end
+    end
+
+    # A session already holds the higher id. Locking in id order takes the lower
+    # one and then waits; locking in the order given would wait first and hold nothing.
+    it 'locks in ascending account id, whatever order the accounts are given in' do
+      capture
+      low, high = [receivable, pending].sort_by { |code| app_db[:ledger_accounts].where(code: code).get(:id) }
+      high_id = app_db[:ledger_accounts].where(code: high).get(:id)
+      held = Queue.new
+      release = Queue.new
+      holder = Thread.new do
+        app_db.transaction do
+          app_db[:account_balances].where(account_id: high_id).for_update.all
+          held << true
+          release.pop
+        end
+      end
+      held.pop
+      locker = Thread.new { app_db.transaction { ledger.lock_balances!(app_db, [[high, 'usd'], [low, 'usd']]) } }
+      wait_until_blocked_or_done(locker)
+      expect(locker).to be_alive
+      expect(balance_locked?(low)).to be(true)
+      release << true
+      [holder, locker].each(&:join)
+      expect(balance_locked?(low)).to be(false)
+    end
+
+    it 'lists the accounts a posting touches once each' do
+      entries = [debit(available, money(5)), credit(cash, money(3)), credit(cash, money(2))]
+      expect(ledger.accounts_of(entries)).to eq([[available, 'usd'], [cash, 'usd']])
     end
   end
 

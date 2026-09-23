@@ -74,6 +74,23 @@ module Clearinghouse
         Money.of(Integer(amount || 0), currency)
       end
 
+      # Locks the balance rows of these accounts FOR UPDATE, in ascending account
+      # id, creating any account that does not exist yet. See Ledger.lock_balances!.
+      sig { params(accounts: T::Array[AccountKey]).void }
+      def lock_balances(accounts)
+        raise Error, 'lock_balances needs an open database transaction' unless @db.in_transaction?
+        return if accounts.empty?
+
+        parsed = T.let({}, T::Hash[AccountKey, AccountCode])
+        accounts.each do |code, currency|
+          account = AccountCode.parse(code)
+          parsed[[account.code, Currency.normalize(currency)]] ||= account
+        end
+        ids = ensure_accounts(parsed).values
+        # LockRows runs above the sort, so the rows are locked in this order.
+        @db[:account_balances].where(account_id: ids).order(:account_id).for_update.select_map(:account_id)
+      end
+
       private
 
       # Everything that can be checked without the database. Returns the parsed

@@ -165,13 +165,15 @@ module Clearinghouse
         db[:refunds].where(id: refund.id).update(acquirer_operation_id: operation_id)
         # The description names the payment: bin/explain links related flows by it
         # (docs/design/interfaces.md).
+        entries = Ledger::Flows.refund(merchant_id: refund.merchant_id, amount: refund.money)
+        # If the payment's review was rejected, its held money goes back to available
+        # in this transaction, as the refund takes the same amount out. A no-op
+        # otherwise. It must come before the refund's posting (see the method).
+        Balances::Holds.release_after_refund!(db, flow_id: refund.payment_intent_id, clock: ctx.clock,
+                                                  refund_entries: entries)
         Ledger.post!(db, flow_type: Ledger::Flows::REFUND, flow_id: refund.id,
                          description: "refund #{refund.id} of #{refund.payment_intent_id}",
-                         effective_at: ctx.clock.now,
-                         entries: Ledger::Flows.refund(merchant_id: refund.merchant_id, amount: refund.money))
-        # If the payment's review was rejected, its held money goes back to available
-        # in this transaction, as the refund takes the same amount out. A no-op otherwise.
-        Balances::Holds.release_after_refund!(db, flow_id: refund.payment_intent_id, clock: ctx.clock)
+                         effective_at: ctx.clock.now, entries: entries)
         Support.emit!(db, ctx, 'charge.refunded', T.must(intent.charge_to_api))
         done
       end

@@ -186,6 +186,57 @@ in sorted order with `ON CONFLICT DO NOTHING` for the same reason.
 row to lock, and refuses to run outside a database transaction, where the lock would be
 released immediately.
 
+### One lock order per database transaction, not per posting
+
+The sort inside `post!` only orders one posting's rows. A database transaction that posts
+twice, or locks a balance and then posts, takes its locks in the order of its postings, and
+that can be the reverse of a single posting elsewhere. The availability sweep did exactly that
+and deadlocked with review approvals (`docs/bugs/payouts-sweep-lock-order-deadlock.md`).
+
+So the rule is: **every database transaction takes its `account_balances` locks in ascending
+account id, across the whole transaction.** A transaction with one posting and no other
+balance lock gets that for free. Anything else first calls
+`Ledger.lock_balances!(db, accounts)` with every `[code, currency]` it will touch
+(`Ledger.accounts_of(entries)` lists a posting's). It creates missing accounts, then locks
+the rows in one `SELECT ... ORDER BY account_id FOR UPDATE` (Postgres locks rows above the
+sort, so in that order). Later postings re-lock rows the transaction already holds, which
+costs nothing.
+
+Where it applies today, each with a spec that forces the old interleaving and failed with
+`deadlock detected` before the fix:
+
+| Transaction | What it posts | Spec |
+|---|---|---|
+| Availability sweep batch | one release per claimed row, to available or held | `spec/balances/holds_spec.rb` |
+| Refund of a rejected review | hold released, then the refund | `spec/balances/holds_spec.rb` |
+| Payout `reserve!` | locks available, then posts the payout | `spec/payouts/payouts_spec.rb` |
+| Settlement ingestion, `match_pending` | one posting per line | `spec/settlement/reconciler_spec.rb` (checks the locks are held before the first posting) |
+
+Everything else posts once per transaction: capture, approve, open-after-release, dispute
+open and win (one notification per poller transaction), payout paid and failed, cancel (a
+reversal is one posting), exception write-offs and reversals.
+
+Row locks on domain tables still come first where a path has them (`scheduled_availabilities`
+then `risk_holds` for holds, the payout row for payouts), and balance locks after. That is why
+the refund now releases the hold *before* posting itself: the release locks the payment's
+availability row, and a refund already holding `available` while waiting for that row
+deadlocked with a sweep that held the row and wanted `available`.
+
+Other ways to fix it, and why not:
+
+- **Queue every writer of a merchant's balance on a Turnstile** (the advisory lock payouts
+  take before their transaction). The sweep, the poller, approvals and refunds would all have
+  to take it, it has to be taken *outside* the transaction, and a sweep batch covers many
+  merchants, so it would need several advisory locks in a sorted order anyway. It also does
+  nothing for the platform accounts ingestion shares with refunds and disputes.
+- **One database transaction per posting** (for the sweep, one release per transaction). It
+  fixes the sweep only, costs a commit per payment, and cannot work for the refund of a
+  rejected review, whose two postings must commit together.
+- **Retry on 40P01.** Postgres would find every such cycle after `deadlock_timeout` (1 s) and
+  abort one side, and the sweep would pick the rows up again. But a request path would pay a
+  second of latency and a retry each time, and a deadlock that is retried is still a lock
+  order bug. The up-front lock costs one extra query per multi-posting transaction.
+
 `Ledger::Checker.run` recomputes every balance from entries in one query and reports each
 account whose stored balance differs, including a missing balance row. The test edits a
 balance as the owner role and checks that the checker finds exactly that account, and
