@@ -18,13 +18,29 @@ So each such assertion has two forms, and neither was deleted:
     that waited again after the deadline, or used a per-read timeout, overruns by another full
     wait on a quiet machine, and by the whole hang, drip (over a second) or kernel handshake
     timeout (over a minute) under load. The refused-connection example uses `20 ms + 4 x lag`.
+  - the dripping-server example also checks which phase timed out, and that check is load
+    sensitive too. The client waits for each next byte with the time left. Unloaded, the
+    deadline always passes inside that wait ("deadline exceeded while waiting for the
+    response"). A process that wakes late after a byte finds the deadline already gone and
+    raises before waiting, with no phase in the message. That was seen once under load. The
+    default example accepts either message but no other phase (it must have got past connect
+    and send); the exact phase moved to the strict twin.
+  - the load generator's spin-window test (`sim/loadgen/runner_test.go`) allows the median
+    send delay `500 us + 4 x lag`. Here `lag` is the longest gap between clock reads in short
+    busy loops before and after the run. That measures time off the CPU, not timer lateness,
+    which is what spinning removes. With the spin window set to zero, the default bound failed
+    2 of 3 runs on a quiet machine (medians of 615 and 826 us against bounds of 548 and 641 us).
+    So it still catches a runner that doesn't spin most of the time, and the strict bound
+    catches it every time.
   - experiment 9's run checks RiskGate recovered: fewer than half the calls after recovery
     are unchecked, and any that are unchecked failed only by timeout or the open breaker, never
     by an error from RiskGate.
 - **Strict, tagged `:timing`.** The original bounds, unchanged: overrun at most one 40 ms
-  wake-up, a refusal in under 20 ms, zero unchecked payments after recovery, and no step in the
-  frozen phase over 90 ms. `spec/spec_helper.rb` excludes `:timing` unless
-  `CLEARINGHOUSE_STRICT_TIMING=1`, so `CLEARINGHOUSE_STRICT_TIMING=1 bin/ci` on a quiet machine
+  wake-up, a refusal in under 20 ms, zero unchecked payments after recovery, no step in the
+  frozen phase over 90 ms, the exact phase of the drip timeout, and a median spin-window send
+  delay under 500 us. `spec/spec_helper.rb` excludes `:timing` unless
+  `CLEARINGHOUSE_STRICT_TIMING=1` (the Go test reads the same variable), so
+  `CLEARINGHOUSE_STRICT_TIMING=1 bin/ci` on a quiet machine
   (or in CI with a dedicated runner) is the full check.
 
 I considered only raising the bounds. A bound loose enough for a load of 60 (over a second

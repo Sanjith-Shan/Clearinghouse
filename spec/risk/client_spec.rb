@@ -173,7 +173,12 @@ RSpec.describe Clearinghouse::Risk::Client do
       result, elapsed = timed { slow_client.assess(assess_request, attempt: 1) }
 
       expect(result).to have_attributes(reason: reason::Timeout)
-      expect(result.detail).to include('waiting for the response')
+      # It timed out reading the drip. On a quiet machine it is always inside the wait
+      # for the next byte ("while waiting for the response", checked by the :timing
+      # twin below). On a starved one the process can wake after a byte with the
+      # deadline already gone, and the check before the next wait says so without a
+      # phase. Either way no other phase may be named: it got past connect and send.
+      expect(result.detail).to match(/\Adeadline exceeded( while waiting for the response)? \(80 ms\)\z/)
       # The whole drip takes over a second; a per-read timeout would sit through all of it.
       expect(elapsed).to be < loaded_bound_ms
     end
@@ -200,8 +205,9 @@ RSpec.describe Clearinghouse::Risk::Client do
       end
       clients = [described_class.new(base_url: "http://127.0.0.1:#{drip.port}", deadline_ms: deadline_ms),
                  described_class.new(base_url: 'http://10.255.255.1:80', deadline_ms: deadline_ms)]
-      elapsed = clients.map { |c| timed { c.assess(assess_request, attempt: 1) }.last }
+      results, elapsed = clients.map { |c| timed { c.assess(assess_request, attempt: 1) } }.transpose
       expect(elapsed).to all(be < deadline_ms + epsilon_ms)
+      expect(results.first.detail).to include('waiting for the response')
     end
   end
 

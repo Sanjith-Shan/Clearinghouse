@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -94,19 +95,55 @@ func TestAchievedRateMatchesTargetOnAFastServer(t *testing.T) {
 	}
 }
 
+// strictTiming says whether to hold wall-clock assertions to their quiet-machine
+// bounds, as the Ruby specs tagged :timing do (docs/design/testing-timing.md).
+func strictTiming() bool { return os.Getenv("CLEARINGHOUSE_STRICT_TIMING") == "1" }
+
+// schedulingLag is how long this process is being kept off the CPU right now: the
+// longest gap between two clock reads in five 2 ms busy loops. It is microseconds on
+// a quiet machine and milliseconds under load. Unlike a sleep it contains no timer
+// lateness, which is the thing the spin window removes, so allowing for it does not
+// excuse a run that did not spin.
+func schedulingLag() time.Duration {
+	var worst time.Duration
+	for i := 0; i < 5; i++ {
+		start := time.Now()
+		last := start
+		for now := start; now.Sub(start) < 2*time.Millisecond; now = time.Now() {
+			if gap := now.Sub(last); gap > worst {
+				worst = gap
+			}
+			last = now
+		}
+	}
+	return worst
+}
+
 // Timers wake up late, by around a millisecond at low rates on macOS, and that
 // lateness is added to every response time. Spinning the last millisecond removes it.
+// Strictly the median stays under 500us. By default the bound also allows four times
+// the scheduling lag measured around the run, as the Ruby deadline specs do: a busy
+// machine delays sends whether or not the runner spins.
 func TestSpinWindowKeepsSendDelayBelowAMillisecond(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 	cfg := Config{Rate: 50, Duration: time.Second, Arrival: Constant, MaxOutstanding: 4,
 		DrainTimeout: time.Second, LateThreshold: time.Millisecond, SpinWindow: time.Millisecond}
+	lag := schedulingLag()
 	res, err := Run(context.Background(), cfg, get(t, srv, 4))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p50 := ms(res.SendDelay.ValueAtQuantile(50)); p50 > 500*time.Microsecond {
-		t.Errorf("median send delay %v with spinning, want well under a millisecond", p50)
+	if after := schedulingLag(); after > lag {
+		lag = after
+	}
+	bound := 500 * time.Microsecond
+	if !strictTiming() {
+		bound += 4 * lag
+	}
+	if p50 := ms(res.SendDelay.ValueAtQuantile(50)); p50 > bound {
+		t.Errorf("median send delay %v with spinning, want under %v (scheduling lag %v, strict %v)",
+			p50, bound, lag, strictTiming())
 	}
 }
 
