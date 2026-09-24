@@ -86,7 +86,7 @@ module Clearinghouse
           domain_errors do
             EP.create(ctx.db, clock: ctx.clock, merchant_id: merchant.id,
                               url: T.must(params.string('url', required: true, max_length: 2048)),
-                              enabled_events: string_list(params, 'enabled_events', required: true),
+                              enabled_events: string_list(params, 'enabled_events'),
                               api_version: params.enum('api_version', ctx.deps.versioning.versions) ||
                                            merchant.api_version,
                               description: params.string('description', max_length: 500),
@@ -96,7 +96,7 @@ module Clearinghouse
 
         sig { params(ctx: Context, endpoint: Webhooks::Endpoint, params: Params).returns(Webhooks::Endpoint) }
         def self.update(ctx, endpoint, params)
-          events = params.key?('enabled_events') ? string_list(params, 'enabled_events', required: true) : nil
+          events = params.key?('enabled_events') ? string_list(params, 'enabled_events') : nil
           domain_errors do
             EP.update(ctx.db, clock: ctx.clock, endpoint: endpoint, url: params.string('url', max_length: 2048),
                               enabled_events: events, description: params.string('description', max_length: 500),
@@ -125,14 +125,13 @@ module Clearinghouse
           raise Errors::InvalidRequestError.new(e.message, code: 'webhook_endpoint_limit_reached')
         end
 
-        # `name[]=a&name[]=b`, `name[0]=a`, or a JSON array of strings.
-        sig { params(params: Params, name: String, required: T::Boolean).returns(T::Array[String]) }
-        def self.string_list(params, name, required: false)
+        # A required list: `name[]=a&name[]=b`, `name[0]=a`, or a JSON array of strings.
+        sig { params(params: Params, name: String).returns(T::Array[String]) }
+        def self.string_list(params, name)
           value = params[name]
-          raise Errors::InvalidRequestError.missing_parameter(name) if required && (value.nil? || value == '')
+          raise Errors::InvalidRequestError.missing_parameter(name) if value.nil? || value == ''
 
           list = case value
-                 when nil, '' then []
                  when Array then value
                  when Hash then value.sort_by { |key, _| key.to_s.to_i }.map(&:last)
                  else raise Errors::InvalidRequestError.invalid_parameter(name, 'must be an array of strings.')

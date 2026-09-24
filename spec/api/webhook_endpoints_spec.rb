@@ -71,6 +71,34 @@ RSpec.describe Clearinghouse::Api::Routes::WebhookEndpoints do
       end
     end
 
+    it 'refuses an empty list of events' do
+      post '/v1/webhook_endpoints', JSON.generate(url: 'https://hooks.example.com/in', enabled_events: []),
+           auth.merge('CONTENT_TYPE' => 'application/json')
+      expect(last_response.status).to eq(400)
+      expect(json_body['error']).to include('param' => 'enabled_events',
+                                            'message' => 'must list at least one event type.')
+    end
+
+    it 'reads indexed enabled_events in index order' do
+      body = create('url=https://hooks.example.com/in&enabled_events[1]=charge.refunded' \
+                    '&enabled_events[0]=payment_intent.succeeded')
+      expect(body['enabled_events']).to eq(%w[payment_intent.succeeded charge.refunded])
+    end
+
+    [['enabled_events=*', 'a bare string'], [{ enabled_events: [1] }, 'a list of non-strings']].each do |events, what|
+      it "refuses enabled_events given as #{what}" do
+        if events.is_a?(String)
+          post '/v1/webhook_endpoints', "url=https://hooks.example.com/in&#{events}", form
+        else
+          post '/v1/webhook_endpoints', JSON.generate({ url: 'https://hooks.example.com/in' }.merge(events)),
+               auth.merge('CONTENT_TYPE' => 'application/json')
+        end
+        expect(last_response.status).to eq(400)
+        expect(json_body['error']).to include('param' => 'enabled_events', 'code' => 'parameter_invalid',
+                                              'message' => 'Invalid enabled_events: must be an array of strings.')
+      end
+    end
+
     it 'accepts a URL whose name does not resolve yet, since delivery checks again' do
       create('url=https://not-yet.example.com/in&enabled_events[]=*')
       expect(last_response.status).to eq(200)
@@ -85,6 +113,13 @@ RSpec.describe Clearinghouse::Api::Routes::WebhookEndpoints do
   end
 
   describe 'retrieve, list, update, delete' do
+    it 'refuses a starting_after cursor that is not one of the merchant endpoints' do
+      get '/v1/webhook_endpoints', { starting_after: 'we_nope' }, auth
+      expect(last_response.status).to eq(400)
+      expect(json_body['error']).to include('param' => 'starting_after',
+                                            'message' => "No such webhook endpoint: 'we_nope'")
+    end
+
     it 'lists newest first with pagination' do
       ids = Array.new(3) do
         clock.advance(1)
