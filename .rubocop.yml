@@ -12,6 +12,7 @@ AllCops:
     - sorbet/rbi/**/*
     - clients/go/**/*
     - results/**/*
+    - spec/fixtures/**/*.rb # inputs for child processes, not specs
 
 Metrics/MethodLength:
   Max: 30

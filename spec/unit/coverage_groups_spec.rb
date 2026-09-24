@@ -1,6 +1,8 @@
 # typed: false
 # frozen_string_literal: true
 
+require 'open3'
+require 'tmpdir'
 require_relative '../coverage_groups'
 
 RSpec.describe CoverageGroups do
@@ -47,6 +49,20 @@ RSpec.describe CoverageGroups do
       hits = { 'lib/clearinghouse/ledger/posting.rb' => ([1] * 94) + ([0] * 6),
                'lib/clearinghouse/api/app.rb' => [1] * 1000 }
       expect(described_class.violations(hits)).to eq(['Ledger: branch coverage 94.00% is below 95.0%'])
+    end
+  end
+
+  # The gate itself, in a child rspec as bin/ci runs it. No database needed.
+  describe 'the gate in spec_helper' do
+    it 'stays out of the way of a failing run, so the failures are what gets reported' do
+      root = File.expand_path('../..', __dir__)
+      Dir.mktmpdir do |dir|
+        _, err, status = Open3.capture3({ 'COVERAGE_GATE' => '1', 'COVERAGE_DIR' => dir, 'NO_COVERAGE' => nil },
+                                        'bundle', 'exec', 'rspec', 'spec/fixtures/coverage_gate/failing_example.rb',
+                                        chdir: root)
+        expect(status.exitstatus).to eq(1)
+        expect(err).not_to include('Coverage gate failed')
+      end
     end
   end
 end
