@@ -77,7 +77,7 @@ RSpec.describe Clearinghouse::Reconciliation::Ingestor, :db do
     it 'refuses a malformed file without writing any of it' do
       header = Clearinghouse::Reconciliation::SettlementCsv::HEADER.join(',')
       good = "ln_1,capture,acq_1,op_1,100,11,usd,2026-03-04\n"
-      [["nope\n", /header/],
+      [["nope\n", /header/], ['', /unexpected header nil/],
        ["#{header}\n#{good}ln_2,capture,acq_2,op_2,1.5,0,usd,2026-03-04\n", /line 2 has a non-integer/],
        ["#{header}\nln_1,chargeback,acq_1,op_1,100,11,usd,2026-03-04\n", /unknown type/],
        ["#{header}\nln_1,capture,acq_1,op_1,100,11,xyz,2026-03-04\n", /unknown currency/],

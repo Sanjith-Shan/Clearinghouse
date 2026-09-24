@@ -22,6 +22,30 @@ RSpec.describe Clearinghouse::Scheduler, :db do
                            completer reaper])
   end
 
+  describe '#run' do
+    def run(stops)
+      out = StringIO.new
+      sleeps = []
+      scheduler.run(interval: 5, out: out, stop: -> { stops.shift },
+                    sleeper: lambda { |seconds|
+                      sleeps << seconds
+                      clock.advance(seconds)
+                    })
+      [out.string.lines.map { |line| JSON.parse(line)['time'] }, sleeps]
+    end
+
+    it 'writes one report line per tick and sleeps the interval between ticks' do
+      times, sleeps = run([false, false, false, true])
+      expect(times).to eq([clock.now - 10, clock.now - 5].map { |t| t.utc.iso8601(3) })
+      expect(sleeps).to eq([5, 5])
+    end
+
+    it 'stops right after a tick without sleeping, or right after a sleep without ticking' do
+      expect(run([true])).to eq([[clock.now.utc.iso8601(3)], []])
+      expect(run([false, true]).last).to eq([5])
+    end
+  end
+
   it "applies the bank's payout.paid notification and ingests the day's settlement file" do
     intent = create_intent(amount: 10_000)
     confirm(intent['id'])

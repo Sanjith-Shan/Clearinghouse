@@ -19,6 +19,13 @@ RSpec.describe Clearinghouse::Reconciliation::Exceptions, :db do
     [pi, exceptions(type).first.fetch(:id)]
   end
 
+  it 'refuses to raise an exception with a reason it does not know' do
+    draft = described_class::Draft.new(reason: 'chargeback', line_type: 'capture', currency: 'usd', detail: 'x')
+    expect { described_class.create!(app_db, draft, now: clock.now) }
+      .to raise_error(ArgumentError, 'unknown reason chargeback')
+    expect(app_db[:reconciliation_exceptions].count).to eq(0)
+  end
+
   it 'writes off money the acquirer kept, and the flow is explained again' do
     pi, id = mismatched('fee_mismatch', 3)
     resolved = resolve(id, action: 'write_off')

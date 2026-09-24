@@ -112,9 +112,52 @@ RSpec.describe Clearinghouse::Reconciliation::DataQuality, :db do
       expect(app_db[:ledger_transactions].where(flow_id: pi).count).to eq(5)
       expect_ledger_sound
     end
+
+    it 'does not reverse a write-off twice when an operator already reversed it' do
+      pi, ref = visa
+      ingest(day(4), inject: [{ type: 'late', acquirer_reference: ref, days: 3 }])
+      ingest(day(5))
+      id = detector.run.first
+      Clearinghouse::Reconciliation::Exceptions.resolve!(app_db, id, action: 'write_off', note: 'acquirer lost it',
+                                                                     clock: clock)
+      write_off = exceptions('missing').first.fetch(:resolution_transaction_id)
+      Clearinghouse::Ledger.reverse!(app_db, write_off, reason: 'operator undid it', effective_at: clock.now)
+
+      ingest(day(7))
+      expect(exceptions('missing').first[:resolution_note]).to eq(
+        'acquirer lost it Later the line arrived in the 2026-03-07 file and was booked; ' \
+        'the write-off was already reversed.'
+      )
+      # capture, funds available, write-off, the operator's reversal, settlement: no second reversal
+      expect(app_db[:ledger_transactions].where(flow_id: pi).count).to eq(5)
+      expect([balance_of('platform:cash'), balance_of('platform:processing_expense')]).to eq([10_000 - 160, 160])
+      expect_ledger_sound
+    end
+
+    it 'leaves a missing exception resolved without a write-off alone when the line arrives' do
+      _, ref = visa
+      ingest(day(4), inject: [{ type: 'late', acquirer_reference: ref, days: 3 }])
+      ingest(day(5))
+      id = detector.run.first
+      Clearinghouse::Reconciliation::Exceptions.resolve!(app_db, id, action: 'none', note: 'waiting on the acquirer',
+                                                                     clock: clock)
+      ingest(day(7))
+      expect(exceptions('missing').first).to include(resolution_action: 'none',
+                                                     resolution_note: 'waiting on the acquirer')
+      expect(open_flows).to be_empty
+      expect(balance_of('platform:cash')).to eq(10_000 - 160)
+      expect_ledger_sound
+    end
   end
 
   describe 'the report' do
+    it 'renders a ledger with no flows yet as an explainability table with no rows' do
+      text = Clearinghouse::Reconciliation::DataQualityPrinter.render(quality.run)
+      expect(text).to include("Explainability: share of volume in flows whose clearing accounts are back at zero\n  " \
+                              "(none)\n")
+      expect(text).to include('Open flows past SLA: none (0 open within SLA)')
+    end
+
     it 'is healthy when everything cleared' do
       visa
       ingest(day(4))

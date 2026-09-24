@@ -33,6 +33,18 @@ RSpec.describe Clearinghouse::Webhooks::Endpoints, :db do
     expect(again.secrets.active_secrets(now: clock.now)).not_to include(original)
   end
 
+  it 'refuses to update or roll the secret of an endpoint deleted since it was read' do
+    endpoint = create
+    app_db[:webhook_endpoints].where(id: endpoint.id).update(deleted_at: clock.now)
+    expect do
+      described_class.update(app_db, clock: clock, endpoint: endpoint, url_check: WebhookSpecHelpers.url_check,
+                                     description: 'x')
+    end
+      .to raise_error(described_class::Error, "webhook endpoint #{endpoint.id} vanished")
+    expect { described_class.roll_secret(app_db, clock: clock, endpoint: endpoint, overlap: 600) }
+      .to raise_error(described_class::Error, "webhook endpoint #{endpoint.id} vanished")
+  end
+
   it 'loses no secret when two rolls race' do
     endpoint = create
     threads = Array.new(4) do

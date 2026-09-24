@@ -54,10 +54,33 @@ RSpec.describe Clearinghouse::Payments::PaymentIntent, :db do
       expect(intents.find(app_db, merchant_id: merchant.id, id: intent.id).customer_email).to eq('a@example.com')
     end
 
+    it 'refuses to write one intent over another' do
+      a = insert_intent(app_db, merchant_id: merchant.id)
+      b = insert_intent(app_db, merchant_id: merchant.id)
+      expect { intents.save!(app_db, a, b, now: clock.now) }
+        .to raise_error(ArgumentError, 'cannot change an intent into another one')
+      expect(intents.find(app_db, merchant_id: merchant.id, id: a.id).lock_version).to eq(0)
+    end
+
     it 'refuses to lock outside a transaction' do
       intent = insert_intent(app_db, merchant_id: merchant.id)
       expect { intents.lock!(app_db, merchant_id: merchant.id, id: intent.id) }
         .to raise_error(Clearinghouse::Error, /open transaction/)
+    end
+  end
+
+  describe 'copy and equality' do
+    it 'refuses to copy with a field the struct does not have, so a typo cannot be silently dropped' do
+      intent = insert_intent(app_db, merchant_id: merchant.id)
+      expect { intent.copy(amount_recieved: 5, status: status::Succeeded) }
+        .to raise_error(ArgumentError, 'unknown fields amount_recieved')
+    end
+
+    it 'compares by value, and never equals something that is not an intent' do
+      intent = insert_intent(app_db, merchant_id: merchant.id)
+      expect(intent.copy).to eq(intent)
+      expect(intent.copy(amount: 1)).not_to eq(intent)
+      expect(intent == intent.fields).to be(false)
     end
   end
 

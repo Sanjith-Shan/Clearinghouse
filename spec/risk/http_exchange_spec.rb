@@ -54,6 +54,13 @@ RSpec.describe Clearinghouse::Risk::Http::Exchange do
     expect_protocol_error("HTTP/1.1 200 OK\r\nX: #{'a' * 20_000}", /response head over/)
   end
 
+  it 'caps the body however it is framed: many chunks, or no length at all' do
+    chunk = "#{(40 * 1024).to_s(16)}\r\n#{'a' * 40 * 1024}\r\n"
+    expect_protocol_error("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n#{chunk}#{chunk}",
+                          /\Abody over the cap\z/)
+    expect_protocol_error("HTTP/1.1 200 OK\r\n\r\n#{'a' * 90_000}", /\Aresponse over the cap\z/)
+  end
+
   it 'refuses a broken chunked body' do
     expect_protocol_error("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n", /bad chunk size/)
     expect_protocol_error("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhiXX", /not followed by CRLF/)
