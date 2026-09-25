@@ -285,7 +285,9 @@ never deletes an unfinished key, however old. Each one is a request the complete
 ending, and its row is the only record of how far it got. The reaper counts them (`stuck`) for
 an operator instead. A finished key past its 24 hours that the reaper hasn't reached yet is
 treated as gone by the next request that uses it, so the contract doesn't depend on the
-reaper's schedule.
+reaper's schedule. Each deleted key makes Postgres clear `payment_intents.locked_by`
+(`ON DELETE SET NULL`), which is why that column has an index
+(docs/bugs/idempotency-reaper-fk-seq-scan.md).
 
 `bin/completer` runs, on every tick, the authorization expiry sweep, a completer pass and a
 reaper pass, and prints one JSON line with what each did. `--once` does a single tick, and
