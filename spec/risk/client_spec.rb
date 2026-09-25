@@ -43,6 +43,30 @@ RSpec.describe Clearinghouse::Risk::Client do
     deadline_ms + epsilon_ms + (4 * scheduling_lag_ms)
   end
 
+  # Records, for one call on a client built with `clock`: when its deadline falls
+  # (by that clock), the phase of every Http.wait, and each socket wait's timeout,
+  # the clock reading it was computed from, and whether the socket became ready.
+  def record_waits(clock)
+    seen = { deadline_at: nil, phases: [], waits: [] }
+    allow(Clearinghouse::Risk::Http::Deadline).to receive(:new).and_wrap_original do |original, *args|
+      original.call(*args).tap { seen[:deadline_at] = clock.readings.last + (deadline_ms / 1000.0) }
+    end
+    allow(Clearinghouse::Risk::Http).to receive(:wait).and_wrap_original do |original, *args|
+      seen[:phases] << args.last
+      original.call(*args)
+    end
+    allow(Socket).to receive(:new).and_wrap_original do |original, *args|
+      original.call(*args).tap do |socket|
+        allow(socket).to receive(:wait_writable).and_wrap_original do |wait, timeout|
+          # The latest reading is the one Deadline#remaining! took for this wait.
+          from = clock.readings.last
+          wait.call(timeout).tap { |ready| seen[:waits] << { timeout: timeout, from: from, ready: ready } }
+        end
+      end
+    end
+    seen
+  end
+
   def local_server(&)
     server = LocalHttpServer.new(&)
     servers << server
@@ -183,15 +207,40 @@ RSpec.describe Clearinghouse::Risk::Client do
       expect(elapsed).to be < loaded_bound_ms
     end
 
-    it 'covers connecting: an address that never completes the handshake times out or fails, within the deadline' do
+    # Proved with the client's own clock rather than the wall time of the call, which
+    # under load includes however long the process waited for a CPU. What must hold:
+    # the call stopped in the connect phase, every wait it made was for at most what
+    # was left of its deadline, and it only reported a timeout once its clock said
+    # the deadline had passed. A client without the connect deadline would wait for
+    # the kernel's handshake timeout (over a minute) in one wait longer than the
+    # budget. The wall-clock bound is the :timing twin below.
+    it 'covers connecting: an address that never completes the handshake gives up at its own deadline' do
       # 10.255.255.1 is unroutable on most networks (SYN goes nowhere); some sandboxes
-      # refuse it outright instead. Either way the call must not outlive the deadline.
-      blackhole = described_class.new(base_url: 'http://10.255.255.1:80', deadline_ms: deadline_ms)
-      result, elapsed = timed { blackhole.assess(assess_request, attempt: 1) }
+      # refuse it outright instead, which must also come back within the deadline.
+      clock = RecordingClock.new
+      seen = record_waits(clock)
+      blackhole = described_class.new(base_url: 'http://10.255.255.1:80', deadline_ms: deadline_ms,
+                                      breaker: breaker, clock: clock)
 
-      expect([reason::Timeout, reason::Connection]).to include(result.reason)
-      # Without the deadline this waits for the kernel's handshake timeout, over a minute.
-      expect(elapsed).to be < loaded_bound_ms
+      result = blackhole.assess(assess_request, attempt: 1)
+      finished = clock.now
+
+      expect(blackhole.pool.opened).to eq(0)
+      seen[:waits].each { |w| expect(w[:from] + w[:timeout]).to be <= seen[:deadline_at] + 1e-9 }
+      if result.reason == reason::Timeout
+        # Timed out waiting for the handshake, or, on a process that woke too late to
+        # wait at all, found nothing left before the wait. Never any other phase.
+        expect(result.detail).to match(/\Adeadline exceeded( while connecting)? \(80 ms\)\z/)
+        expect(seen[:phases]).to eq(['connecting'])
+        expect(seen[:waits].map { |w| w[:ready] }).to all(be_nil)
+        expect(finished).to be >= seen[:deadline_at] - 0.001
+      else
+        # Refused or unreachable, not the kernel giving up on the handshake (ETIMEDOUT),
+        # which is what a connect without the deadline would end with.
+        expect(result).to have_attributes(reason: reason::Connection,
+                                          detail: match(/\Aconnect: Errno::E(CONNREFUSED|NETUNREACH|HOSTUNREACH)\b/))
+        expect(seen[:phases]).to eq(seen[:waits].empty? ? [] : ['connecting'])
+      end
     end
 
     it 'covers the whole response and connecting, to within one wake-up', :timing do

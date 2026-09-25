@@ -18,6 +18,16 @@ So each such assertion has two forms, and neither was deleted:
     that waited again after the deadline, or used a per-read timeout, overruns by another full
     wait on a quiet machine, and by the whole hang, drip (over a second) or kernel handshake
     timeout (over a minute) under load. The refused-connection example uses `20 ms + 4 x lag`.
+  - the connect-deadline example has no wall-clock bound at all. Even `deadline + epsilon +
+    4 x lag` failed under a load of 12 to 16 (153 ms against 122 ms): the lag probe only
+    measures the machine before the call, and the process can be starved during it. It runs the client on a clock that records every
+    reading and checks what the client did by that clock: the only phase it waited in was
+    connecting, its one wait was for at most what was left of its deadline, it reported a
+    timeout only once its own clock had passed the deadline (to within 1 ms), and it opened no
+    connection. Where the address is refused instead, the error must be a refusal or
+    unreachable network, not `ETIMEDOUT`, which is how a connect without the deadline ends.
+    Waiting longer than the time left, or giving up early, both fail it (checked by editing
+    `Http.wait` to `left + 0.05` and to `left / 2`). The strict twin keeps the wall-clock bound.
   - the dripping-server example also checks which phase timed out, and that check is load
     sensitive too. The client waits for each next byte with the time left. Unloaded, the
     deadline always passes inside that wait ("deadline exceeded while waiting for the
