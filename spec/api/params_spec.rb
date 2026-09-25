@@ -152,4 +152,59 @@ RSpec.describe Clearinghouse::Api::Params do
     expect(error).to include('code' => 'body_invalid')
     expect(error['message']).not_to include('&#')
   end
+
+  it 'treats an empty optional value as absent, not as an empty string' do
+    form('amount=1&currency=usd&description=&capture=')
+    expect(json_body).to include('description' => nil, 'capture' => nil)
+  end
+
+  it 'rejects a non-string where a string is expected' do
+    json(amount: 1, currency: 'usd', description: ['a'])
+    expect(error).to include('param' => 'description', 'message' => 'Invalid description: must be a string.')
+  end
+
+  it 'rejects metadata that is not an object' do
+    json(amount: 1, currency: 'usd', metadata: 'order 6735')
+    expect(error).to include('param' => 'metadata', 'message' => 'Invalid metadata: must be an object.')
+  end
+
+  it 'rejects a bare string for expand, and non-string expand entries' do
+    json(amount: 1, currency: 'usd', expand: 'payment_method')
+    expect(error).to include('param' => 'expand', 'message' => 'Invalid expand: must be an array of strings.')
+    json(amount: 1, currency: 'usd', expand: [{ 'path' => 'payment_method' }])
+    expect(error).to include('param' => 'expand', 'message' => 'Invalid expand: must be an array of strings.')
+  end
+
+  it 'treats a JSON request with an empty body as having no body parameters' do
+    post '/echo?amount=3&currency=usd', '', { 'CONTENT_TYPE' => 'application/json' }
+    expect(last_response.status).to eq(200)
+    expect(json_body).to include('amount' => 3, 'currency' => 'usd')
+  end
+
+  describe '.read_raw' do
+    # Rack 3 makes rack.input optional and no longer requires it to be rewindable.
+    it 'reads no body as empty' do
+      expect(described_class.read_raw(Rack::Request.new({}))).to eq('')
+    end
+
+    it 'reads an input stream that cannot rewind' do
+      stream = Object.new
+      stream.define_singleton_method(:read) { '{"amount":1}' }
+      request = Rack::Request.new('rack.input' => stream)
+      expect(described_class.read_raw(request)).to eq('{"amount":1}')
+    end
+  end
+
+  describe '#nested' do
+    it 'names a nested object that is not an object with its full bracketed name' do
+      params = described_class.new({ 'shipping' => { 'address' => 'Oslo' } })
+      expect { params.nested('shipping').nested('address') }
+        .to raise_error(Clearinghouse::Api::Errors::InvalidRequestError,
+                        'Invalid shipping[address]: must be an object.')
+    end
+
+    it 'gives an empty object for an absent one' do
+      expect(described_class.new({}).nested('shipping').raw).to eq({})
+    end
+  end
 end

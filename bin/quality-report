@@ -172,6 +172,8 @@ coverage_rows = CoverageGroups::GROUPS.keys.filter_map do |group|
     'percent' => CoverageGroups.percent(covered, total).round(2),
     'floor' => CoverageGroups::GROUP_FLOORS[group] }
 end
+product_covered, product_branches = CoverageGroups.product_totals(hits)
+product_percent = CoverageGroups.percent(product_covered, product_branches).round(2)
 all_covered = coverage_totals.values.sum(&:first)
 all_branches = coverage_totals.values.sum(&:last)
 global_percent = CoverageGroups.percent(all_covered, all_branches).round(2)
@@ -201,8 +203,9 @@ summary = {
   'mutant_jobs' => ARGV.include?('--reuse-mutant') ? nil : JOBS,
   'mutation' => { 'groups' => mutation_rows, 'totals' => totals },
   'unexplained_alive' => unexplained.length, 'stale_equivalents' => stale.length,
-  'branch_coverage' => { 'groups' => coverage_rows, 'global' => global_percent,
-                         'global_floor' => CoverageGroups::GLOBAL_FLOOR, 'examples' => examples&.to_i },
+  'branch_coverage' => { 'groups' => coverage_rows, 'product' => product_percent,
+                         'product_floor' => CoverageGroups::PRODUCT_FLOOR, 'global' => global_percent,
+                         'examples' => examples&.to_i },
   'srb_tc' => srb_status.success? ? 'clean' : 'errors', 'sigils' => sigils
 }
 File.write(File.join(OUT, 'summary.json'), "#{JSON.pretty_generate(summary)}\n")
@@ -258,8 +261,16 @@ coverage_rows.each do |r|
   readme << "| #{r['group']} | #{r['covered']} / #{r['branches']} | #{pct[r['percent']]} | " \
             "#{pct[r['floor']] if r['floor']} |\n"
 end
-readme << "| **All tracked code** | #{all_covered} / #{all_branches} | #{pct[global_percent]} | " \
-          "#{pct[CoverageGroups::GLOBAL_FLOOR]} |\n"
+readme << "| **Product code** | #{product_covered} / #{product_branches} | #{pct[product_percent]} | " \
+          "#{pct[CoverageGroups::PRODUCT_FLOOR]} |\n"
+readme << "| All tracked code | #{all_covered} / #{all_branches} | #{pct[global_percent]} | none |\n"
+readme << <<~MD
+
+  Product code is `lib/clearinghouse/` (without `testing/` and `experiments/`), `sim/lib/acquirer_sim`
+  and `clients/ruby/`. The harness and tools group (`sim/experiments/`, `sim/fake_riskgate/`,
+  `lib/clearinghouse/testing/`, `lib/clearinghouse/experiments/`) has no floor: it runs
+  mostly in child processes the rspec process cannot see (`docs/design/quality.md`).
+MD
 readme << <<~MD
 
   ## Sorbet

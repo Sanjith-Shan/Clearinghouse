@@ -306,3 +306,18 @@ sessions paused between statements. They stay in the numbers as alive.
 | `Clearinghouse::Ledger::Posting#entries_of` | `-@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { \|row\|`<br>`+@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order.select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { \|row\|` | Not equivalent: without ORDER BY, Postgres may return a reversal's entries in any order. On these small tables it returns them in insertion order every time, so no test can see the difference. The entries still mirror the original and balance, only their order in the reversal could change. Left alive and counted as a survivor. |
 | `Clearinghouse::Ledger::Posting#entries_of` | `-@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(Sequel[:ledger_entries][:id]).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { \|row\|`<br>`+@db[:ledger_entries].join(:ledger_accounts, id: :account_id).where(transaction_id:).order(nil).select(Sequel[:ledger_accounts][:code], :side, :amount, Sequel[:ledger_entries][:currency]).map { \|row\|` | Not equivalent: without ORDER BY, Postgres may return a reversal's entries in any order. On these small tables it returns them in insertion order every time, so no test can see the difference. The entries still mirror the original and balance, only their order in the reversal could change. Left alive and counted as a survivor. |
 <!-- accepted:end -->
+
+## Branch coverage gate
+
+`bin/ci` fails when branch coverage drops below a floor in `spec/coverage_groups.rb`:
+95% for the ledger and for the money core, and `PRODUCT_FLOOR` for product code as a
+whole. Product code is `lib/clearinghouse/` without `testing/` and `experiments/`, plus
+`sim/lib/acquirer_sim` and `clients/ruby/`. The experiment harnesses and test tooling
+(`sim/experiments/`, `sim/fake_riskgate/`, `lib/clearinghouse/testing/`,
+`lib/clearinghouse/experiments/`) are reported as their own group with no floor.
+
+The floor used to cover all code, and it went red once the harnesses merged.
+Harness code is exercised by the experiments themselves, in child processes that
+`bin/crash-matrix`, `bin/storm` and `bin/exp-replay` spawn, where SimpleCov in the
+rspec process cannot see it. It is not shipped. Gating on it would reward testing the
+test rig instead of the product, so the floor now measures only the code that ships.

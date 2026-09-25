@@ -56,6 +56,7 @@ RSpec.describe Clearinghouse::Api::Routes::Merchants do
       ['name=X&fee_percent=101', 'fee_percent', 'parameter_invalid'],
       ['name=X&fee_fixed[xyz]=1', 'fee_fixed[xyz]', 'parameter_invalid'],
       ['name=X&fee_fixed[usd]=-1', 'fee_fixed[usd]', 'parameter_invalid'],
+      ['name=X&fee_fixed=30', 'fee_fixed', 'parameter_invalid'],
       ['name=X&payout_schedule[interval]=hourly', 'payout_schedule[interval]', 'parameter_invalid'],
       ['name=X&payout_schedule[delay_days]=31', 'payout_schedule[delay_days]', 'parameter_invalid'],
       ['name=X&payout_schedule[anchor]=monday', 'payout_schedule[anchor]', 'parameter_unknown'],

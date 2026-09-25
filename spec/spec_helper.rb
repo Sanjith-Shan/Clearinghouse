@@ -12,6 +12,9 @@ unless ENV['NO_COVERAGE']
     primary_coverage :branch
     add_filter '/spec/'
     add_filter '/vendor/'
+    # Only for the gate's own spec, which runs a child rspec that must not write
+    # over this run's results.
+    coverage_dir ENV['COVERAGE_DIR'] if ENV['COVERAGE_DIR']
     CoverageGroups::GROUPS.each do |name, claims|
       add_group(name) { |file| claims.call(file.project_filename.delete_prefix('/')) }
     end
@@ -24,8 +27,10 @@ unless ENV['NO_COVERAGE']
   # run reports the failing examples rather than a coverage number.
   if ENV['COVERAGE_GATE'] == '1'
     SimpleCov.at_exit do
-      SimpleCov.result.format!
+      # Read the exit status before formatting: format! rescues an exception
+      # internally, which clears $ERROR_INFO (docs/bugs/quality-coverage-gate-hid-failures.md).
       examples_failed = $ERROR_INFO.is_a?(SystemExit) && !$ERROR_INFO.success?
+      SimpleCov.result.format!
       missed = CoverageGroups.violations(CoverageGroups.hits_from(SimpleCov.result))
       unless examples_failed || missed.empty?
         warn "Coverage gate failed:\n#{missed.map { |m| "  #{m}" }.join("\n")}"
