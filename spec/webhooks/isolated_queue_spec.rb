@@ -32,6 +32,11 @@ RSpec.describe Clearinghouse::Webhooks::IsolatedQueue, :db do
   end
 
   describe 'the in-flight cap' do
+    it 'must allow at least one delivery in flight, or nothing would ever be sent' do
+      expect { described_class.new(max_in_flight: 0) }
+        .to raise_error(ArgumentError, 'max_in_flight must be at least 1')
+    end
+
     it 'leases at most max_in_flight deliveries per endpoint and moves on to the next endpoint' do
       a = endpoint('a')
       clock.advance(1)

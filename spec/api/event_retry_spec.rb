@@ -26,12 +26,17 @@ RSpec.describe Clearinghouse::Api::Routes::Events do
   it 'gives a failed delivery exactly one more attempt, due now' do
     event_id = emit
     WebhookSpecHelpers.dispatcher(db, clock: clock).run_once
-    db[:webhook_deliveries].update(status: 'failed', failed_at: clock.now, attempts: 21, last_error: 'http_500')
+    last_at = clock.now
+    db[:webhook_deliveries].update(status: 'failed', failed_at: clock.now, attempts: 21, last_error: 'http_500',
+                                   last_attempt_at: last_at, last_status: 500, last_duration_ms: 42)
     clock.advance(86_400)
     body = retry_event(event_id)
     expect(last_response.status).to eq(200)
     expect(body).to include('object' => 'webhook_delivery', 'event' => event_id, 'webhook_endpoint' => hook.id,
                             'status' => 'pending', 'attempts' => 21, 'next_attempt' => clock.now.to_i)
+    # The merchant still sees why the last attempt failed until the new one runs.
+    expect(body['last_attempt']).to eq('at' => last_at.to_i, 'status' => 500, 'error' => 'http_500',
+                                       'duration_ms' => 42)
     expect(WebhookSpecHelpers.delivery(db, event_id)).to include(retry_deadline_at: clock.now, failed_at: nil)
   end
 

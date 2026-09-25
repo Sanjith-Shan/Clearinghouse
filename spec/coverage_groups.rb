@@ -49,11 +49,13 @@ module CoverageGroups
   # Branch coverage floors, in percent. The ledger and the money core are held to
   # the spec's 95%. PRODUCT_FLOOR applies to product code as a whole. It started as
   # a floor on all code (93.5%, set when main measured 93.84%); once experiment
-  # harnesses merged, that number mostly measured the test rig, so on 2026-09-24 it
-  # became a floor on product code only, which then measured 93.51% (1670 of 1786).
-  # Raise it when coverage goes up; never lower it to get green.
+  # harnesses merged, that number mostly measured the test rig, so it became a floor
+  # on product code only. It sits just below what product code measured after the
+  # error-path specs landed (96.04%, 1720 of 1791 branches, on 2026-09-24), so it
+  # catches a real drop without failing on noise. Raise it when coverage goes up;
+  # never lower it to get green.
   GROUP_FLOORS = { 'Ledger' => 95.0, 'Money core' => 95.0 }.freeze
-  PRODUCT_FLOOR = 93.5
+  PRODUCT_FLOOR = 95.75
 
   def self.group_of(path)
     GROUPS.find { |_, claims| claims.call(path) }&.first

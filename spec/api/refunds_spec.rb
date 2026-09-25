@@ -37,6 +37,25 @@ RSpec.describe Clearinghouse::Api::Routes::Refunds, :db do
       Clearinghouse::Ledger::Invariants.check!(ApiSpecHelpers.db)
     end
 
+    it 'refuses to record an outcome for a refund that already has one' do
+      refund(payment_intent: paid_intent)
+      refund_id = json_body['id']
+      db = ApiSpecHelpers.db
+      ledger_before = db[:ledger_transactions].count
+      operation = Clearinghouse::Acquirer::Operation.new(
+        id: 'op_again', type: 'refund', status: 'succeeded', decline_code: nil, acquirer_reference: nil,
+        reference: nil, amount: 2000, currency: 'usd', idempotency_key: refund_id, created_at: clock.now
+      )
+      ctx = Clearinghouse::Api::Context.background(deps, merchant)
+      expect do
+        db.transaction do
+          Clearinghouse::Payments::Refunds.record!(db, ctx, refund_id,
+                                                   Clearinghouse::Acquirer::Approved.new(operation: operation))
+        end
+      end.to raise_error(Clearinghouse::Error, "refund #{refund_id} is already succeeded")
+      expect(db[:ledger_transactions].count).to eq(ledger_before)
+    end
+
     it 'takes several partial refunds up to exactly what was captured, and no more' do
       id = paid_intent
       expect([refund(payment_intent: id, amount: 500), refund(payment_intent: id, amount: 700)].map(&:status))

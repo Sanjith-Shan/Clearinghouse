@@ -229,6 +229,46 @@ RSpec.describe Clearinghouse::Api::Routes::PaymentIntents, :db do
       expect(Clearinghouse::Payments::Expiry.sweep!(deps)).to eq([])
     end
 
+    it 'reports a capture the acquirer refuses as capture_failed and leaves the intent capturable' do
+      # The acquirer voided the authorization on its side, so it refuses the capture.
+      acquirer.void(acquirer_reference: intent_row(intent_id)[:acquirer_reference], idempotency_key: 'void_out_of_band')
+      response = capture(intent_id)
+      expect(response.status).to eq(400)
+      expect(JSON.parse(response.body)['error'])
+        .to include('code' => 'capture_failed',
+                    'message' => 'The capture was refused by the card network (authorization_voided).')
+      expect(intent_row(intent_id)).to include(status: 'requires_capture', amount_capturable: 5000)
+      expect(write_counts[:ledger_transactions]).to eq(0)
+    end
+
+    it 'does not expire an intent that was captured after the sweep read it' do
+      capture(intent_id)
+      clock.advance(7 * Clearinghouse::Clock::SECONDS_PER_DAY)
+      expect(Clearinghouse::Payments::Expiry.expire!(deps, intent_id, merchant.id)).to be_nil
+      expect(intent_row(intent_id)).to include(status: 'succeeded', cancellation_reason: nil)
+    end
+
+    it 'refuses an approval for an intent that is no longer waiting on one' do
+      ctx = Clearinghouse::Api::Context.background(deps, merchant)
+      operation = Clearinghouse::Acquirer::Operation.new(
+        id: 'op_late', type: 'authorize', status: 'approved', decline_code: nil, acquirer_reference: 'acq_late',
+        reference: intent_id, amount: 5000, currency: 'usd', idempotency_key: "#{intent_id}:authorize:1",
+        created_at: clock.now
+      )
+      db = ApiSpecHelpers.db
+      expect do
+        db.transaction do
+          Clearinghouse::Payments::Confirm.record_authorization!(
+            db, ctx, intent_id, Clearinghouse::Acquirer::Approved.new(operation: operation)
+          )
+        end
+      end.to raise_error(Clearinghouse::Api::Errors::InvalidRequestError) { |e|
+        expect(e.code).to eq('payment_intent_unexpected_state')
+      }
+      expect(intent_row(intent_id)).to include(status: 'requires_capture')
+      expect(intent_row(intent_id)[:acquirer_reference]).not_to eq('acq_late')
+    end
+
     it 'does not expire an authorization before its time' do
       intent_id
       clock.advance((7 * Clearinghouse::Clock::SECONDS_PER_DAY) - 1)

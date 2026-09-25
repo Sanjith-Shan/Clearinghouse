@@ -141,6 +141,17 @@ RSpec.describe Clearinghouse::Acquirer::Client do
       expect { wrong.lookup('k') }.to raise_error(acquirer::ProtocolError) { |e| expect(e.code).to eq('no_route') }
     end
 
+    it 'raises on a 404 from something that is not the acquirer, keeping that body as the message' do
+      ['<html>Not Found</html>', '["not_found"]'].each do |body|
+        stub = SimServer.new(nil, ->(_env) { [404, {}, [body]] })
+        expect { described_class.new(clock: clock, base_url: stub.url).lookup('k') }
+          .to raise_error(acquirer::ProtocolError) { |e|
+            expect([e.status, e.code, e.message]).to eq([404, nil, "acquirer 404 : #{body}"])
+          }
+        stub.stop
+      end
+    end
+
     it 'is Unavailable, never NotFound, on a 500' do
       stub = SimServer.new(nil, ->(_env) { [500, {}, ['boom']] })
       expect(described_class.new(clock: clock, base_url: stub.url).lookup('k')).to be_a(acquirer::Unavailable)
