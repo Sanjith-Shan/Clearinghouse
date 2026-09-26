@@ -4,7 +4,8 @@
 # Experiment 3: the isolation level shootout.
 #
 #   bin/exp-isolation [--threads 2,8,32] [--trials 5] [--ops 2000]
-#                     [--strategies rc_read_then_write,rc_for_update,serializable_retry,serializable_for_update]
+#                     [--strategies rc_read_then_write,rc_for_update,serializable_retry,serializable_for_update,
+#                                  serializable_turnstile,rc_for_update_turnstile]
 #                     [--db clearinghouse_exp3] [--out results/exp3-isolation]
 #
 # Each (strategy, threads) pair runs --trials trials with different seeds, on a

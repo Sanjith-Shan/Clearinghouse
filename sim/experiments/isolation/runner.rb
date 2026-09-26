@@ -24,6 +24,8 @@ module Experiments
     class Runner
       extend T::Sig
 
+      BALANCE_QUEUE = "balance:#{Operations::MERCHANT}".freeze
+
       sig { params(db: Sequel::Database, strategy: Strategies::Strategy, plan: Plan).void }
       def initialize(db:, strategy:, plan:)
         @db = db
@@ -82,12 +84,16 @@ module Experiments
         case pick(random)
         when :refund
           payment = @mutex.synchronize { @hot }
-          result, attempts = @strategy.run(@db) { |txn| Operations.refund(txn, payment, @plan.refund_amount) }
+          # Queue names as production's: refunds of one payment queue on its intent
+          # (Payments::Flows.intent_queue), payouts on the balance (Payouts::Flows).
+          result, attempts = @strategy.run(@db, queue: "payment_intent:#{payment}") do |txn|
+            Operations.refund(txn, payment, @plan.refund_amount)
+          end
           # Used up: move every thread on to the next payment.
           @mutex.synchronize { @hot = payment + 1 if @hot == payment } if result == :declined
           [result, attempts]
         when :dispute then @strategy.run(@db) { |txn| Operations.dispute(txn, @plan.dispute_amount) }
-        when :payout then @strategy.run(@db) { |txn| Operations.payout(txn) }
+        when :payout then @strategy.run(@db, queue: BALANCE_QUEUE) { |txn| Operations.payout(txn) }
         else @strategy.run(@db) { |txn| Operations.credit(txn, @plan.credit_amount) }
         end
       end

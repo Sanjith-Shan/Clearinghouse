@@ -21,13 +21,13 @@ RSpec.describe 'Experiment 3 isolation strategies' do
 
   # Runs op1 on actors[0] and op2 on actors[1] in the order above. Returns both
   # [result, attempts] pairs and the audit.
-  def interleave(strategy, op1, op2)
+  def interleave(strategy, op1, op2, queue: nil)
     pids = actors.map { |db| db.get(Sequel.function(:pg_backend_pid)) }
     reached = Queue.new
     gates = [Queue.new, Queue.new]
     start = lambda do |i, op|
       Thread.new do
-        strategy.run(actors[i], pause: lambda {
+        strategy.run(actors[i], queue: queue, pause: lambda {
           reached << i
           gates[i].pop
         }, &op)
@@ -95,6 +95,17 @@ RSpec.describe 'Experiment 3 isolation strategies' do
     end
   end
 
+  describe 'two refunds of the whole payment behind the turnstile' do
+    let(:turnstiled) { Experiments::Isolation::Strategies.named('serializable_turnstile') }
+
+    it 'makes the second wait on the advisory lock before BEGIN, so SERIALIZABLE never aborts it' do
+      results, audit = interleave(turnstiled, refund, refund, queue: 'payment_intent:1')
+
+      expect(results).to eq([[:applied, 1], [:declined, 1]])
+      expect(audit.values).to all(eq(0))
+    end
+  end
+
   describe 'a payout racing a dispute' do
     it 'pays out money the dispute took under read-then-write' do
       results, audit = interleave(Experiments::Isolation::Strategies::ReadThenWrite.new, payout, dispute)
@@ -134,7 +145,7 @@ RSpec.describe 'Experiment 3 isolation strategies' do
       results.each_value { |r| expect(r.fetch('completed') + r.fetch('exhausted')).to eq(120) }
       expect(results.fetch('rc_read_then_write').fetch('retries')).to eq(0)
       expect(results.fetch('rc_for_update').fetch('anomalies').values).to all(eq(0))
-      %w[serializable_retry serializable_for_update].each do |name|
+      %w[serializable_retry serializable_for_update serializable_turnstile rc_for_update_turnstile].each do |name|
         expect(results.fetch(name).fetch('anomalies').values).to all(eq(0))
       end
       row = Experiments::Isolation.aggregate([results.fetch('rc_for_update')])
