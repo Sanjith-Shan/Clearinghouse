@@ -108,13 +108,16 @@ module Experiments
       end
     end
 
-    # The three strategies. `run` yields a Tx and returns the operation's result
+    # The strategies. `run` yields a Tx and returns the operation's result
     # and how many attempts it took.
     module Strategies
       extend T::Sig
 
       Block = T.type_alias { T.proc.params(txn: Tx).returns(Symbol) }
       Pause = T.type_alias { T.nilable(T.proc.void) }
+      # The hot object an operation writes, named the way production names its
+      # Turnstile queues. Only the turnstile strategies use it.
+      QueueName = T.type_alias { T.nilable(String) }
 
       # Raised when SERIALIZABLE gives up on an operation.
       class RetriesExhausted < StandardError
@@ -137,8 +140,8 @@ module Experiments
         sig { returns(String) }
         def name = 'rc_read_then_write'
 
-        sig { params(db: Sequel::Database, pause: Pause, blk: Block).returns([Symbol, Integer]) }
-        def run(db, pause: nil, &blk)
+        sig { params(db: Sequel::Database, pause: Pause, queue: QueueName, blk: Block).returns([Symbol, Integer]) }
+        def run(db, pause: nil, queue: nil, &blk) # rubocop:disable Lint/UnusedMethodArgument
           [db.transaction(isolation: :committed) { yield Tx.new(db, lock: false, pause: pause) }, 1]
         end
       end
@@ -151,8 +154,8 @@ module Experiments
         sig { returns(String) }
         def name = 'rc_for_update'
 
-        sig { params(db: Sequel::Database, pause: Pause, blk: Block).returns([Symbol, Integer]) }
-        def run(db, pause: nil, &blk)
+        sig { params(db: Sequel::Database, pause: Pause, queue: QueueName, blk: Block).returns([Symbol, Integer]) }
+        def run(db, pause: nil, queue: nil, &blk) # rubocop:disable Lint/UnusedMethodArgument
           [db.transaction(isolation: :committed) { yield Tx.new(db, lock: true, pause: pause) }, 1]
         end
       end
@@ -183,8 +186,8 @@ module Experiments
         sig { returns(String) }
         def name = @lock ? 'serializable_for_update' : 'serializable_retry'
 
-        sig { params(db: Sequel::Database, pause: Pause, blk: Block).returns([Symbol, Integer]) }
-        def run(db, pause: nil, &blk)
+        sig { params(db: Sequel::Database, pause: Pause, queue: QueueName, blk: Block).returns([Symbol, Integer]) }
+        def run(db, pause: nil, queue: nil, &blk) # rubocop:disable Lint/UnusedMethodArgument
           attempts = 0
           begin
             attempts += 1
@@ -200,11 +203,41 @@ module Experiments
         end
       end
 
-      ALL = T.let([ReadThenWrite.new, ForUpdate.new, SerializableRetry.new,
-                   SerializableRetry.new(lock: true)].freeze,
-                  T::Array[T.any(ReadThenWrite, ForUpdate, SerializableRetry)])
+      # Another strategy with production's turnstile in front of it: when the
+      # operation names a queue, a session advisory lock on it is taken before
+      # BEGIN and released after COMMIT, by the real Idempotency::Turnstile, so
+      # operations on one hot object start one after another. The inner strategy's
+      # retry loop runs inside the turnstile, as Runner#commit wraps
+      # commit_serializable in production. An operation with no queue (a dispute,
+      # a credit: production runs those outside the idempotency framework, with
+      # no queue_on) goes straight to the inner strategy.
+      class Turnstiled
+        extend T::Sig
 
-      Strategy = T.type_alias { T.any(ReadThenWrite, ForUpdate, SerializableRetry) }
+        sig { returns(String) }
+        attr_reader :name
+
+        sig { params(name: String, inner: T.any(ForUpdate, SerializableRetry)).void }
+        def initialize(name, inner)
+          @name = name
+          @inner = inner
+        end
+
+        sig { params(db: Sequel::Database, pause: Pause, queue: QueueName, blk: Block).returns([Symbol, Integer]) }
+        def run(db, pause: nil, queue: nil, &blk)
+          return @inner.run(db, pause: pause, &blk) unless queue
+
+          Clearinghouse::Idempotency::Turnstile.through(db, queue) { @inner.run(db, pause: pause, &blk) }
+        end
+      end
+
+      ALL = T.let([ReadThenWrite.new, ForUpdate.new, SerializableRetry.new,
+                   SerializableRetry.new(lock: true),
+                   Turnstiled.new('serializable_turnstile', SerializableRetry.new(lock: true)),
+                   Turnstiled.new('rc_for_update_turnstile', ForUpdate.new)].freeze,
+                  T::Array[T.any(ReadThenWrite, ForUpdate, SerializableRetry, Turnstiled)])
+
+      Strategy = T.type_alias { T.any(ReadThenWrite, ForUpdate, SerializableRetry, Turnstiled) }
 
       sig { params(name: String).returns(Strategy) }
       def self.named(name)
