@@ -316,4 +316,6 @@ is still about 2x slower than `rc_for_update` at both contention levels measured
 60 to 87 times per 100 operations, and the multi-row protection it pays for guards no money
 check in the current code. By the rule this section set out, the decision should flip to READ
 COMMITTED with `FOR UPDATE` on the rows each check reads, with SERIALIZABLE kept for any future
-phase whose check really spans rows. I have not made that change; it is the coordinator's call.
+phase whose check really spans rows. The code still ships SERIALIZABLE today. Making the switch
+is the next change, and it should be made with the full `--threads 2,8,32 --trials 5` sweep behind
+it, since the turnstile numbers above are from two trials each.
