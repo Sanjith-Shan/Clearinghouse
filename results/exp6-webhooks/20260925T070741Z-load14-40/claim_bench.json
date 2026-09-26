@@ -1,0 +1,1 @@
+{"round_trip_ms":1.7,"results":[{"queue":"fifo","threads":32,"deliveries":1500,"claimed":1500,"empty_claims":68,"seconds":3.3,"per_second":454},{"queue":"isolated","threads":32,"deliveries":1500,"claimed":1500,"empty_claims":406,"seconds":3.1,"per_second":484}]}

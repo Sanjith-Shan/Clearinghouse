@@ -226,7 +226,18 @@ Read from RiskGate's `internal/service` (assess.go, idempotency.go, snapshot.go)
   as a breaker failure.
 - `RiskGate-Deadline-Ms` is informational there. RiskGate finishes the work and counts the miss.
 
-## Measured: experiment 9 at the client level
+## Measured: experiment 9 against the real RiskGate
+
+Measured by RiskGate's run of `bin/exp-risk-failure` against the real service
+(`~/Documents/RiskGate/results/exp9/`, summarised with its caveat in
+`results/exp9-risk-failure/README.md`). 200 calls a second, 10 s outage. Kill: 3,240 of 6,000
+unchecked, first checked payment 2.06 s after the restart, which is the cool-down tail
+described below. Freeze: 2,063 of 6,000 unchecked, first checked 0.32 s after the thaw, and
+only 16 calls paid the full deadline before the breaker opened. Client max latency was 57.3 and
+59.0 ms against the 50 ms deadline. In kill mode the breaker also tripped once in each
+healthy phase, which is not explained yet and not cited.
+
+## Earlier: experiment 9 at the client level (loaded machine)
 
 `results/exp9-risk-failure/README.md`. At 100 steps a second with RiskGate killed or frozen
 for 10 s, every payment in the outage went through unchecked, as designed. After a kill,

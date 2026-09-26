@@ -146,6 +146,32 @@ retry, from any of the eight clients, resumes there, asks `GET
 /operations/pi_X:authorize:1`, gets the approval, and records it. The attempt number never
 moves, so no second authorization exists. Every later request replays the stored bytes.
 
+## Results (full)
+
+1,000 intents × K = 16, drop rate 0.1, seed 1, run on 2026-09-24 at commit `2860114`: Apple M3
+Pro, 12 cores, 18 GB, PostgreSQL 16.15 in Docker, Puma 16 threads, DB pool 16. The machine
+was running other experiments at the same time (1-minute load 49 before and 19 after the fail
+run, 31 and 35 around the hold run). The counts come from the acquirer's books and the
+ledger, so load moves only the wall time. Directories under `results/exp1-retry-storm/`:
+`20260924T233722Z-full` (fail) and `20260925T020044Z-full` (hold).
+
+| baselines on a lost answer | impl | HTTP attempts | double charges | extra charges | charged, not in ledger | stuck processing | ledger captures per intent | identical bodies | truthful answers | ledger invariants |
+|---|---|---:|---:|---:|---:|---:|---|---:|---:|---|
+| fail | none | 16117 | 95 | 103 | 108 | 14 | 0: 14, 1: 986 | 0.014 | 0.0616 | hold |
+| fail | naive | 16104 | 35 | 35 | 101 | 13 | 0: 69, 1: 931 | 0.069 | 0.0582 | hold |
+| fail | clearinghouse | 40240 | **0** | 0 | **0** | 0 | 1: 1000 | 1.0 | 1.0 | hold |
+| hold | none | 16099 | 0 | 0 | 99 | 99 | 0: 99, 1: 901 | 0.099 | 0.0563 | hold |
+| hold | naive | 16106 | 0 | 0 | 106 | 106 | 0: 106, 1: 894 | 0.106 | 0.0569 | hold |
+| hold | clearinghouse | 33828 | **0** | 0 | **0** | 0 | 1: 1000 | 1.0 | 1.0 | hold |
+
+Clearinghouse charged every one of the 1,000 cards exactly once, in both runs, and all 16,000
+clients got the same true answer. Without idempotency, 95 cards were charged more than once (87 twice and
+8 three times, 103 extra charges). The naive check-then-insert charged 35
+twice, and both baselines left about a hundred charges the ledger never recorded. The naive
+version is not safer, as the smoke runs had already shown: it trades double charges for charges the
+merchant never hears about. Holding the intent removes the double charges and leaves 99 and
+106 cards charged with nothing in the ledger.
+
 ## Results (smoke)
 
 **These are smoke runs:** 20 intents × K = 8 on a shared machine with a load average of 50
@@ -181,7 +207,7 @@ How to read them:
   the world: a double charge the ledger never saw breaks no invariant. That is why the
   experiment counts charges from the acquirer's books.
 
-The full run is for a quiet machine, in one command:
+The full runs, as run above:
 
 ```
 bin/storm --impl all --intents 1000 --concurrency 16 --drop-rate 0.1 --seed 1 --label full

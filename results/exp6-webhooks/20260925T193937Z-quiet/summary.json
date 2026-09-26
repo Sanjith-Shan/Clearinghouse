@@ -1,0 +1,503 @@
+{
+  "command": "bin/exp-webhooks --runs fifo,isolated,isolated-kills,isolated-cap4 --out results/exp6-webhooks/20260925T193937Z-quiet",
+  "machine": {
+    "cpu": "Apple M3 Pro",
+    "cores": 12,
+    "memory_gb": 18,
+    "os": "Darwin 25.5.0",
+    "ruby": "3.3.12",
+    "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "postgres_in": "Docker (docker compose, db service)"
+  },
+  "settings": {
+    "database": "clearinghouse_exp_webhooks",
+    "endpoints": 100,
+    "merchants": 25,
+    "error_endpoints": 8,
+    "hang_endpoints": 8,
+    "flapping_endpoints": 1,
+    "rate": 25.0,
+    "duration": 60.0,
+    "processes": 4,
+    "threads": 8,
+    "max_in_flight": 2,
+    "breaker_threshold": 5,
+    "breaker_cooldown": 30.0,
+    "connect_timeout": 2.0,
+    "read_timeout": 5.0,
+    "total_timeout": 10.0,
+    "lease": 15.0,
+    "max_drain": 600.0,
+    "kill_every": [
+      2.0,
+      6.0
+    ],
+    "seed": 6
+  },
+  "runs": [
+    {
+      "healthy_pairs_expected": 5021,
+      "healthy_pairs_received": 5021,
+      "missing": 0,
+      "ttd_s": {
+        "p50": 41.413,
+        "p90": 119.715,
+        "p99": 139.138,
+        "max": 140.158,
+        "mean": 49.744
+      },
+      "ttd_by_window_s": [
+        {
+          "from_s": 0,
+          "pairs": 831,
+          "p50": 2.08,
+          "p90": 4.888,
+          "p99": 4.993,
+          "max": 5.016,
+          "mean": 2.415
+        },
+        {
+          "from_s": 10,
+          "pairs": 817,
+          "p50": 8.298,
+          "p90": 12.439,
+          "p99": 13.249,
+          "max": 13.296,
+          "mean": 8.532
+        },
+        {
+          "from_s": 20,
+          "pairs": 833,
+          "p50": 18.834,
+          "p90": 38.973,
+          "p99": 40.667,
+          "max": 40.777,
+          "mean": 22.706
+        },
+        {
+          "from_s": 30,
+          "pairs": 851,
+          "p50": 54.629,
+          "p90": 65.862,
+          "p99": 68.112,
+          "max": 68.156,
+          "mean": 54.109
+        },
+        {
+          "from_s": 40,
+          "pairs": 854,
+          "p50": 82.965,
+          "p90": 100.82,
+          "p99": 105.121,
+          "max": 105.149,
+          "mean": 84.385
+        },
+        {
+          "from_s": 50,
+          "pairs": 835,
+          "p50": 125.615,
+          "p90": 139.085,
+          "p99": 139.906,
+          "max": 140.158,
+          "mean": 124.267
+        }
+      ],
+      "healthy_receipts": 5021,
+      "duplicates": 0,
+      "duplicate_rate": 0.0,
+      "events": 1500,
+      "signature_failures": 0,
+      "requests_by_kind": {
+        "error": 1294,
+        "flapping": 100,
+        "hang": 1249,
+        "healthy": 5021
+      },
+      "deliveries_by_kind": {
+        "error": {
+          "pending": 463
+        },
+        "flapping": {
+          "pending": 11,
+          "succeeded": 47
+        },
+        "hang": {
+          "pending": 458
+        },
+        "healthy": {
+          "succeeded": 5021
+        }
+      },
+      "breakers_by_kind": {
+        "error": {
+          "closed": 8
+        },
+        "flapping": {
+          "closed": 1
+        },
+        "hang": {
+          "closed": 8
+        },
+        "healthy": {
+          "closed": 83
+        }
+      },
+      "run": "fifo",
+      "mode": "fifo",
+      "kills": false,
+      "max_in_flight": null,
+      "generation_s": 60.0,
+      "drain_s": 140.5,
+      "drained": true,
+      "worker_kills": 0
+    },
+    {
+      "healthy_pairs_expected": 5021,
+      "healthy_pairs_received": 5021,
+      "missing": 0,
+      "ttd_s": {
+        "p50": 0.073,
+        "p90": 0.103,
+        "p99": 0.128,
+        "max": 0.426,
+        "mean": 0.075
+      },
+      "ttd_by_window_s": [
+        {
+          "from_s": 0,
+          "pairs": 831,
+          "p50": 0.079,
+          "p90": 0.108,
+          "p99": 0.126,
+          "max": 0.149,
+          "mean": 0.08
+        },
+        {
+          "from_s": 10,
+          "pairs": 817,
+          "p50": 0.077,
+          "p90": 0.109,
+          "p99": 0.162,
+          "max": 0.426,
+          "mean": 0.081
+        },
+        {
+          "from_s": 20,
+          "pairs": 831,
+          "p50": 0.07,
+          "p90": 0.1,
+          "p99": 0.153,
+          "max": 0.328,
+          "mean": 0.074
+        },
+        {
+          "from_s": 30,
+          "pairs": 849,
+          "p50": 0.068,
+          "p90": 0.097,
+          "p99": 0.113,
+          "max": 0.131,
+          "mean": 0.069
+        },
+        {
+          "from_s": 40,
+          "pairs": 854,
+          "p50": 0.072,
+          "p90": 0.102,
+          "p99": 0.127,
+          "max": 0.157,
+          "mean": 0.073
+        },
+        {
+          "from_s": 50,
+          "pairs": 839,
+          "p50": 0.07,
+          "p90": 0.099,
+          "p99": 0.113,
+          "max": 0.122,
+          "mean": 0.071
+        }
+      ],
+      "healthy_receipts": 5021,
+      "duplicates": 0,
+      "duplicate_rate": 0.0,
+      "events": 1500,
+      "signature_failures": 0,
+      "requests_by_kind": {
+        "error": 49,
+        "flapping": 54,
+        "hang": 56,
+        "healthy": 5021
+      },
+      "deliveries_by_kind": {
+        "error": {
+          "pending": 463
+        },
+        "flapping": {
+          "pending": 14,
+          "succeeded": 44
+        },
+        "hang": {
+          "pending": 458
+        },
+        "healthy": {
+          "succeeded": 5021
+        }
+      },
+      "breakers_by_kind": {
+        "error": {
+          "open": 8
+        },
+        "flapping": {
+          "open": 1
+        },
+        "hang": {
+          "open": 8
+        },
+        "healthy": {
+          "closed": 83
+        }
+      },
+      "run": "isolated",
+      "mode": "isolated",
+      "kills": false,
+      "max_in_flight": 2,
+      "generation_s": 60.0,
+      "drain_s": 0.5,
+      "drained": true,
+      "worker_kills": 0
+    },
+    {
+      "healthy_pairs_expected": 5021,
+      "healthy_pairs_received": 5021,
+      "missing": 0,
+      "ttd_s": {
+        "p50": 0.074,
+        "p90": 0.102,
+        "p99": 0.119,
+        "max": 15.123,
+        "mean": 0.101
+      },
+      "ttd_by_window_s": [
+        {
+          "from_s": 0,
+          "pairs": 831,
+          "p50": 0.077,
+          "p90": 0.11,
+          "p99": 0.128,
+          "max": 15.067,
+          "mean": 0.115
+        },
+        {
+          "from_s": 10,
+          "pairs": 817,
+          "p50": 0.074,
+          "p90": 0.102,
+          "p99": 0.118,
+          "max": 15.084,
+          "mean": 0.093
+        },
+        {
+          "from_s": 20,
+          "pairs": 831,
+          "p50": 0.072,
+          "p90": 0.098,
+          "p99": 0.115,
+          "max": 0.136,
+          "mean": 0.072
+        },
+        {
+          "from_s": 30,
+          "pairs": 849,
+          "p50": 0.074,
+          "p90": 0.103,
+          "p99": 0.12,
+          "max": 15.096,
+          "mean": 0.146
+        },
+        {
+          "from_s": 40,
+          "pairs": 854,
+          "p50": 0.071,
+          "p90": 0.098,
+          "p99": 0.112,
+          "max": 15.057,
+          "mean": 0.088
+        },
+        {
+          "from_s": 50,
+          "pairs": 839,
+          "p50": 0.074,
+          "p90": 0.101,
+          "p99": 0.116,
+          "max": 15.123,
+          "mean": 0.091
+        }
+      ],
+      "healthy_receipts": 5025,
+      "duplicates": 4,
+      "duplicate_rate": 0.000797,
+      "events": 1500,
+      "signature_failures": 0,
+      "requests_by_kind": {
+        "error": 48,
+        "flapping": 53,
+        "hang": 64,
+        "healthy": 5025
+      },
+      "deliveries_by_kind": {
+        "error": {
+          "pending": 463
+        },
+        "flapping": {
+          "pending": 15,
+          "succeeded": 43
+        },
+        "hang": {
+          "pending": 458
+        },
+        "healthy": {
+          "succeeded": 5021
+        }
+      },
+      "breakers_by_kind": {
+        "error": {
+          "open": 8
+        },
+        "flapping": {
+          "open": 1
+        },
+        "hang": {
+          "open": 8
+        },
+        "healthy": {
+          "closed": 83
+        }
+      },
+      "run": "isolated-kills",
+      "mode": "isolated",
+      "kills": true,
+      "max_in_flight": 2,
+      "generation_s": 60.0,
+      "drain_s": 13.4,
+      "drained": true,
+      "worker_kills": 15
+    },
+    {
+      "healthy_pairs_expected": 5021,
+      "healthy_pairs_received": 5021,
+      "missing": 0,
+      "ttd_s": {
+        "p50": 0.077,
+        "p90": 0.232,
+        "p99": 1.115,
+        "max": 1.275,
+        "mean": 0.146
+      },
+      "ttd_by_window_s": [
+        {
+          "from_s": 0,
+          "pairs": 831,
+          "p50": 0.206,
+          "p90": 1.038,
+          "p99": 1.215,
+          "max": 1.275,
+          "mean": 0.469
+        },
+        {
+          "from_s": 10,
+          "pairs": 817,
+          "p50": 0.076,
+          "p90": 0.126,
+          "p99": 0.765,
+          "max": 0.856,
+          "mean": 0.111
+        },
+        {
+          "from_s": 20,
+          "pairs": 831,
+          "p50": 0.072,
+          "p90": 0.104,
+          "p99": 0.321,
+          "max": 0.392,
+          "mean": 0.077
+        },
+        {
+          "from_s": 30,
+          "pairs": 849,
+          "p50": 0.072,
+          "p90": 0.1,
+          "p99": 0.111,
+          "max": 0.13,
+          "mean": 0.072
+        },
+        {
+          "from_s": 40,
+          "pairs": 854,
+          "p50": 0.072,
+          "p90": 0.102,
+          "p99": 0.236,
+          "max": 0.286,
+          "mean": 0.075
+        },
+        {
+          "from_s": 50,
+          "pairs": 839,
+          "p50": 0.074,
+          "p90": 0.105,
+          "p99": 0.194,
+          "max": 0.253,
+          "mean": 0.077
+        }
+      ],
+      "healthy_receipts": 5021,
+      "duplicates": 0,
+      "duplicate_rate": 0.0,
+      "events": 1500,
+      "signature_failures": 0,
+      "requests_by_kind": {
+        "error": 48,
+        "flapping": 55,
+        "hang": 72,
+        "healthy": 5021
+      },
+      "deliveries_by_kind": {
+        "error": {
+          "pending": 463
+        },
+        "flapping": {
+          "pending": 13,
+          "succeeded": 45
+        },
+        "hang": {
+          "pending": 458
+        },
+        "healthy": {
+          "succeeded": 5021
+        }
+      },
+      "breakers_by_kind": {
+        "error": {
+          "open": 8
+        },
+        "flapping": {
+          "open": 1
+        },
+        "hang": {
+          "open": 8
+        },
+        "healthy": {
+          "closed": 83
+        }
+      },
+      "run": "isolated-cap4",
+      "mode": "isolated",
+      "kills": false,
+      "max_in_flight": 4,
+      "generation_s": 60.0,
+      "drain_s": 0.5,
+      "drained": true,
+      "worker_kills": 0
+    }
+  ]
+}

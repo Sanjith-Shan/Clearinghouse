@@ -1,5 +1,36 @@
 # Experiment 9, client level: RiskGate fails mid-run
 
+## The published numbers: RiskGate's run against the real service
+
+Measured by RiskGate's run of `bin/exp-risk-failure` against the real service, on
+2026-09-24 (`~/Documents/RiskGate/results/exp9/`: `riskgate-kill.json`,
+`riskgate-freeze.json`, `restart.json`, `provenance.json`, `README.md`; the files are in the
+RiskGate repository, not this one). RiskGate at commit `016337a` with the IEEE-CIS model and
+`rules/default.rules`, started from the experiment 8 warm snapshot, requests from the
+test-month replay. 200 calls a second, phases of 10 s healthy, 10 s down, 10 s healthy.
+Deadline 50 ms, breaker opens after 5 consecutive failures, 2 s cool-down. Load average 6
+to 8 (another project's search jobs).
+
+| | kill | freeze |
+|---|---:|---:|
+| Calls | 6,000 | 6,000 |
+| Went through unchecked (failed open) | 3,240 | 2,063 |
+| First checked payment after restart or thaw | 2.06 s after restart | 0.32 s after thaw |
+| Client p99 over the whole run | 7.4 ms | 5.5 ms |
+| Client max latency | 57.3 ms | 59.0 ms |
+
+- Restart to ready from the 4.16 MB snapshot: 383 ms (`restart.json`).
+- Freeze: only 16 calls paid the full deadline before the breaker opened. There were 0
+  unchecked in the healthy phases.
+- **Caveat, which goes with these numbers wherever they are cited:** in kill mode the
+  breaker also tripped once in each healthy phase, about 6 to 7 s after each RiskGate
+  process started, with about 415 unchecked each time. It reproduced in two runs. It is not
+  the snapshots and not GC. Load was 6 to 8 from another project, so contention is the
+  leading explanation, but that is unconfirmed. **Kill-mode healthy-phase numbers are not
+  cited.** The 3,240 kill-mode total includes those false trips.
+
+## Earlier runs from this repository (loaded machine, not cited)
+
 A steady 100 risk steps per second go through `Risk::Step` / `Risk::Client` (deadline 50 ms,
 breaker at its defaults: 5 consecutive failures or 50% over 10 s, 2 s cool-down). The run is
 10 s healthy, then 10 s with RiskGate down, then 10 s after it comes back. There are two

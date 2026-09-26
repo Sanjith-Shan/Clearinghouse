@@ -261,3 +261,15 @@ month in `spec/experiments/reconciliation_month_spec.rb` until it failed:
 Ids are random (`SecureRandom`), so the acquirer references differ between runs and the
 seeded injection picks different lines each time: two runs with one seed have the same
 traffic plan and the same injection draws, but not the same lines.
+
+**Result** (the full month, seed 1, commit `2860114`, 2026-09-24; details and the
+explainability table are in `results/exp5-reconciliation/README.md`, raw
+`results/exp5-reconciliation/seed-1-full.json`). 1,500 payments over 30 days, 44 settlement
+files, 1,787 lines. All **60 of 60** injected discrepancies were detected as the right type
+(6 missing, 10 duplicate, 10 amount mismatch, 10 fee mismatch, 9 late, 15 unknown
+payment), with **0 false exceptions**. None of the 10 lines the acquirer carried over on
+its own was called late. Before resolving, the share of volume in explained flows was
+96.2% to 100% depending on flow type and currency. Resolving the 51 open exceptions (26
+write-offs, 25 notes) brought every flow type to 100%. The ledger had no invariant
+violations or balance drifts before or after. The machine was busy with other experiments
+(load 109 to 115), which changes only the wall time (477 s).

@@ -282,7 +282,31 @@ every operation outcome and every money event, so a run that never reached a pat
 visible), and on a failure `<run>-repro.rb`. In CI, `spec/model/ledger_sut_spec.rb` runs 12
 sequences of up to 40 steps with a fixed seed, plus the planted-bug checks.
 
-## Results so far
+## Results
+
+The final runs, on 2026-09-24 at commit `2860114`: Apple M3 Pro, 12 cores, 18 GB, Postgres
+16.15 in Docker, Ruby 3.3.12, database `clearinghouse_test_model`. Other experiments were
+running on the machine, so the elapsed times are loose. The pass/fail results don't depend on
+time.
+
+| run | sequences | operations | result | elapsed |
+|---|---:|---:|---|---:|
+| `--sut ledger --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed after every step | 496 s |
+| `--sut api --sequences 300 --max-length 80 --seed 1` | 300 | 17,826 | every check passed after every step | 1,662 s |
+| `--sut api --sequences 300 --max-length 80 --seed 2` | 300 | 18,091 | every check passed after every step | 555 s |
+
+Files: `results/exp4-model/{ledger-seed1,api-seed1,api-seed2}-n300-l80.{md,json}` (`sequences`,
+`operations`, `passed`, `by_outcome`, `money_events`). The API runs went through every wired
+operation. Seed 1 posted 1,631 captures, 1,254 refunds (561 settled), 97 disputes opened (21
+won by the merchant, 23 debited), 180 payouts (82 paid, 20 failed) and 728 settlements. Seed 2
+posted 1,612 captures, 113 disputes and 175 payouts. The only real bug the model has found is
+the settlement one under Findings. It was fixed before these runs.
+
+A first attempt at the two API runs failed at the first `advance_clock`, because
+`clearinghouse_test_model` was missing the latest migrations (`acquirer_cursors`). That was the
+test database, not the code. After `bin/migrate` they ran as above.
+
+## Earlier runs
 
 Measured on an Apple M3 Pro, Postgres 16.15 in Docker, Ruby 3.3.12, with other agents'
 test suites running on the same machine (so the times are loose). The run files in
@@ -302,8 +326,8 @@ settlement and the availability sweep. The 40-sequence run with everything wired
 payouts (10 paid and 1 failed by the time the sequences ended), 8 disputes opened and 4
 resolved, 86 settlement postings and 82 refund settlements. Only `pm_card_timeout` is still
 left out. Each run's `.md` lists how many times each operation reached each outcome. The
-larger runs for a quiet machine are `bin/model-test --sut api --sequences 300 --max-length 80
---seed 1` and the same with `--seed 2`.
+final ledger run above replaced the failing run's `ledger-seed1-n300-l80.{md,json}`. The
+failing run's shrunk replay script is kept as `ledger-seed1-n300-l80-repro.rb`.
 
 ## Planted-bug demo (deliberate, not a real bug)
 

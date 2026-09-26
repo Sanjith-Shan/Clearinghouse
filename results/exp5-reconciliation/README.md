@@ -3,13 +3,64 @@
 Design and scoring rules: `docs/design/reconciliation.md`, "Experiment 5". Code:
 `bin/exp-reconciliation`, `lib/clearinghouse/experiments/`.
 
+## Full run (seed 1): the published result
+
+- Command: `CLEARINGHOUSE_ENV=experiment CLEARINGHOUSE_DB=clearinghouse_test_disputes bin/exp-reconciliation --reset`
+- Commit: `2860114`. Machine: Apple M3 Pro, 12 cores, 18 GB. PostgreSQL 16.15 in Docker
+  (container `clearinghouse-db-1`), database pool 8, Ruby 3.3.12.
+- Load average (1 minute) was 115 at the start and 109 at the end, because other experiments
+  were running at the same time. That changes only the wall time (477.3 s). Every number below
+  is a count from the ledger, the reconciler and the simulator's manifests.
+- Workload: 1,500 payments planned over 30 days plus 14 quiet days, 3 merchants (USD, JPY, KWD).
+  1,479 payment intents succeeded (31 declined; 10 of the successes went through the lagging API
+  instance), 212 refunds, 53 disputes (24 won, 29 lost; 8 accepted by the merchant first),
+  90 payouts sent (89 paid, 1 failed). 44 settlement files, 1,787 lines.
+- Raw output: `seed-1-full.json` (`score`, `exceptions_by_reason`,
+  `explainability_before_resolving`, `explainability_after_resolving`).
+
+| discrepancy | injected | detected |
+|---|---:|---:|
+| missing | 6 | 6 |
+| duplicate | 10 | 10 |
+| amount_mismatch | 10 | 10 |
+| fee_mismatch | 10 | 10 |
+| late | 9 | 9 |
+| unknown_payment | 15 | 15 |
+| **total** | **60** | **60** |
+
+- False exceptions: **0**. Detected as another type: 0. Undetected: 0. Not observable: 0.
+  Missing and then arrived: 0.
+- Lines the acquirer carried over on its own (not injected): 10. Called late: 0.
+- Ledger invariant violations: 0 before and after resolving. Balance drifts: 0.
+
+Explainability (share of volume in flows whose clearing accounts are back at zero) at the
+end of the tail:
+
+| flow type | currency | flows | before resolving | after resolving |
+|---|---|---:|---:|---:|
+| dispute | jpy | 18 | 96.41% | 100.00% |
+| dispute | kwd | 15 | 100.00% | 100.00% |
+| dispute | usd | 20 | 100.00% | 100.00% |
+| payment | jpy | 520 | 98.82% | 100.00% |
+| payment | kwd | 494 | 99.05% | 100.00% |
+| payment | usd | 465 | 98.40% | 100.00% |
+| payout | jpy | 30 | 100.00% | 100.00% |
+| payout | kwd | 30 | 100.00% | 100.00% |
+| payout | usd | 30 | 100.00% | 100.00% |
+| refund | jpy | 74 | 96.24% | 100.00% |
+| refund | kwd | 64 | 100.00% | 100.00% |
+| refund | usd | 74 | 98.27% | 100.00% |
+
+Resolving the 51 open exceptions (26 write-offs where money was stuck, 25 closed with a
+note) brings every flow type to 100%.
+
 ## Smoke run (seed 1)
 
 This is a smoke-sized run, not the published month. It was taken while the machine was
 heavily loaded by other work (load average 40 to 50 on 12 cores), which affects the wall
 time and nothing else: every number below is a count from the ledger, the reconciler and
 the simulator's manifests. The full-size run (1,500 payments over 30 days, 60
-discrepancies) is `bin/exp-reconciliation --reset` and is to be taken on a quiet machine.
+discrepancies) is `bin/exp-reconciliation --reset`, above.
 
 - Command: `CLEARINGHOUSE_DB=clearinghouse_test_disputes CLEARINGHOUSE_ENV=experiment bin/exp-reconciliation --reset --smoke`
 - Machine: Apple M3 Pro, 12 cores, 18 GB. PostgreSQL 16.15 in Docker (docker compose,

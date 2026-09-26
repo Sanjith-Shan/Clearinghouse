@@ -1,0 +1,193 @@
+{
+  "label": "full",
+  "command": "bin/exp-replay --replay ~/Documents/RiskGate/data/export_real/test_replay.jsonl --policy model_only --riskgate-url http://127.0.0.1:8092 --webhook-secret whsec_exp8_replay_not_a_secret --label full --db clearinghouse_test_exp3 --reset-db --out results/exp8-replay/20260925T020100Z-full-model_only",
+  "machine": "Apple M3 Pro, 12 cores, 18 GB, Postgres 16 in Docker",
+  "ruby": "ruby 3.3.12 (2026-07-16 revision 0581089df9) [arm64-darwin25]",
+  "started_at": "2026-09-25T02:10:05Z",
+  "finished_at": "2026-09-25T08:08:34Z",
+  "load_average": {
+    "before": [
+      32.87,
+      38.01,
+      31.52
+    ],
+    "after": [
+      6.84,
+      9.04,
+      13.27
+    ]
+  },
+  "replay_file": "~/Documents/RiskGate/data/export_real/test_replay.jsonl",
+  "database": "clearinghouse_test_exp3",
+  "experiment": "exp8-replay",
+  "policy": "model_only",
+  "plan": {
+    "policy": "model_only",
+    "seed": 1,
+    "speed": 0.0,
+    "dispute_after_days": 7,
+    "deadline_ms": 50,
+    "webhooks": true,
+    "webhook_events": [
+      "payment_intent.succeeded",
+      "charge.dispute.created",
+      "charge.dispute.closed"
+    ],
+    "webhook_drain_seconds": 120.0,
+    "api_threads": 4,
+    "webhook_threads": 2
+  },
+  "rows": 92427,
+  "simulated": {
+    "first_created": "2018-05-01T00:00:56Z",
+    "clock_at_end": "2018-06-09T23:58:51Z",
+    "rows_created_at_a_later_time": 0
+  },
+  "replay_wall_seconds": 21425.3,
+  "rows_per_second": 4.3,
+  "money": {
+    "payments": 92427,
+    "fraud_rows": 3213,
+    "outcomes": {
+      "approved": 92019,
+      "review": 0,
+      "risk_unavailable": 24,
+      "unchecked": 0,
+      "blocked": 384,
+      "declined": 0,
+      "error": 0
+    },
+    "approved": {
+      "count": 92043,
+      "volume_cents": 1262637752
+    },
+    "blocked": {
+      "count": 384,
+      "volume_cents": 10022148
+    },
+    "reviews": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "risk_unavailable": {
+      "count": 24,
+      "volume_cents": 238401
+    },
+    "declined_or_error": {
+      "count": 0,
+      "volume_cents": 0
+    },
+    "fraud_caught": {
+      "count": 227,
+      "volume_cents": 5986204
+    },
+    "fraud_through": {
+      "count": 2986,
+      "volume_cents": 42760072
+    },
+    "legit_blocked": {
+      "count": 157,
+      "volume_cents": 4035944
+    },
+    "disputes": {
+      "count": 2986,
+      "volume_cents": 42760072,
+      "on_legit_rows": 0,
+      "on_unknown_payments": 0
+    },
+    "dispute_fee_cents_assumed": 1500,
+    "dispute_losses_cents": 47239072,
+    "net": {
+      "saved_cents": 6326704,
+      "cost_cents": 4035944,
+      "net_cents": 2290760
+    }
+  },
+  "disputes_source": "clearinghouse (GET /v1/disputes)",
+  "disputes_in_simulator": {
+    "count": 2986,
+    "volume_cents": 42760072
+  },
+  "latency": {
+    "confirm_ms": {
+      "n": 92427,
+      "p50": 39.688,
+      "p99": 250.462,
+      "p999": 904.469,
+      "max": 4492959.509
+    },
+    "risk_step_ms": {
+      "n": 92427,
+      "p50": 0.751,
+      "p99": 5.172,
+      "p999": 22.861,
+      "max": 257.491
+    },
+    "risk_share_of_confirm": 0.0065,
+    "retried_confirms": 0
+  },
+  "riskgate": {
+    "kind": "riskgate",
+    "url": "http://127.0.0.1:8092",
+    "ruleset_version": "2",
+    "rules_file": "rules/model_only.rules",
+    "health": {
+      "model": true,
+      "ruleset_version": 2,
+      "status": "ok"
+    },
+    "deadline_ms": 50,
+    "ruleset_versions_seen": {
+      "2": 92019
+    }
+  },
+  "error_codes": {},
+  "holds": {
+    "opened": 0,
+    "open": 0,
+    "amount_cents": 0,
+    "held_cents": 0
+  },
+  "balance": {
+    "object": "balance",
+    "available": [
+      {
+        "amount": -8856643,
+        "currency": "usd"
+      }
+    ],
+    "pending": [
+      {
+        "amount": 0,
+        "currency": "usd"
+      }
+    ],
+    "held": [
+      {
+        "amount": 0,
+        "currency": "usd"
+      }
+    ],
+    "livemode": false
+  },
+  "webhooks": {
+    "registered": true,
+    "workers_ran": true,
+    "events": [
+      "payment_intent.succeeded",
+      "charge.dispute.created",
+      "charge.dispute.closed"
+    ],
+    "drained": true,
+    "deliveries": {
+      "charge.dispute.created": {
+        "succeeded": 2986
+      },
+      "payment_intent.succeeded": {
+        "succeeded": 92043
+      }
+    }
+  },
+  "scheduler_step_errors": {},
+  "ledger_invariant_violations": 0
+}
