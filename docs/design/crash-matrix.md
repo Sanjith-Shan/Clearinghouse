@@ -295,7 +295,31 @@ now reads a missing cursor as `"0"`. The full matrix with these cases has not be
 
 ## Results
 
-Both recovery modes, on a machine shared with other jobs (load average 38 to 57 on 12 cores):
+The final runs, on 2026-09-24 (UTC 2026-09-25) at commit `2860114`. The report records
+`2860114-dirty` because the worktree held uncommitted results and doc edits, not code. Apple M3
+Pro, 12 cores, 18 GB, PostgreSQL 16.15 in Docker, API as Puma threads 1:4 with a database pool
+of 10, and a 1 s lease. The registry has grown since the development runs: `review.approve`,
+`review.reject`, the payout flows and the poller's four notification flows are in it now.
+
+| Run | Mode | Headline | Cases passed | Wall time | 1-min load before / after |
+|---|---|---|---|---|---|
+| `20260925T022011Z-retry` | retry | **crashed at 88 points across 13 flows, recovered at all 88** | 89 of 89 | 272 s | 15.1 / 14.2 |
+| `20260925T022444Z-completer` | completer | **crashed at 88 points across 13 flows, recovered at all 88** | 89 of 89 | 454 s | 14.2 / 30.5 |
+
+The 88 points are the 76 recovery points of the 9 request flows in the registry, plus 12 in
+the 4 background notification flows `bin/poller` runs. The 89th case is the ambiguous-acquirer
+variant (`payment_intent.confirm:authorization_requested+acquirer_drop`). Fields in
+`report.json`: `headline`, `registry_crash_points`, `registry_flows`,
+`background_crash_points`, `passed`, `failed` (0 in both).
+
+An earlier attempt at the retry run was stopped at case 70. From case 64 on, the API did not
+boot within 60 s, because the machine was starved at a load above 100 while other
+experiments ran. It wrote no report and is not counted. The full matrix was rerun as above.
+
+### Development runs
+
+Both recovery modes, on a machine shared with other jobs (load average 38 to 57 on 12 cores),
+before the registry grew:
 
 | Run | Mode | Commit | Headline | Wall time | Per case (min / median / max) |
 |---|---|---|---|---|---|

@@ -133,10 +133,10 @@ through is disputed, so across runs
 `net(policy) = dispute losses(none) - dispute losses(policy) - legitimate revenue blocked(policy)`,
 which checks the three runs against each other.
 
-## The full runs (the coordinator, on a quiet machine)
+## The full runs
 
-Not run yet. Only the smoke below has been. The procedure follows
-`~/Documents/Clearinghouse-wt/_coord/final_runs.md`, agreed with the RiskGate session:
+Run on 2026-09-25. The results are under "Results" below. The procedure, agreed with the
+RiskGate session:
 
 - **Each policy starts from its own copy of a warm snapshot.** RiskGate replays all
   498,113 pre-test payments, in `(TransactionDT, TransactionID)` order, into
@@ -197,13 +197,47 @@ The binary is built once so that `kill` stops RiskGate itself rather than `go ru
 **How long.** The 50-row smoke went at 22.4 rows a second under `none` and 25.7 under
 `model_rules`, on a machine with a load average of about 10. An earlier 200-row smoke at a
 load of 18 to 25 went at 13 to 23 rows a second. At those rates a full policy takes 1 to 2
-hours. A quiet machine should be faster. I
-haven't measured that. The rows go one at a time because RiskGate's velocity features
-depend on order.
+hours. The full runs went at 4.3 to 4.5 rows a second (about 6 hours each), with three
+running concurrently, a missing index slowing the reaper, and a system sleep partway through
+(see Results). The rows go one at a time because RiskGate's velocity features depend on
+order.
 
 **The deadline.** Confirm gives RiskGate 50 ms (`--deadline-ms`). On a loaded machine some
 calls will miss it and go through as `risk_unavailable`. The report counts them, and they
 belong in the write-up: that is the fail-open cost, not noise to rerun away.
+
+## Results
+
+The three policies over all 92,427 payments of the test month, run concurrently on
+2026-09-25, each with its own database, RiskGate process, port and fresh copy of the warm
+snapshot, at Clearinghouse `2860114` and RiskGate `016337a`. `model_sha256`
+`a75d7ac4071e27f8f72bcf91c0fa6f2c8e0ecaf5ba032aad0e9e30df919ce540` was checked before each model run.
+Full tables, the load, the mid-run index fix and the stall are in
+`results/exp8-replay/README.md`.
+
+| | none | model_only | model_rules |
+|---|---:|---:|---:|
+| Blocked | 0 | 384 ($100,221.48) | 384 ($100,221.48) |
+| Fraud caught | 0 | 227 ($59,862.04) | 227 ($59,862.04) |
+| Legitimate revenue blocked | 0 | 157 ($40,359.44) | 157 ($40,359.44) |
+| Disputes | 3,213 ($487,462.76) | 2,986 ($427,600.72) | 2,986 ($427,600.72) |
+| Dispute losses (assumed $15.00 fee) | $535,657.76 | $472,390.72 | $472,390.72 |
+| Review holds | 0 | 0 | 2,496 ($413,409.07 held) |
+| Net against none | $0.00 | +$22,907.60 | +$22,907.60 |
+| Unchecked (deadline missed) | - | 24 | 8 |
+
+The model's block cut 227 of 3,213 fraud payments (7.1%, 12.3% of fraud dollars) and blocked
+157 legitimate ones (0.18% of legitimate payments), for a net of +$22,907.60 on the assumed
+fee. The review rules change no money here, because a review lets the payment through and
+holds the payout. What they add is 2,496 holds on $413,409.07 of merchant funds, of which the
+replay never resolves any. Whether the holds pay for themselves depends on what an analyst
+would decide, which this experiment doesn't model. All ledger invariants held, and the
+disputes seen through the API matched the simulator's count exactly in every run.
+
+The runs were slower than planned, at about 4.4 rows a second. Two things contributed: a
+missing index behind the reaper (fixed mid-run, speed only, logged in `docs/bugs/`) and a
+system sleep in the middle, which also put a roughly 4,492 s stall in every run's confirm
+latency tail. The latency figures are not quotable.
 
 ## Smoke
 

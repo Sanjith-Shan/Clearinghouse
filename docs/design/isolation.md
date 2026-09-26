@@ -4,11 +4,7 @@ Which concurrency control Clearinghouse uses for money-moving transactions, and 
 measurement behind it. The harness is `sim/experiments/isolation/`, the runner is
 `bin/exp-isolation`, and the results land in `results/exp3-isolation/`.
 
-> **Status: the results table below is pending.** The code, the anomaly definitions and the
-> deterministic spec are done. The timed runs have not been published because the machine
-> was shared and heavily loaded when the harness was built (1-minute load average 40 to 65
-> on 12 cores); numbers from that are not worth printing. The final run happens on a quiet
-> machine, and this section gets the table and the throughput cost then.
+> **Status: measured on a quiet machine on 2026-09-25.** Results and the decision are below.
 
 ## The workload
 
@@ -124,50 +120,109 @@ Balance drift is their cost in cents.
 
 ## Results
 
-Pending the quiet-machine run (see the status note at the top). The table will come from
-`bin/exp-isolation --threads 2,8,32 --trials 5 --ops 2000`, with the machine, Postgres
-version, pool size and per-trial load averages in `results/exp3-isolation/results.json`.
-Any trial with a 1-minute load average above 12 is flagged there.
+The published run, on a quiet machine: `bin/exp-isolation --threads 2,8,32 --trials 5 --ops 2000
+--db clearinghouse_exp3`, commit `2860114`, Apple M3 Pro, 12 cores, 18 GB, PostgreSQL 16.15 in
+Docker, Ruby 3.3.12, pool size equal to the thread count. Started 2026-09-25T19:36:16Z with
+nothing else heavy running. The 1-minute load average was 2.4 at the start and rose to 9.5 by
+the end, most of it the experiment's own threads and Postgres. No trial crossed the harness's
+high-load flag (above 12). Five trials (seeds 1 to 5) of 2,000 operations per row. Results:
+`results/exp3-isolation/20260925T193616Z-quiet/results.json` (per strategy and thread count:
+`summary.ops_per_s_mean`, `ops_per_s_min`, `ops_per_s_max`, `p50_ms`, `p99_ms`,
+`retries_per_100_ops`, `exhausted`, `anomalies`; per-trial load under `trials[].load_average`).
 
-Columns: throughput (completed operations per second, including refusals, since a refusal
-is a correct answer), p50 and p99 operation latency including retries, serialization
-retries per 100 operations, operations that ran out of retries, and each anomaly count.
+| strategy | threads | ops/s mean (min-max) | p50 ms | p99 ms | retries /100 ops | ran out of retries | trials with anomalies | over-refunds (cents) | lost updates | payout double-spends | balance drift cents |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| rc_read_then_write | 2 | 1262.7 (1175.7-1297.2) | 1.64 | 2.78 | 0.0 | 0 | 5/5 | 370 (2656000) | 6269 | 2 | 2133500 |
+| rc_for_update | 2 | 1087.8 (1062.8-1102.9) | 1.82 | 3.28 | 0.0 | 0 | 0/5 | 0 | 0 | 0 | 0 |
+| serializable_retry | 2 | 671.2 (401.3-823.7) | 1.54 | 30.28 | 27.43 | 0 | 0/5 | 0 | 0 | 0 | 0 |
+| serializable_for_update | 2 | 603.7 (547.2-656.3) | 1.66 | 48.84 | 18.67 | 16 | 0/5 | 0 | 0 | 0 | 0 |
+| rc_read_then_write | 8 | 1082.1 (993.6-1129.8) | 5.81 | 30.68 | 0.0 | 0 | 5/5 | 116 (5646000) | 13565 | 37 | 5489500 |
+| rc_for_update | 8 | 867.9 (669.1-955.7) | 6.11 | 33.51 | 0.0 | 0 | 0/5 | 0 | 0 | 0 | 0 |
+| serializable_retry | 8 | 667.6 (644.2-699.4) | 4.61 | 64.42 | 139.28 | 3 | 0/5 | 0 | 0 | 0 | 0 |
+| serializable_for_update | 8 | 661.5 (607.0-711.9) | 2.05 | 163.03 | 105.09 | 138 | 0/5 | 0 | 0 | 0 | 0 |
+| rc_read_then_write | 32 | 1136.5 (1091.1-1168.8) | 12.38 | 147.05 | 0.0 | 0 | 5/5 | 59 (6366000) | 15656 | 383 | 14793500 |
+| rc_for_update | 32 | 1390.4 (1323.5-1460.7) | 11.45 | 73.47 | 0.0 | 0 | 0/5 | 0 | 0 | 0 | 0 |
+| serializable_retry | 32 | 253.4 (211.1-342.2) | 115.28 | 360.49 | 421.86 | 143 | 0/5 | 0 | 0 | 0 | 0 |
+| serializable_for_update | 32 | 178.9 (146.3-206.4) | 66.41 | 400.86 | 445.04 | 2790 | 0/5 | 0 | 0 | 0 | 0 |
+
+Throughput counts completed operations (applied plus correctly refused). An operation that
+ran out of its 10 attempts is not completed. "Ran out of retries" is out of 10,000 operations
+per row.
+
+What the numbers say:
+
+- **READ COMMITTED read-then-write is wrong at every thread count.** All 15 of its trials
+  had anomalies: 59 to 370 over-refunds (26,560 to 63,660 dollars refunded beyond what was
+  captured), 6,269 to 15,656 lost updates, up to 383 payouts of money a dispute had already
+  taken, and up to 147,935 dollars of balance drift. It is also the fastest strategy at 2
+  and 8 threads, which is the trap.
+- **All three safe strategies had zero anomalies in all 45 trials.** On this workload
+  `FOR UPDATE` alone is enough, because every check reads a row the code locks.
+- **The cost of SERIALIZABLE is large, and it grows with contention.** Against
+  `rc_for_update`, the shipped combination `serializable_for_update` ran at 0.55x the
+  throughput at 2 threads (604 against 1,088 ops/s), 0.76x at 8 (662 against 868) and 0.13x
+  at 32 (179 against 1,390). At 32 threads it retried 4.5 times per operation, its p99 was
+  401 ms against 73, and **2,790 of 10,000 operations (28%) ran out of retries**. Those are
+  failed requests, not anomalies. `serializable_retry` without the lock did better at 32
+  threads (253 ops/s, 143 ran out) and about the same at 2 and 8.
+- The two earlier runs, on a loaded machine, are kept as checks:
+  `results/exp3-isolation/20260924T231715Z-load10-140/` (load 10 to 140, throughput swinging
+  up to 7x within a row) and `20260925T070042Z-load12-15/` (load 12 to 15, three replays
+  running beside it). They agree on every anomaly count to within noise and on
+  `rc_for_update` being the fastest safe strategy at 8 and 32 threads. Their throughput is
+  lower and noisier and is not quoted.
 
 ## What Clearinghouse ships, and where
 
-What the code on main does today, read from `lib/clearinghouse/payments` and
-`lib/clearinghouse/ledger`:
+What the code does, read from `lib/clearinghouse/idempotency`, `payments`, `payouts` and
+`ledger`:
 
-- **Refunds** (`Refunds.reserve!`) run in a transaction at the default isolation, which is
-  READ COMMITTED (no isolation level is passed to `db.transaction`). They take the intent
-  with `PaymentIntents.lock!`, a `SELECT ... FOR UPDATE`, check the room left, insert the
-  refund `pending` and add its amount to `amount_refunded`. That is `rc_for_update`.
-  The database's `CHECK (amount_refunded <= amount_received)` backs it up. `record!` locks
-  the refund row and the intent the same way.
+- **Every atomic phase of a keyed request runs SERIALIZABLE** with bounded, jittered retry
+  (`Idempotency::Serializable`, from `Idempotency::Runner`). Inside, the payments code locks
+  the intent it checks with `PaymentIntents.lock!` (`SELECT ... FOR UPDATE`), and payout
+  reservations lock the balance rows (`Ledger.lock_balances!`, `Ledger.balance_for_update`).
+  So the shipped combination is `serializable_for_update`.
+- **Requests that contend on one row queue before their transaction begins.** Refunds of one
+  intent pass an advisory-lock turnstile on the intent, and payouts one on the merchant's
+  balance (`Idempotency::Turnstile`, `docs/design/idempotency.md`). The harness
+  above has no turnstile. Its 32 threads all hit the SERIALIZABLE retry loop on one row at
+  once, which is what production avoids. The turnstile was added after 16 concurrent refunds
+  ran requests out of retries
+  (`docs/bugs/payments-concurrent-refunds-exhausted.md`).
 - **Ledger balances** are updated with relative writes (`balance = balance + delta`), with
-  the rows touched in sorted order. A relative write cannot lose another write, whatever the
-  isolation level, so postings are safe without any lock; what needs a lock is a
-  check-then-act on a balance, and `Ledger.balance_for_update` provides that `FOR UPDATE`
-  read for payouts (docs/design/ledger.md).
-- **Payouts and disputes** are not on main yet. The ledger design already says payouts must
-  read the balance with `balance_for_update`, which is `rc_for_update` again.
-- **The idempotency layer** (on the payments branch, not yet on main) runs each atomic phase
-  in a SERIALIZABLE transaction with bounded, jittered retry, as the spec asks. Around the
-  code above, that makes the shipped combination `serializable_for_update`.
+  the rows locked in sorted order. A relative write cannot lose another write at any
+  isolation level. What needs a lock is a check-then-act on a balance.
+- The database's `CHECK (amount_refunded <= amount_received)` is a backstop behind all of it.
 
-- **Refunds of one payment inside the framework** also pass an advisory-lock turnstile on the
-  intent before their SERIALIZABLE phases begin (`Idempotency::Turnstile`,
-  `docs/design/idempotency.md`), because `serializable_for_update` still aborts every waiter
-  once per winner ahead of it, and 16 concurrent refunds ran some requests out of retries.
+## Decision
 
-The decision the numbers will test: row locks where the code knows which row it is
-checking, SERIALIZABLE around the whole phase. `FOR UPDATE` protects exactly the rows you
-remember to lock. SERIALIZABLE also protects the checks that are not a single row: a read of
-a sum, a "no other pending refund exists" query, anything where the conflicting write is an
-insert. It costs retries under contention, and the lock inside keeps those retries short by
-making the loser wait for the winner instead of doing its work twice.
+**What ships: SERIALIZABLE phases with `FOR UPDATE` inside, plus the per-row turnstile. The
+numbers say this costs a lot, and I am keeping it on purpose.**
 
-If the quiet-machine run shows `rc_for_update` anomaly-free and clearly faster on this
-workload, this section will say so plainly, with the cost of SERIALIZABLE in operations
-per second and retries per 100 operations, and state whether that cost is worth the
-protection for predicates this workload does not exercise.
+The measurement does not flatter it. On this workload `rc_for_update` is just as correct (0
+anomalies in 15 trials) and faster at every thread count: 1.8x at 2 threads, 1.3x at 8 and
+7.8x at 32. It never retries, while SERIALIZABLE with the lock ran 28% of operations out of
+retries at 32 threads. If this workload were the whole system, `FOR UPDATE` alone would be
+the right answer, and I'd say so.
+
+It isn't the whole system, and that's why SERIALIZABLE stays:
+
+- Not every check is one row. A sum over rows, or a "no other pending refund exists"
+  query, conflicts with an insert, and a row lock can't cover a row that doesn't exist yet.
+  SERIALIZABLE protects those predicates, including ones someone adds later without
+  thinking about locks. `FOR UPDATE` protects exactly the rows someone remembered to lock.
+  This workload doesn't exercise that difference, so here its value is an argument, not a
+  measurement.
+- The retry cost comes from many transactions fighting over one row inside SERIALIZABLE. The
+  turnstile is meant to remove most of that in production by making same-intent and
+  same-balance requests wait their turn before their transaction starts, so that the
+  SERIALIZABLE retry becomes the rare case, not the 4.5-per-operation case above. I have not measured the turnstiled
+  path under this harness. That is the next measurement to make, and until it's made, the
+  table above is the honest price.
+- A request that runs out of retries fails as a retryable 409, not as an anomaly. Losing
+  throughput is recoverable, and losing money is not.
+
+What would change the decision: a turnstiled version of this harness that still shows
+SERIALIZABLE costing more than about 2x at realistic contention, with no predicate check in
+the codebase that a row lock can't cover. Then the phases would move to READ COMMITTED with
+explicit locks.

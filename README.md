@@ -80,27 +80,25 @@ Every component reads time from a `Clearinghouse::Clock`. Tests and the demo use
 that moves only when told to, so settlement delays, retries over days and key expiry are
 testable without waiting.
 
-Not merged on this branch yet, and built on their own branches: the scheduler that runs every
-clock-driven sweep in order, the wiring of risk-review holds into payouts, and the
-mutation-testing harness.
-
 ## Results
 
-Every number below waits for the final runs on a quiet machine. The development and smoke runs
-so far were made on a machine shared with other build jobs (load averages of 15 to 70 on 12
-cores), and the design notes keep them as checks of the method, not as results.
+Measured on 2026-09-24 and 25 at commit `2860114`: Apple M3 Pro, 12 cores, 18 GB, PostgreSQL
+16.15 in Docker, Ruby 3.3.12. The timing numbers (experiments 3 and 6) come from runs on a
+quiet machine. The counts (double charges, crash points, discrepancies, dollars) don't depend
+on load, and several of those runs shared the machine with other experiments. Each row's load
+average, command and results file are in `docs/numbers-provenance.md`.
 
 | # | Experiment | What it measures | Result |
 |---|---|---|---|
-| 1 | Retry storm | Double charges per implementation (no idempotency, naive check-then-insert, Clearinghouse), counted from the acquirer's own books, with the acquirer dropping responses after committing | pending final run |
-| 2 | Crash at every recovery point | Recovery points crashed at, across every mutating flow, and how many recovered with a balanced ledger and the same client response | pending final run |
-| 3 | Isolation level shootout | Anomalies (over-refunds, lost updates, payout double-spends) and the throughput cost of READ COMMITTED, `FOR UPDATE` and SERIALIZABLE with retry | pending final run |
-| 4 | Model-based testing | Random operation sequences checked against a reference model after every step: sequences and operations run, failures found | pending final run |
-| 5 | Reconciliation | A simulated month with injected settlement discrepancies of six types: detected by type, false exceptions, explainability before and after | pending final run |
-| 6 | Webhooks under hostile endpoints | Healthy endpoints' time to delivery, p50 and p99, FIFO against per-endpoint isolation, and the duplicate rate with workers killed mid-run | pending final run |
-| 7 | Code quality | Branch coverage and mutation score on the ledger, idempotency and money core, with surviving mutants explained | pending final run |
-| 8 | Throughput and end to end | `confirm` latency (p50, p99, p99.9) under open-loop load, and the RiskGate replay through the API | pending final run |
-| 9 | RiskGate fails | Payments that went through unchecked while RiskGate was down, and the confirm step's latency bound during the outage | pending final run |
+| 1 | Retry storm | Double charges per implementation, counted from the acquirer's own books, with 1,000 intents × 16 concurrent clients and 10% of acquirer answers dropped after commit | No idempotency: **95** cards charged more than once. Naive check-then-insert: **35**. Clearinghouse: **0**, with every charge in the ledger and all 16,000 clients given the same true answer. Both baselines left about 100 charges out of the ledger. |
+| 2 | Crash at every recovery point | Recovery points crashed at, across every registered flow, and how many recovered with a balanced ledger and the same client response | Crashed at **88 points across 13 flows, recovered at all 88**, in both recovery modes (client retry, and the completer). 0 failures. |
+| 3 | Isolation level shootout | Anomalies and throughput of READ COMMITTED read-then-write, `FOR UPDATE`, SERIALIZABLE with retry, and SERIALIZABLE with `FOR UPDATE` (what ships), at 2, 8 and 32 threads | Read-then-write had anomalies in **15 of 15** trials (up to 370 over-refunds and 15,656 lost updates). The safe strategies had **0 in 45**. The cost: `FOR UPDATE` alone was **1.8x, 1.3x and 7.8x** faster than the shipped SERIALIZABLE, and at 32 threads 28% of the SERIALIZABLE operations ran out of retries. It ships anyway, for reasons given in `docs/design/isolation.md`. |
+| 4 | Model-based testing | Random operation sequences checked against a reference model after every step | **900 sequences, 53,743 operations** (ledger, and the API with two seeds), every check passing. One real bug found in development, since fixed. |
+| 5 | Reconciliation | A simulated month (1,500 payments) with 60 injected settlement discrepancies of six types | **60 of 60** detected as the right type, **0** false exceptions. Explainability 96.2 to 100% by flow type before resolving, 100% after. |
+| 6 | Webhooks under hostile endpoints | Healthy endpoints' time to delivery, FIFO against per-endpoint isolation, with 17 of 100 endpoints failing or hanging, and with workers `kill -9`ed | FIFO p50 / p99 **41.4 s / 139.1 s**. Isolation **0.073 s / 0.128 s**. With 15 workers killed, 0 deliveries missing and 4 of 5,021 duplicated (**0.08%**). |
+| 7 | Code quality | Branch coverage, and mutation score on the money core, ledger, webhook signatures and SSRF policy, with surviving mutants explained | **Provisional**, from the existing report, not the final run: mutation score **98.00%** (7,162 of 7,308 killed; 99.94% with the 142 survivors documented as equivalent left out), branch coverage 94.16% of tracked code, at commit `7091fc6` on a loaded machine, merged from 4 mutant sessions. A single full mutant run at `2860114` completed, and its report is still to be generated. |
+| 8 | End to end | RiskGate's IEEE-CIS test month (92,427 payments) replayed through `confirm` under no checks, the model alone, and model plus rules | No checks: 3,213 disputes, **$535,657.76** lost including an **assumed** $15 fee each. Model block: 227 fraud and 157 legitimate payments blocked, **net +$22,907.60**. The rules added 2,496 review holds ($413,409.07) and changed no money. The `confirm` latency sweep was not run for these results. |
+| 9 | RiskGate fails | Payments that went through unchecked while RiskGate was down, and the risk step's latency bound. Measured by RiskGate's run of `bin/exp-risk-failure` against the real service | At 200 calls/s with a 10 s outage: kill **3,240** of 6,000 unchecked (first checked payment 2.06 s after restart), freeze **2,063** of 6,000 (0.32 s after thaw). Max client latency **57 to 59 ms** against a 50 ms deadline. Caveat: in kill mode the breaker also tripped once per healthy phase, cause unconfirmed. Those numbers are not cited. |
 
 Where each number comes from, with its command and results path, is in
 `docs/numbers-provenance.md`.
@@ -156,7 +154,7 @@ Tools in `bin/`:
 | `bin/explain <id>` | the ledger trail of one flow, EXPLAINED or OPEN |
 | `bin/migrate`, `bin/ci` | migrations, and everything CI runs |
 | `bin/changelog`, `bin/gen-signature-vectors` | regenerate `docs/api-changelog.md` and `spec/fixtures/signatures.json` |
-| `bin/storm`, `bin/crash-matrix`, `bin/exp-isolation`, `bin/model-test`, `bin/exp-reconciliation`, `bin/exp-webhooks`, `bin/loadtest`, `bin/exp-risk-failure` | experiments 1 to 6, 8 and 9 |
+| `bin/storm`, `bin/crash-matrix`, `bin/exp-isolation`, `bin/model-test`, `bin/exp-reconciliation`, `bin/exp-webhooks`, `bin/quality-report`, `bin/loadtest` and `bin/exp-replay`, `bin/exp-risk-failure` | experiments 1 to 9 |
 
 ## Running the tests
 
@@ -183,12 +181,14 @@ Each writes its results, with the machine, Postgres version and the command, und
 | 4 | `bin/model-test --sut ledger --sequences 300 --max-length 80 --seed 1`, and `--sut api` | `docs/design/model-testing.md` |
 | 5 | `CLEARINGHOUSE_ENV=experiment CLEARINGHOUSE_DB=<an experiment database> bin/exp-reconciliation --reset` | `docs/design/reconciliation.md`, `results/exp5-reconciliation/README.md` |
 | 6 | `bin/exp-webhooks` | `results/exp6-webhooks/README.md`, `docs/design/webhooks.md` |
-| 7 | `bin/mutation`, on branch `pr/quality-mutant-config`, not merged here. The one-command report is still in progress | |
-| 8 | `bin/loadtest sweep -scenario confirm -rates 10,25,50,100,200 -warmup 10s -duration 60s -slo-p99 <objective> -label "<machine>"` against `bin/server` | `docs/design/loadgen.md` |
+| 7 | `bin/quality-report` (the full mutant run, coverage and Sorbet), or `bin/quality-report --reuse-mutant` to report on the last mutant session | `docs/design/quality.md`, `results/exp7-quality/README.md` |
+| 8, replay | `bin/exp-replay --replay <RiskGate's test_replay.jsonl> --policy none\|model_only\|model_rules --label full --reset-db ...`, the full procedure in the design note | `docs/design/replay.md`, `results/exp8-replay/README.md` |
+| 8, latency | `bin/loadtest sweep -scenario confirm -rates 10,25,50,100,200 -warmup 10s -duration 60s -slo-p99 <objective> -label "<machine>"` against `bin/server` | `docs/design/loadgen.md` |
 | 9 | `bin/exp-risk-failure --rate 100 --riskgate-bin <path to RiskGate>` | `docs/design/risk-integration.md`, `results/exp9-risk-failure/README.md` |
 
-The end-to-end half of experiment 8 (RiskGate's test month replayed through `confirm`) is
-not on this branch.
+Experiment 8 has two parts: the `bin/loadtest` latency sweep, and the replay of RiskGate's
+test month through `confirm` with `bin/exp-replay`. Only the replay was run for the results
+above.
 
 ## Design and reading
 

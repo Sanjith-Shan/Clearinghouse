@@ -265,8 +265,11 @@ macOS, other test suites running). Per-endpoint isolation that costs a factor of
 in throughput would lose to FIFO on any workload without a hostile endpoint in it. The
 function runs the identical steps in one round trip. The one behavioural difference:
 an endpoint row that was locked and then skipped (at its cap) stays locked until the
-claim ends, milliseconds later, instead of being released at once. I have not re-run the
-bench since the change; that and the experiment are to be re-run on a quiet machine.
+claim ends, milliseconds later, instead of being released at once. Rerun after the change
+on a quiet machine (round trip 0.2 ms), the bench measured 2,497 claims a second for the
+isolated claim against 2,338 for FIFO, so the gap is gone
+(`results/exp6-webhooks/20260925T193937Z-quiet/claim_bench.json`). Experiment 6's results
+are in `results/exp6-webhooks/README.md`.
 
 *Why a row lock and a lease count, and not the alternatives.* A counter column
 (`in_flight += 1` on claim, `-= 1` on record) is cheaper to read, but a worker killed

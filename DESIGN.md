@@ -193,15 +193,19 @@ charged the card. The intent stays `processing`, the client gets a retryable 503
 asks the acquirer under the same key before doing anything. A new attempt number, and so a
 new acquirer key, is only ever started by a new confirm after a definite decline.
 
-**Isolation: SERIALIZABLE phases with row locks inside, pending experiment 3.** Every atomic
+**Isolation: SERIALIZABLE phases with row locks inside, measured by experiment 3.** Every atomic
 phase runs SERIALIZABLE, and the payments code inside it locks the rows it checks with
 `FOR UPDATE`. Refunds of one payment also queue on an advisory lock before their transaction
 begins, because under SERIALIZABLE a waiter on a row lock still aborts once the winner commits.
 `FOR UPDATE` alone protects exactly the rows the code remembers to lock. SERIALIZABLE also
 protects checks that are not one row, such as a sum or an "is there another pending refund"
-query, at the price of retries under contention. Experiment 3 measures that price, and if
-`FOR UPDATE` alone is anomaly-free and clearly faster on this workload, this section will say
-so and say which ships. ([isolation.md](docs/design/isolation.md))
+query, at the price of retries under contention. Experiment 3 measured that price, and it is
+high. On its workload `FOR UPDATE` alone was just as anomaly-free and 1.8x, 1.3x and 7.8x
+faster at 2, 8 and 32 threads, and at 32 threads the SERIALIZABLE version ran 28% of operations
+out of retries. It still ships, because it covers checks a row lock can't (sums, "no other
+pending refund" queries, anything that conflicts with an insert). The turnstile is what should
+keep its retries rare in production, and that hasn't been measured yet.
+([isolation.md](docs/design/isolation.md), "Decision")
 
 **Webhooks are delivered at least once, and consumers dedupe.** Exactly-once delivery over HTTP
 would need the endpoint's side effect and our record of it to commit together, and they share
@@ -268,42 +272,59 @@ lease, what an attempt is, and the completer and reaper.
 ## Experiments
 
 Each experiment runs the careful version against a baseline where there is one, so the result is
-a measurement rather than a claim. **Results are pending** for all of them: the runs so far were
-made on a machine shared with other build jobs, and the numbers wait for a quiet one. The
-README's table is where they will go, and `docs/numbers-provenance.md` says which command and
-file each number comes from.
+a measurement rather than a claim. The final runs were made on 2026-09-24 and 25 at commit
+`2860114` on an Apple M3 Pro (12 cores, 18 GB) with Postgres 16.15 in Docker. The timing
+numbers (experiments 3 and 6) come from runs on a quiet machine. The counts don't depend on
+load, and each run's load average is recorded anyway. The README's table has the headline
+numbers, and `docs/numbers-provenance.md` says which command, file and field each comes from.
 
 **1. The retry storm.** N payments, each confirmed by K clients at once with the same
 Idempotency-Key, while the acquirer commits and then drops a share of its responses. It runs
 against no idempotency, a naive check-then-insert, and Clearinghouse, and counts charges from
-the acquirer's own books, not the ledger. The smoke runs show the mechanism: the baselines
-double charge or charge without recording it, and Clearinghouse charged each card once.
-Results pending. ([storm.md](docs/design/storm.md))
+the acquirer's own books, not the ledger. **Measured** (1,000 intents × 16 clients, 10% of
+answers dropped after commit): no idempotency charged 95 cards more than once, and the naive
+check-then-insert 35. Both left about 100 charges out of the ledger. Clearinghouse charged every
+card exactly once, recorded every charge, and gave all 16,000 clients the same true answer.
+Holding the intent instead of failing it removes the baselines' double charges, and leaves 99 and
+106 charged cards with nothing in the ledger. ([storm.md](docs/design/storm.md),
+`results/exp1-retry-storm/`)
 
 **2. Crash at every recovery point.** For every recovery point of every registered flow, the
 server is stopped there with `exit!`, restarted, and the request recovered by the client's retry
 or by the completer. The checks: the flow reaches a terminal state, the ledger balances, the
 acquirer's charges equal the ledger's, one event per state change, and the retry gets the
 response an uninterrupted request would have. The points come from the flow registry, so a new
-point cannot be skipped. Results pending. ([crash-matrix.md](docs/design/crash-matrix.md))
+point cannot be skipped. **Measured:** crashed at 88 points across 13 flows (9 request flows and
+the poller's 4 notification flows), recovered at all 88, in both recovery modes (the client's
+retry, and the completer). ([crash-matrix.md](docs/design/crash-matrix.md),
+`results/exp2-crash-matrix/`)
 
 **3. Isolation level shootout.** Many partial refunds of one payment, plus payouts and disputes
 against the same balance, under READ COMMITTED read-then-write, READ COMMITTED with
 `FOR UPDATE`, SERIALIZABLE with retry, and SERIALIZABLE with `FOR UPDATE` (what the phases
 actually run). Anomalies are counted from the data afterwards: over-refunds, lost updates,
 payouts that spent money a dispute had taken, and balance drift. Throughput, latency and
-retries per 100 operations are published with them. Results pending.
+retries per 100 operations are published with them. **Measured** on a quiet machine:
+read-then-write had anomalies in all 15 trials (per 5 trials, up to 370 over-refunds, 15,656
+lost updates and 383 payout double-spends). The three safe strategies had none in 45.
+`FOR UPDATE` alone was 1.3x to 7.8x faster than the shipped SERIALIZABLE with `FOR UPDATE`, and
+at 32 threads 28% of the SERIALIZABLE operations ran out of retries. SERIALIZABLE stays anyway,
+for the reasons in the isolation policy above.
 ([isolation.md](docs/design/isolation.md))
 
 **4. Model-based testing.** Random sequences of API operations run against a plain-Ruby
 reference model and the real system side by side, with every invariant checked after every
-step and failures shrunk to a short replay script. It found one real bug so far (below).
-Results pending. ([model-testing.md](docs/design/model-testing.md))
+step and failures shrunk to a short replay script. It found one real bug (below), since fixed.
+**Measured:** 300 sequences and 17,826 operations against the ledger, and 300 sequences each
+against the API with seeds 1 and 2 (17,826 and 18,091 operations), every check passing after
+every step. ([model-testing.md](docs/design/model-testing.md), `results/exp4-model/`)
 
 **5. Reconciliation under injected discrepancies.** A simulated month of settlement files with
 missing, duplicated, mismatched, late and unknown lines injected, scored against the
 simulator's manifest: discrepancies detected by type, false exceptions, and explainability
-before and after resolving them. Results pending.
+before and after resolving them. **Measured** (1,500 payments over 30 days): 60 of 60 injected
+discrepancies detected as the right type, 0 false exceptions, and explainability from 96.2 to
+100% by flow type before resolving, 100% after.
 ([reconciliation.md](docs/design/reconciliation.md),
 [results/exp5-reconciliation/README.md](results/exp5-reconciliation/README.md))
 
@@ -311,23 +332,41 @@ before and after resolving them. Results pending.
 hanging past the timeout and one flapping, delivered through a single FIFO queue and through
 per-endpoint isolation, with worker processes killed at random in one run. It reports the
 healthy endpoints' time to delivery at p50 and p99, completeness, and the duplicate rate.
-Results pending. ([results/exp6-webhooks/README.md](results/exp6-webhooks/README.md),
+**Measured** on a quiet machine: FIFO kept healthy endpoints waiting 41.4 s at p50 and
+139.1 s at p99, while per-endpoint isolation delivered at 0.073 s p50 and 0.128 s p99. With 15
+workers `kill -9`ed mid-run, every event still reached every healthy endpoint, and 4 of 5,021
+arrived twice (0.08%). ([results/exp6-webhooks/README.md](results/exp6-webhooks/README.md),
 [webhooks.md](docs/design/webhooks.md))
 
 **7. Code quality, measured.** Branch coverage on `lib/`, mutation score from mutant on the
 ledger, idempotency and money core, and every surviving mutant killed or explained as
-equivalent. The mutation harness is on its own branch. Results pending.
+equivalent. **Provisional** (the existing report from `7091fc6`, merged from 4 sessions on a
+loaded machine): mutation score 98.00%, 99.94% with the documented equivalent survivors left
+out, and branch coverage 94.16% of tracked code. The final single run's report is still to be
+generated. ([quality.md](docs/design/quality.md), `results/exp7-quality/README.md`)
 
 **8. Throughput, and the system end to end.** Open-loop load at fixed rates against `confirm`,
 latency measured from the intended send time so coordinated omission does not hide the tail,
 with the machine labelled. This is here for honesty, not as a headline: Ruby on a laptop will not
-impress anyone with raw throughput. The second half, RiskGate's test month replayed through
-`confirm`, is not on this branch. Results pending. ([loadgen.md](docs/design/loadgen.md))
+impress anyone with raw throughput. The load sweep has not been run for the final results.
+The second half replays RiskGate's IEEE-CIS test month (92,427 payments) through `confirm`
+under three policies. **Measured:** with no checks, 3,213 disputes cost $535,657.76, with an
+assumed $15.00 fee each. Blocking at the model's 50% threshold stopped 227 fraud payments
+and 157 legitimate ones, for a net of +$22,907.60. RiskGate's review rules left the money
+unchanged and put 2,496 payouts ($413,409.07) on hold. Latency from those runs is not quotable
+(concurrent runs, a system sleep mid-run). ([replay.md](docs/design/replay.md),
+[loadgen.md](docs/design/loadgen.md))
 
 **9. RiskGate fails.** RiskGate is killed or frozen mid-run, and the experiment counts the
 payments that went through unchecked (during the outage and in the tail after it), and checks
-that the risk step's latency stays bounded by the deadline. The client-level runs so far found
-the tail after a kill is about one breaker cool-down. Results pending.
+that the risk step's latency stays bounded by the deadline. **Measured** by RiskGate's run of
+`bin/exp-risk-failure` against the real service (200 calls/s, 10 s outage): after a kill, 3,240
+of 6,000 went through unchecked, and the first checked payment came 2.06 s after the restart
+(one breaker cool-down). After a freeze, 2,063 of 6,000 went through unchecked, and the first
+checked payment came 0.32 s after the thaw. The client's max latency stayed at 57 to 59 ms
+against the 50 ms deadline. Caveat: in kill mode the breaker also tripped once in each healthy
+phase (about 415 unchecked each time), likely from host contention but not confirmed. Those
+healthy-phase numbers are not cited, and the kill total includes them.
 ([risk-integration.md](docs/design/risk-integration.md))
 
 ## Areas
